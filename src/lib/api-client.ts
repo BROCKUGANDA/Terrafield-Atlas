@@ -242,6 +242,8 @@ export interface WatchEvent {
   perDay: { date: string; total: number; qualifying: number }[];
   /** What fired this evaluation: console click, historical backtest, scheduler. */
   trigger: 'manual' | 'backtest' | 'scheduled';
+  /** Shared with the scheduler's audit-ledger entry for scheduled runs. */
+  correlationId: string | null;
 }
 
 export interface Watchlist {
@@ -320,6 +322,82 @@ export interface WatchlistInput {
   notes?: string;
   /** Scheduled re-evaluation cadence in minutes (360 | 720 | 1440) or null to disable. */
   reevaluateIntervalMin?: number | null;
+}
+
+// ---- scheduler-run history + cadence-aware digests (per watchlist) ----
+
+/** One scheduler-run ledger entry, optionally enriched with its evaluation. */
+export interface SchedulerRunEntry {
+  kind: 'run' | 'fail';
+  /** When the outcome was recorded (ISO). */
+  at: string;
+  /** Shared with the matching FireWatchEvent on successful runs. */
+  correlationId: string | null;
+  /** nextReevaluateAt claimed BEFORE the run (claim-before-run ordering). */
+  claimedNextAt: string | null;
+  status: string | null;
+  detectionCount: number | null;
+  error: string | null;
+  /** Full evaluation record for successful runs; null for failures. */
+  evaluation: WatchEvent | null;
+}
+
+export interface WatchlistRunsResponse {
+  watchlist: Watchlist;
+  runs: SchedulerRunEntry[];
+  counts: { total: number; ok: number; failed: number };
+  showing: number;
+  cap: number;
+  note: string;
+}
+
+export interface DigestWindow {
+  start: string;
+  end: string;
+}
+
+export interface DigestSummary {
+  evaluations: number;
+  byTrigger: { manual: number; backtest: number; scheduled: number };
+  statusPath: string[];
+  transitions: { from: string; to: string; at: string }[];
+  alertingEvaluations: number;
+  clearEvaluations: number;
+  peak: { detectionCount: number; at: string } | null;
+  last: { status: string; detectionCount: number; at: string } | null;
+  noDataDays: string[];
+  daysCheckedTotal: number;
+}
+
+export interface DigestComparison {
+  evaluationsDelta: number;
+  peakDelta: number | null;
+  statusChanged: boolean;
+  alertEntered: boolean;
+  alertCleared: boolean;
+  previousLast: DigestSummary['last'];
+}
+
+export interface DigestFailure {
+  at: string;
+  error: string;
+  correlationId: string | null;
+}
+
+export interface WatchDigestResponse {
+  watchlist: Watchlist;
+  hours: number;
+  cadenceMin: number | null;
+  /** 'cadence' (derived from the watchlist) | 'request' (?hours=) | 'default' (24 h). */
+  windowSource: 'cadence' | 'request' | 'default';
+  window: { current: DigestWindow; previous: DigestWindow };
+  current: DigestSummary;
+  previous: DigestSummary;
+  comparison: DigestComparison;
+  failures: DigestFailure[];
+  digest: string[];
+  truncated: boolean;
+  note: string;
 }
 
 export interface DataSourceRow {
@@ -497,6 +575,10 @@ export const api = {
     request<{ deleted: { id: string; name: string } }>(`/api/v1/fires/watchlists/${id}`, { method: 'DELETE' }),
   evaluateWatchlist: (id: string, end?: string) =>
     request<WatchEvaluateResponse>(`/api/v1/fires/watchlists/${id}/evaluate`, { method: 'POST', body: JSON.stringify(end ? { end } : {}) }),
+  watchlistRuns: (id: string) =>
+    request<WatchlistRunsResponse>(`/api/v1/fires/watchlists/${id}/runs`),
+  watchlistDigest: (id: string, hours?: number) =>
+    request<WatchDigestResponse>(`/api/v1/fires/watchlists/${id}/digest${hours !== undefined ? `?hours=${hours}` : ''}`),
   provenance: (limit = 50) => request<ProvenanceResponse>(`/api/v1/provenance?limit=${limit}`),
   systemStatus: () => request<SystemStatus>('/api/v1/system/status'),
   report: (farmId: string) => request<ReportResponse>('/api/v1/reports', { method: 'POST', body: JSON.stringify({ farmId }) }),

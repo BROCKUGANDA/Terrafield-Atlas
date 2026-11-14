@@ -1,10 +1,10 @@
 'use client';
 
 import React from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput } from '@/lib/api-client';
+import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput, type SchedulerRunEntry } from '@/lib/api-client';
 import { minBacktestEndIso, windowFor, yesterdayIso } from '@/lib/fires/watchlist-engine';
 import { REEVALUATE_LABELS, type ReevaluateIntervalMin } from '@/lib/schedule-core';
 import { logEvent } from '@/components/state/log-store';
@@ -23,7 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { HudPanel, StatusPill, CoordReadout } from '@/components/ui-mc/kit';
 import { EmptyState } from '@/components/system/query-state';
 import { SweepLoader } from '@/components/system/skeletons';
-import { Bell, BellRing, CalendarClock, Clock, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History } from 'lucide-react';
+import { Bell, BellRing, CalendarClock, ClipboardList, Clock, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -50,6 +50,53 @@ const CONF_LABEL: Record<WatchConfidence, string> = {
   nominal: 'nominal + high',
   high: 'high only',
 };
+
+/** Compact UTC minute stamp for panel rows, e.g. "2026-11-14 08:05Z". */
+function utcMin(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '—';
+  return `${new Date(t).toISOString().slice(0, 16).replace('T', ' ')}Z`;
+}
+
+/** One scheduler-ledger entry in the per-watchlist run-history panel. */
+function RunEntryRow({ r }: { r: SchedulerRunEntry }) {
+  return (
+    <div className="border-b border-edge/60 py-1.5 last:border-b-0">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="telemetry text-[10px] text-dim">{utcMin(r.at)}</span>
+        <span
+          className={cn(
+            'border px-1 py-px font-mono text-[9px] uppercase tracking-wide-mc',
+            r.kind === 'fail' ? 'border-crit/50 text-crit' : 'border-signal/50 text-signal',
+          )}
+        >
+          {r.kind === 'fail' ? 'fail' : 'run'}
+        </span>
+        {r.kind === 'run' ? (
+          <span className="telemetry text-[10px] text-dim">
+            {r.status ?? 'unknown status'} · {r.detectionCount !== null ? `${r.detectionCount} qualifying` : 'count not recorded'}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[10px] text-crit" title={r.error ?? undefined}>
+            {r.error ?? 'unknown error'}
+          </span>
+        )}
+        {r.claimedNextAt && (
+          <span className="telemetry ml-auto text-[9px] text-faint">next claimed {utcMin(r.claimedNextAt)}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3">
+        <span className="telemetry text-[9px] text-faint">corr {r.correlationId ?? '—'}</span>
+        {r.evaluation && (
+          <span className="telemetry text-[9px] text-faint">
+            window {r.evaluation.windowStart} → {r.evaluation.windowEnd} · {r.evaluation.daysChecked} day(s) checked
+            {r.evaluation.daysNoData > 0 ? ` · ${r.evaluation.daysNoData} no-data` : ''}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -522,8 +569,10 @@ export function FireWatchlistsSection() {
           Watchlist states describe the last recorded evaluation only. A header alert chip appears console-wide while any
           watchlist is in ALERT. Evaluations share the stored detection pool with the detections ledger — every row is a real
           VIIRS observation with provenance in Evidence &amp; Provenance. Backtests and scheduled runs take the identical
-          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler’s live state is reported
-          in System Health, and every scheduled run is written to the mission log.
+          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler's live state is reported
+          in System Health, and each card's <span className="text-dim">Runs</span> panel reads the scheduler's audit ledger
+          (successes joined to their evaluation event, failures listed with their errors) while
+          <span className="text-dim"> Digest</span> summarizes the latest cadence window against the previous one.
         </p>
       </HudPanel>
     </motion.section>
@@ -564,6 +613,52 @@ function WatchlistCard({
   const btMin = minBacktestEndIso(w.lookbackDays);
   const btValid = btEnd >= btMin && btEnd <= today;
   const btWindow = btValid ? windowFor(btEnd, w.lookbackDays) : null;
+
+  // Scheduler-run history panel: reads the scheduler's audit ledger + matched
+  // evaluations on demand (open), then refreshes every 2 min while open.
+  const [runsOpen, setRunsOpen] = useState(false);
+  const runs = useQuery({
+    queryKey: ['watchlist-runs', w.id],
+    queryFn: () => api.watchlistRuns(w.id),
+    enabled: runsOpen,
+    staleTime: 30_000,
+    refetchInterval: runsOpen ? 120_000 : false,
+    retry: 1,
+  });
+  // Failed scheduler runs write no status anywhere else — surface them in the
+  // mission log once per card when the operator pulls the ledger.
+  const failureLogged = useRef(false);
+  useEffect(() => {
+    if (runsOpen && runs.data && runs.data.counts.failed > 0 && !failureLogged.current) {
+      failureLogged.current = true;
+      logEvent({
+        severity: 'warn',
+        category: 'FIRE',
+        title: `Scheduler failures on “${w.name}” — ${runs.data.counts.failed} failed run(s) on record`,
+        detail: 'Failed scheduled runs write no status; the scheduler retries at the next claimed slot. Inspect the Scheduler-runs panel for the error messages.',
+        view: 'fire',
+      });
+    }
+  }, [runsOpen, runs.data, w.name]);
+
+  // Cadence-aware alert digest: window derives from the watchlist cadence
+  // (null → API default 24 h); overridable from the popover chips.
+  const [digestOpen, setDigestOpen] = useState(false);
+  const [digestHours, setDigestHours] = useState<number | null>(null);
+  const digest = useQuery({
+    queryKey: ['watchlist-digest', w.id, digestHours ?? 'cadence'],
+    queryFn: () => api.watchlistDigest(w.id, digestHours ?? undefined),
+    enabled: digestOpen,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const digestWindowOptions: { hours: number | null; label: string }[] = [
+    { hours: null, label: w.reevaluateIntervalMin !== null ? `${w.reevaluateIntervalMin / 60} h · cadence` : '24 h · default' },
+    { hours: 6, label: '6 h' },
+    { hours: 12, label: '12 h' },
+    { hours: 24, label: '24 h' },
+    { hours: 72, label: '72 h' },
+  ];
 
   return (
     <div className={cn('flex flex-col gap-2.5 rounded-sm border p-3.5', STATUS_TONE_BG[w.lastStatus] || 'border-edge bg-panel-2/40')}>
@@ -625,6 +720,53 @@ function WatchlistCard({
         <p className="telemetry text-[10px] uppercase tracking-wide-mc text-caution">
           unverified — never evaluated; run a live check
         </p>
+      )}
+
+      {/* Scheduler-run history panel (audit ledger + matched evaluations) */}
+      {runsOpen && (
+        <div id={`watchlist-runs-${w.id}`} className="flex flex-col gap-1.5 rounded-sm border border-edge bg-void/40 p-2.5" data-tour="watchlist-runs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+              scheduler run history — audit ledger + matched evaluations
+            </span>
+            {runs.data && (
+              <span className="telemetry text-[10px] text-dim">
+                {runs.data.counts.ok} ok · {runs.data.counts.failed} failed · {runs.data.counts.total} ledger
+                {runs.data.counts.total > runs.data.showing ? ` — showing latest ${runs.data.showing} (cap ${runs.data.cap})` : ''}
+              </span>
+            )}
+          </div>
+          {runs.isLoading && (
+            <p className="telemetry px-1 py-1 text-[11px] text-faint" role="status">reading scheduler ledger…</p>
+          )}
+          {runs.isError && (
+            <div className="flex items-center gap-2 text-[11px] text-crit" role="alert">
+              ledger read failed — {runs.error instanceof ApiRequestError ? `${runs.error.code}: ${runs.error.message}` : 'unexpected error'}
+              <Button variant="outline" size="sm" className="h-6 font-mono text-[10px] uppercase tracking-wide-mc" onClick={() => runs.refetch()}>
+                retry
+              </Button>
+            </div>
+          )}
+          {runs.data && runs.data.runs.length === 0 && (
+            <p className="text-[11px] leading-relaxed text-dim">
+              No scheduled runs on record.{' '}
+              {w.reevaluateIntervalMin === null
+                ? 'This watchlist is evaluated manually — set “Auto re-evaluate” in Edit to arm the in-process scheduler.'
+                : `The scheduler is armed (${REEVALUATE_LABELS[w.reevaluateIntervalMin as ReevaluateIntervalMin]}; next slot ${w.nextReevaluateAt ? utcMin(w.nextReevaluateAt) : 'pending'}) but has not completed a run for this list yet.`}
+            </p>
+          )}
+          {runs.data && runs.data.runs.length > 0 && (
+            <div className="max-h-56 overflow-y-auto pr-1">
+              {runs.data.runs.map((r, i) => (
+                <RunEntryRow key={`${r.at}-${r.correlationId ?? i}`} r={r} />
+              ))}
+            </div>
+          )}
+          <p className="text-[9px] leading-relaxed text-faint">
+            every scheduled run is ledgered by the in-process scheduler — successes here join their evaluation event on
+            correlationId; failures appear ONLY here (they wrote no status) and retry at the next claimed slot (claim-before-run).
+          </p>
+        </div>
       )}
 
       {/* Edit form */}
@@ -799,6 +941,107 @@ function WatchlistCard({
                   </Button>
                 )}
               </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+          onClick={() => setRunsOpen((v) => !v)}
+          aria-expanded={runsOpen}
+          aria-controls={`watchlist-runs-${w.id}`}
+          aria-label={`Scheduler run history for ${w.name}`}
+        >
+          <Timer className="h-3.5 w-3.5" aria-hidden /> {runs.data ? `Runs (${runs.data.counts.total})` : 'Runs'}
+        </Button>
+        <Popover open={digestOpen} onOpenChange={setDigestOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+              aria-label={`Cadence-aware alert digest for ${w.name}`}
+            >
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden /> Digest
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-96 border-edge bg-popover p-3">
+            <div className="flex flex-col gap-2.5">
+              <div>
+                <p className="font-display text-[12px] font-bold uppercase tracking-wide-mc text-ink">Alert digest — “{w.name}”</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-dim">
+                  Cadence-aware summary of this watchlist's alert activity: the window derives from its re-evaluation
+                  cadence and is compared with the equal-length window before it — status path, peak detections, alert
+                  entries/exits, failed runs, archive gaps. Recorded evaluations only; nothing interpolated.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Digest window length">
+                {digestWindowOptions.map((o) => (
+                  <button
+                    key={o.label}
+                    type="button"
+                    onClick={() => setDigestHours(o.hours)}
+                    aria-pressed={(digestHours ?? null) === o.hours}
+                    className={cn(
+                      'border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide-mc transition-colors',
+                      (digestHours ?? null) === o.hours
+                        ? 'border-caution/60 bg-caution/10 text-caution'
+                        : 'border-edge bg-panel text-faint hover:text-dim',
+                    )}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              {digest.isLoading && (
+                <p className="telemetry text-[11px] text-faint" role="status">building digest…</p>
+              )}
+              {digest.isError && (
+                <div className="flex items-center gap-2 text-[11px] text-crit" role="alert">
+                  digest failed — {digest.error instanceof ApiRequestError ? `${digest.error.code}: ${digest.error.message}` : 'unexpected error'}
+                  <Button variant="outline" size="sm" className="h-6 font-mono text-[10px] uppercase tracking-wide-mc" onClick={() => digest.refetch()}>
+                    retry
+                  </Button>
+                </div>
+              )}
+              {digest.data && (
+                <>
+                  <p className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">
+                    window {utcMin(digest.data.window.current.start)} → {utcMin(digest.data.window.current.end)} UTC · source{' '}
+                    {digest.data.windowSource}
+                    {digest.data.windowSource === 'cadence' && digest.data.cadenceMin !== null
+                      ? ` (${digest.data.cadenceMin / 60} h cadence)`
+                      : digest.data.windowSource === 'default'
+                        ? ' (no cadence set)'
+                        : ''}
+                  </p>
+                  <div className="flex flex-col gap-1.5 rounded-sm border border-edge bg-void/40 p-2.5">
+                    {digest.data.digest.map((line, i) => (
+                      <p key={i} className="text-[10.5px] leading-relaxed text-dim">{line}</p>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusPill
+                      status={digest.data.current.last?.status ?? w.lastStatus}
+                      pulse={(digest.data.current.last?.status ?? w.lastStatus) === 'alert'}
+                      className={STATUS_TONE[digest.data.current.last?.status ?? w.lastStatus]}
+                    />
+                    <span className="telemetry text-[10px] text-dim">
+                      peak {digest.data.current.peak?.detectionCount ?? '—'}
+                      {digest.data.comparison.peakDelta !== null && digest.data.comparison.peakDelta !== 0
+                        ? ` (${digest.data.comparison.peakDelta > 0 ? '+' : ''}${digest.data.comparison.peakDelta} vs prev)`
+                        : ''}
+                    </span>
+                    <span className="telemetry text-[10px] text-dim">
+                      {digest.data.current.evaluations} eval(s) · {digest.data.failures.length} failed run(s)
+                    </span>
+                    <span className="telemetry text-[10px] text-faint">
+                      prev window peak {digest.data.previous.peak?.detectionCount ?? '—'}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
           </PopoverContent>
         </Popover>

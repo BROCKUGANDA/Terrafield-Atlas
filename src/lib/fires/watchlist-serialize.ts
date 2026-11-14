@@ -22,6 +22,7 @@ export function serializeEvent(e: {
   daysNoData: number;
   triggeredAlert: boolean;
   detailJson: string;
+  correlationId?: string | null;
 }) {
   let detail: Record<string, unknown> = {};
   try {
@@ -49,6 +50,8 @@ export function serializeEvent(e: {
     daysUnchecked: (detail.daysUnchecked as string[]) ?? [],
     perDay: (detail.perDay as { date: string; total: number; qualifying: number }[]) ?? [],
     trigger: ((detail.trigger as string) ?? 'manual') as 'manual' | 'backtest' | 'scheduled',
+    /** Shared with the scheduler's audit-ledger entry for scheduled runs. */
+    correlationId: e.correlationId ?? null,
   };
 }
 

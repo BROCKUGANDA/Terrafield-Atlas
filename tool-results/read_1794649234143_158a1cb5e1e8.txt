@@ -1,0 +1,856 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import React from 'react';
+     4→     4→import { useState } from 'react';
+     5→     5→import { motion } from 'framer-motion';
+     6→     6→import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+     7→     7→import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput } from '@/lib/api-client';
+     8→     8→import { minBacktestEndIso, windowFor, yesterdayIso } from '@/lib/fires/watchlist-engine';
+     9→     9→import { REEVALUATE_LABELS, type ReevaluateIntervalMin } from '@/lib/schedule-core';
+    10→    10→import { logEvent } from '@/components/state/log-store';
+    11→    11→import { useSession } from '@/components/state/store';
+    12→    12→import { Button } from '@/components/ui/button';
+    13→    13→import { Input } from '@/components/ui/input';
+    14→    14→import { Label } from '@/components/ui/label';
+    15→    15→import { Textarea } from '@/components/ui/textarea';
+    16→    16→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+    17→    17→import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+    18→    18→import {
+    19→    19→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    20→    20→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+    21→    21→} from '@/components/ui/alert-dialog';
+    22→    22→import { useToast } from '@/hooks/use-toast';
+    23→    23→import { HudPanel, StatusPill, CoordReadout } from '@/components/ui-mc/kit';
+    24→    24→import { EmptyState } from '@/components/system/query-state';
+    25→    25→import { SweepLoader } from '@/components/system/skeletons';
+    26→    26→import { Bell, BellRing, CalendarClock, Clock, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History } from 'lucide-react';
+    27→    27→import { cn } from '@/lib/utils';
+    28→    28→
+    29→    29→const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+    30→    30→
+    31→    31→const RADIUS_OPTIONS = [5, 10, 15, 20, 25];
+    32→    32→const LOOKBACK_OPTIONS = [3, 7, 14, 30];
+    33→    33→
+    34→    34→const STATUS_TONE: Record<string, string> = {
+    35→    35→  alert: 'border-crit/50 text-crit',
+    36→    36→  watch: 'border-caution/50 text-caution',
+    37→    37→  clear: 'border-signal/40 text-signal',
+    38→    38→  unverified: 'border-edge text-faint',
+    39→    39→};
+    40→    40→
+    41→    41→const STATUS_TONE_BG: Record<string, string> = {
+    42→    42→  alert: 'border-crit/40 bg-crit/5',
+    43→    43→  watch: 'border-caution/30 bg-caution/5',
+    44→    44→  clear: '',
+    45→    45→  unverified: '',
+    46→    46→};
+    47→    47→
+    48→    48→const CONF_LABEL: Record<WatchConfidence, string> = {
+    49→    49→  low: 'any confidence',
+    50→    50→  nominal: 'nominal + high',
+    51→    51→  high: 'high only',
+    52→    52→};
+    53→    53→
+    54→    54→function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+    55→    55→  return (
+    56→    56→    <div className={cn('flex flex-col gap-1', className)}>
+    57→    57→      <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{label}</span>
+    58→    58→      {children}
+    59→    59→    </div>
+    60→    60→  );
+    61→    61→}
+    62→    62→
+    63→    63→/** Compact per-day detection bars (real counts from the last evaluation). */
+    64→    64→function DayBars({ perDay }: { perDay: { date: string; total: number; qualifying: number }[] }) {
+    65→    65→  const max = Math.max(1, ...perDay.map((d) => d.total));
+    66→    66→  return (
+    67→    67→    <div className="flex items-end gap-1" role="img" aria-label="Detections per day in the evaluation window">
+    68→    68→      {perDay.map((d) => {
+    69→    69→        const h = Math.max(2, Math.round((d.total / max) * 28));
+    70→    70→        const qh = Math.max(0, Math.round((d.qualifying / max) * 28));
+    71→    71→        return (
+    72→    72→          <div key={d.date} className="flex flex-col items-center gap-1" title={`${d.date}: ${d.total} detection(s), ${d.qualifying} qualifying`}>
+    73→    73→            <div
+    74→    74→              className="relative w-4 overflow-hidden rounded-sm border border-edge bg-panel-2/60"
+    75→    75→              style={{ height: 30 }}
+    76→    76→              aria-hidden
+    77→    77→            >
+    78→    78→              <div className="absolute bottom-0 w-full bg-dim/40" style={{ height: h }} />
+    79→    79→              <div className="absolute bottom-0 w-full bg-caution" style={{ height: Math.min(qh, h) }} />
+    80→    80→            </div>
+    81→    81→            <span className="telemetry text-[8px] text-faint">{d.date.slice(8)}</span>
+    82→    82→          </div>
+    83→    83→        );
+    84→    84→      })}
+    85→    85→    </div>
+    86→    86→  );
+    87→    87→}
+    88→    88→
+    89→    89→export function FireWatchlistsSection() {
+    90→    90→  const { toast } = useToast();
+    91→    91→  const queryClient = useQueryClient();
+    92→    92→  const { location, setLocation, setView } = useSession();
+    93→    93→  const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions, staleTime: 300_000, retry: 1 });
+    94→    94→  const watchlists = useQuery({
+    95→    95→    queryKey: ['fire-watchlists'],
+    96→    96→    queryFn: api.watchlists,
+    97→    97→    refetchInterval: 120_000,
+    98→    98→    retry: 1,
+    99→    99→  });
+   100→   100→
+   101→   101→  const [creating, setCreating] = useState(false);
+   102→   102→  const [form, setForm] = useState<WatchlistInput>(() => ({
+   103→   103→    name: '',
+   104→   104→    label: location.label,
+   105→   105→    lat: Number(location.lat.toFixed(4)),
+   106→   106→    lon: Number(location.lon.toFixed(4)),
+   107→   107→    radiusKm: 15,
+   108→   108→    minConfidence: 'nominal',
+   109→   109→    lookbackDays: 7,
+   110→   110→    detectionThreshold: 5,
+   111→   111→    notes: '',
+   112→   112→    reevaluateIntervalMin: null,
+   113→   113→  }));
+   114→   114→  const [editingId, setEditingId] = useState<string | null>(null);
+   115→   115→  const [editForm, setEditForm] = useState<Partial<WatchlistInput>>({});
+   116→   116→  const [pending, setPending] = useState<{ id: string; kind: 'live' | 'backtest' } | null>(null);
+   117→   117→
+   118→   118→  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fire-watchlists'] });
+   119→   119→
+   120→   120→  const create = useMutation({
+   121→   121→    mutationFn: () => api.createWatchlist(form),
+   122→   122→    onSuccess: (res) => {
+   123→   123→      toast({ title: 'Watchlist created', description: `“${res.watchlist.name}” is unverified — run “Evaluate” to query the real GIBS VIIRS record for its window.` });
+   124→   124→      logEvent({
+   125→   125→        severity: 'success',
+   126→   126→        category: 'FIRE',
+   127→   127→        title: `Fire watchlist created — ${res.watchlist.name}`,
+   128→   128→        detail: `${res.watchlist.radiusKm.toFixed(0)} km radius · ${CONF_LABEL[res.watchlist.minConfidence]} · alert at ≥ ${res.watchlist.detectionThreshold} detection(s) within ${res.watchlist.lookbackDays} day(s). ${res.note}`,
+   129→   129→        view: 'fire',
+   130→   130→      });
+   131→   131→      setCreating(false);
+   132→   132→      void invalidate();
+   133→   133→    },
+   134→   134→    onError: (err) => {
+   135→   135→      toast({ title: 'Watchlist creation failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+   136→   136→      logEvent({
+   137→   137→        severity: 'crit',
+   138→   138→        category: 'FIRE',
+   139→   139→        title: 'Fire watchlist creation failed',
+   140→   140→        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error.',
+   141→   141→        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+   142→   142→        view: 'fire',
+   143→   143→      });
+   144→   144→    },
+   145→   145→  });
+   146→   146→
+   147→   147→  const evaluate = useMutation({
+   148→   148→    mutationFn: ({ id, end }: { id: string; end?: string }) => {
+   149→   149→      setPending({ id, kind: end ? 'backtest' : 'live' });
+   150→   150→      return api.evaluateWatchlist(id, end);
+   151→   151→    },
+   152→   152→    onSettled: () => setPending(null),
+   153→   153→    onSuccess: (res) => {
+   154→   154→      const w = res.watchlist;
+   155→   155→      const ev = res.evaluation;
+   156→   156→      const backtest = res.mode === 'backtest';
+   157→   157→      toast({
+   158→   158→        title: `${w.name} — ${backtest ? 'BACKTEST ' : ''}${ev.status.toUpperCase()}`,
+   159→   159→        description: `${ev.detectionCount} qualifying detection(s) ${ev.windowStart} → ${ev.windowEnd}${backtest ? ' (historical window)' : ''}${ev.daysFetchedFromGibs ? ` · ${ev.daysFetchedFromGibs} day(s) fetched live from GIBS` : ''}${ev.daysNoData.length ? ` · ${ev.daysNoData.length} archive-gap day(s) reported` : ''}.`,
+   160→   160→        variant: ev.status === 'alert' ? 'destructive' : undefined,
+   161→   161→      });
+   162→   162→      logEvent({
+   163→   163→        severity: ev.status === 'alert' ? 'crit' : ev.status === 'watch' ? 'warn' : 'success',
+   164→   164→        category: 'FIRE',
+   165→   165→        title: `Watchlist ${backtest ? 'backtest' : 'evaluated'} — ${w.name}: ${ev.status.toUpperCase()}`,
+   166→   166→        detail: `${backtest ? `BACKTEST of the rule against the historical window ${ev.windowStart} → ${ev.windowEnd} — ` : ''}${ev.rationale}${ev.daysFetchedFromGibs ? ` ${ev.daysFetchedFromGibs} day(s) of the window were fetched live from the real GIBS VIIRS stream; ${ev.rowsWritten} new row(s) stored.` : ' All days were already covered by stored archive checks.'}${backtest ? ' Stored as a normal evaluation event flagged trigger=backtest.' : ''}`,
+   167→   167→        view: 'fire',
+   168→   168→      });
+   169→   169→      void invalidate();
+   170→   170→    },
+   171→   171→    onError: (err) => {
+   172→   172→      toast({ title: 'Evaluation failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error; no status fabricated', variant: 'destructive' });
+   173→   173→      logEvent({
+   174→   174→        severity: 'crit',
+   175→   175→        category: 'FIRE',
+   176→   176→        title: 'Watchlist evaluation failed',
+   177→   177→        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error; no status written.',
+   178→   178→        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+   179→   179→        view: 'fire',
+   180→   180→      });
+   181→   181→    },
+   182→   182→  });
+   183→   183→
+   184→   184→  const update = useMutation({
+   185→   185→    mutationFn: ({ id, body }: { id: string; body: Partial<WatchlistInput> }) => api.updateWatchlist(id, body),
+   186→   186→    onSuccess: (res, vars) => {
+   187→   187→      const scheduleChanged = vars.body.reevaluateIntervalMin !== undefined;
+   188→   188→      const interval = res.watchlist.reevaluateIntervalMin;
+   189→   189→      toast({
+   190→   190→        title: 'Watchlist updated',
+   191→   191→        description: `“${res.watchlist.name}” saved.${scheduleChanged ? interval ? ` Scheduled re-evaluation ${REEVALUATE_LABELS[interval as ReevaluateIntervalMin]} — next run ${res.watchlist.nextReevaluateAt ? res.watchlist.nextReevaluateAt.slice(0, 16).replace('T', ' ') : 'pending'}Z.` : ' Scheduled re-evaluation switched off.' : ''}${vars.body.minConfidence !== undefined || vars.body.lookbackDays !== undefined || vars.body.detectionThreshold !== undefined ? ' Rule parameters changed → status reset to unverified until the next evaluation.' : ''}`,
+   192→   192→      });
+   193→   193→      logEvent({
+   194→   194→        severity: 'info',
+   195→   195→        category: 'FIRE',
+   196→   196→        title: `Fire watchlist updated — ${res.watchlist.name}`,
+   197→   197→        detail: `Radius ${res.watchlist.radiusKm.toFixed(0)} km · ${CONF_LABEL[res.watchlist.minConfidence]} · alert at ≥ ${res.watchlist.detectionThreshold} detection(s) within ${res.watchlist.lookbackDays} day(s).`,
+   198→   198→        view: 'fire',
+   199→   199→      });
+   200→   200→      setEditingId(null);
+   201→   201→      setEditForm({});
+   202→   202→      void invalidate();
+   203→   203→    },
+   204→   204→    onError: (err) => {
+   205→   205→      toast({ title: 'Update failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+   206→   206→    },
+   207→   207→  });
+   208→   208→
+   209→   209→  const remove = useMutation({
+   210→   210→    mutationFn: (id: string) => api.deleteWatchlist(id),
+   211→   211→    onSuccess: (res) => {
+   212→   212→      toast({ title: 'Watchlist deleted', description: `“${res.deleted.name}” removed with its evaluation history.` });
+   213→   213→      logEvent({
+   214→   214→        severity: 'info',
+   215→   215→        category: 'FIRE',
+   216→   216→        title: `Fire watchlist deleted — ${res.deleted.name}`,
+   217→   217→        detail: 'The watchlist and its event history were removed. Stored fire detections remain (they are shared real observations).',
+   218→   218→        view: 'fire',
+   219→   219→      });
+   220→   220→      void invalidate();
+   221→   221→    },
+   222→   222→    onError: (err) => {
+   223→   223→      toast({ title: 'Delete failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+   224→   224→    },
+   225→   225→  });
+   226→   226→
+   227→   227→  const applyPreset = (key: string) => {
+   228→   228→    if (key === 'current') {
+   229→   229→      setForm((f) => ({ ...f, lat: Number(location.lat.toFixed(4)), lon: Number(location.lon.toFixed(4)), label: location.label, name: f.name || `${location.country ?? 'Region'} — fire watch` }));
+   230→   230→      return;
+   231→   231→    }
+   232→   232→    const r = regions.data?.regions.find((x) => x.key === key);
+   233→   233→    if (r) setForm((f) => ({ ...f, lat: r.lat, lon: r.lon, label: r.name, name: f.name || `${r.country} — fire watch` }));
+   234→   234→  };
+   235→   235→
+   236→   236→  const rows = watchlists.data?.watchlists ?? [];
+   237→   237→  const summary = watchlists.data?.summary;
+   238→   238→  const busy = pending !== null;
+   239→   239→
+   240→   240→  return (
+   241→   241→    <motion.section
+   242→   242→      initial={{ opacity: 0, y: 12 }}
+   243→   243→      whileInView={{ opacity: 1, y: 0 }}
+   244→   244→      viewport={{ once: true, margin: '-24px' }}
+   245→   245→      transition={{ duration: 0.35, ease: EASE }}
+   246→   246→      aria-label="Regional fire watchlists"
+   247→   247→    >
+   248→   248→      <HudPanel className="flex flex-col gap-4" data-tour="fire-watchlists">
+   249→   249→        {/* Section header */}
+   250→   250→        <div className="flex flex-wrap items-end justify-between gap-3">
+   251→   251→          <div>
+   252→   252→            <p className="kicker">Watchlists · regional fire-alert rules</p>
+   253→   253→            <h3 className="mt-1.5 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wide-mc text-ink">
+   254→   254→              <RadioTower className="h-4 w-4 text-caution" aria-hidden /> Fire watchlists
+   255→   255→            </h3>
+   256→   256→            <p className="mt-1.5 max-w-3xl text-[11px] leading-relaxed text-dim">
+   257→   257→              Define a geography, radius and threshold rule; <span className="text-ink">Evaluate</span> ensures every day of the
+   258→   258→              lookback window is checked against the real GIBS VIIRS 375 m stream, then reports clear / watch / alert from
+   259→   259→              stored detections only. Days the archive simply does not have are reported as no-data — never zero-filled.
+   260→   260→              <span className="text-ink"> Backtest</span> replays the same rule against any historical window via the date
+   261→   261→              picker; watchlists with a cadence set are re-evaluated automatically by the in-process scheduler.
+   262→   262→            </p>
+   263→   263→          </div>
+   264→   264→          <div className="flex flex-wrap items-center gap-2.5">
+   265→   265→            {summary && rows.length > 0 && (
+   266→   266→              <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
+   267→   267→                {summary.total} list · {summary.alerting} alert · {summary.watch} watch · {summary.clear} clear · {summary.unverified} unverified
+   268→   268→              </span>
+   269→   269→            )}
+   270→   270→            <Button
+   271→   271→              size="sm"
+   272→   272→              className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
+   273→   273→              onClick={() => setCreating((v) => !v)}
+   274→   274→              aria-expanded={creating}
+   275→   275→              aria-controls="watchlist-create-form"
+   276→   276→            >
+   277→   277→              {creating ? <>Close form</> : <><Plus className="h-3.5 w-3.5" aria-hidden /> New watchlist</>}
+   278→   278→            </Button>
+   279→   279→          </div>
+   280→   280→        </div>
+   281→   281→
+   282→   282→        {/* Alert summary strip */}
+   283→   283→        {summary && summary.alerting > 0 && (
+   284→   284→          <div className="hud border-crit/40 bg-crit/5 p-3" role="alert">
+   285→   285→            <div className="flex items-start gap-2.5 text-[11px] leading-relaxed text-crit">
+   286→   286→              <BellRing className="mt-0.5 h-4 w-4 shrink-0 anim-blink" aria-hidden />
+   287→   287→              <div>
+   288→   288→                <p className="font-mono uppercase tracking-wide-mc">{summary.alerting} watchlist{summary.alerting > 1 ? 's' : ''} in ALERT</p>
+   289→   289→                <p className="mt-0.5 text-dim">
+   290→   290→                  {rows.filter((r) => r.lastStatus === 'alert').map((r) => `${r.name} (${r.lastDetectionCount ?? 0} qualifying detection(s))`).join(' · ')} —
+   291→   291→                  evaluate again to refresh, or inspect the detections ledger above.
+   292→   292→                </p>
+   293→   293→              </div>
+   294→   294→            </div>
+   295→   295→          </div>
+   296→   296→        )}
+   297→   297→
+   298→   298→        {/* Create form */}
+   299→   299→        {creating && (
+   300→   300→          <form
+   301→   301→            id="watchlist-create-form"
+   302→   302→            className="grid gap-3 rounded-sm border border-edge bg-panel-2/40 p-3.5"
+   303→   303→            onSubmit={(e) => {
+   304→   304→              e.preventDefault();
+   305→   305→              if (!form.name.trim()) {
+   306→   306→                toast({ title: 'Name required', description: 'Give the watchlist a short name (≤ 60 characters).', variant: 'destructive' });
+   307→   307→                return;
+   308→   308→              }
+   309→   309→              create.mutate();
+   310→   310→            }}
+   311→   311→          >
+   312→   312→            <div className="flex flex-wrap items-end gap-2.5">
+   313→   313→              <Field label="Region preset" className="w-64">
+   314→   314→                <Select onValueChange={(v) => applyPreset(v)}>
+   315→   315→                  <SelectTrigger className="h-9 border-edge bg-panel text-xs text-dim" aria-label="Region preset">
+   316→   316→                    <SelectValue placeholder="Current console location" />
+   317→   317→                  </SelectTrigger>
+   318→   318→                  <SelectContent className="border-edge bg-popover text-dim">
+   319→   319→                    <SelectItem value="current" className="text-xs">Current console location</SelectItem>
+   320→   320→                    {(regions.data?.regions ?? []).map((r) => (
+   321→   321→                      <SelectItem key={r.key} value={r.key} className="text-xs">{r.name}</SelectItem>
+   322→   322→                    ))}
+   323→   323→                  </SelectContent>
+   324→   324→                </Select>
+   325→   325→              </Field>
+   326→   326→              <Field label="Name" className="min-w-48 flex-1">
+   327→   327→                <Input
+   328→   328→                  value={form.name}
+   329→   329→                  maxLength={60}
+   330→   330→                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+   331→   331→                  placeholder="e.g. Nakuru — dry-season fire watch"
+   332→   332→                  className="h-9 border-edge bg-panel text-xs text-ink"
+   333→   333→                  aria-label="Watchlist name"
+   334→   334→                />
+   335→   335→              </Field>
+   336→   336→            </div>
+   337→   337→            <div className="flex flex-wrap items-end gap-2.5">
+   338→   338→              <Field label="Center latitude">
+   339→   339→                <Input
+   340→   340→                  type="number" step="0.0001" min={-90} max={90}
+   341→   341→                  value={form.lat}
+   342→   342→                  onChange={(e) => setForm({ ...form, lat: Number(e.target.value) })}
+   343→   343→                  className="telemetry h-9 w-28 border-edge bg-panel text-xs text-dim"
+   344→   344→                  aria-label="Watchlist center latitude"
+   345→   345→                />
+   346→   346→              </Field>
+   347→   347→              <Field label="Center longitude">
+   348→   348→                <Input
+   349→   349→                  type="number" step="0.0001" min={-180} max={180}
+   350→   350→                  value={form.lon}
+   351→   351→                  onChange={(e) => setForm({ ...form, lon: Number(e.target.value) })}
+   352→   352→                  className="telemetry h-9 w-28 border-edge bg-panel text-xs text-dim"
+   353→   353→                  aria-label="Watchlist center longitude"
+   354→   354→                />
+   355→   355→              </Field>
+   356→   356→              <Field label="Watch radius">
+   357→   357→                <Select value={String(form.radiusKm)} onValueChange={(v) => setForm({ ...form, radiusKm: Number(v) })}>
+   358→   358→                  <SelectTrigger className="h-9 w-24 border-edge bg-panel text-xs text-dim" aria-label="Watch radius in kilometres">
+   359→   359→                    <SelectValue />
+   360→   360→                  </SelectTrigger>
+   361→   361→                  <SelectContent className="border-edge bg-popover text-dim">
+   362→   362→                    {RADIUS_OPTIONS.map((r) => <SelectItem key={r} value={String(r)} className="text-xs">{r} km</SelectItem>)}
+   363→   363→                  </SelectContent>
+   364→   364→                </Select>
+   365→   365→              </Field>
+   366→   366→              <Field label="Confidence floor">
+   367→   367→                <Select value={form.minConfidence} onValueChange={(v) => setForm({ ...form, minConfidence: v as WatchConfidence })}>
+   368→   368→                  <SelectTrigger className="h-9 w-36 border-edge bg-panel text-xs text-dim" aria-label="Minimum confidence class counted">
+   369→   369→                    <SelectValue />
+   370→   370→                  </SelectTrigger>
+   371→   371→                  <SelectContent className="border-edge bg-popover text-dim">
+   372→   372→                    <SelectItem value="low" className="text-xs">any confidence</SelectItem>
+   373→   373→                    <SelectItem value="nominal" className="text-xs">nominal + high</SelectItem>
+   374→   374→                    <SelectItem value="high" className="text-xs">high only</SelectItem>
+   375→   375→                  </SelectContent>
+   376→   376→                </Select>
+   377→   377→              </Field>
+   378→   378→              <Field label="Lookback window">
+   379→   379→                <Select value={String(form.lookbackDays)} onValueChange={(v) => setForm({ ...form, lookbackDays: Number(v) })}>
+   380→   380→                  <SelectTrigger className="h-9 w-24 border-edge bg-panel text-xs text-dim" aria-label="Lookback window in days">
+   381→   381→                    <SelectValue />
+   382→   382→                  </SelectTrigger>
+   383→   383→                  <SelectContent className="border-edge bg-popover text-dim">
+   384→   384→                    {LOOKBACK_OPTIONS.map((d) => <SelectItem key={d} value={String(d)} className="text-xs">{d} days</SelectItem>)}
+   385→   385→                  </SelectContent>
+   386→   386→                </Select>
+   387→   387→              </Field>
+   388→   388→              <Field label="Alert threshold">
+   389→   389→                <Input
+   390→   390→                  type="number" min={1} max={500}
+   391→   391→                  value={form.detectionThreshold}
+   392→   392→                  onChange={(e) => setForm({ ...form, detectionThreshold: Math.max(1, Number(e.target.value) || 1) })}
+   393→   393→                  className="telemetry h-9 w-20 border-edge bg-panel text-xs text-dim"
+   394→   394→                  aria-label="Alert threshold in qualifying detections"
+   395→   395→                />
+   396→   396→              </Field>
+   397→   397→              <Field label="Auto re-evaluate">
+   398→   398→                <Select
+   399→   399→                  value={String(form.reevaluateIntervalMin ?? 0)}
+   400→   400→                  onValueChange={(v) => setForm({ ...form, reevaluateIntervalMin: v === '0' ? null : Number(v) })}
+   401→   401→                >
+   402→   402→                  <SelectTrigger className="h-9 w-32 border-edge bg-panel text-xs text-dim" aria-label="Scheduled re-evaluation cadence">
+   403→   403→                    <SelectValue />
+   404→   404→                  </SelectTrigger>
+   405→   405→                  <SelectContent className="border-edge bg-popover text-dim">
+   406→   406→                    <SelectItem value="0" className="text-xs">off (manual)</SelectItem>
+   407→   407→                    <SelectItem value="360" className="text-xs">every 6 h</SelectItem>
+   408→   408→                    <SelectItem value="720" className="text-xs">every 12 h</SelectItem>
+   409→   409→                    <SelectItem value="1440" className="text-xs">every 24 h</SelectItem>
+   410→   410→                  </SelectContent>
+   411→   411→                </Select>
+   412→   412→              </Field>
+   413→   413→            </div>
+   414→   414→            <Field label="Notes (optional)">
+   415→   415→              <Textarea
+   416→   416→                value={form.notes ?? ''}
+   417→   417→                maxLength={300}
+   418→   418→                rows={2}
+   419→   419→                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+   420→   420→                placeholder="Why this region is watched — e.g. miombo woodland adjacent to maize fields, burns Jul–Oct."
+   421→   421→                className="border-edge bg-panel text-xs text-ink"
+   422→   422→                aria-label="Watchlist notes"
+   423→   423→              />
+   424→   424→            </Field>
+   425→   425→            <div className="flex flex-wrap items-center gap-3">
+   426→   426→              <Button type="submit" disabled={create.isPending} className="h-9 font-mono text-xs uppercase tracking-wide-mc">
+   427→   427→                {create.isPending ? (
+   428→   428→                  <><Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> Creating…</>
+   429→   429→                ) : (
+   430→   430→                  <><Plus className="h-3.5 w-3.5" aria-hidden /> Create watchlist</>
+   431→   431→                )}
+   432→   432→              </Button>
+   433→   433→              <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   434→   434→                alert at ≥ {form.detectionThreshold} {CONF_LABEL[form.minConfidence ?? 'nominal']} detection(s) within {form.lookbackDays} day(s) · watch at ≥ {Math.max(1, Math.ceil((form.detectionThreshold ?? 5) / 2))}
+   435→   435→                {form.reevaluateIntervalMin ? ` · auto re-eval ${REEVALUATE_LABELS[form.reevaluateIntervalMin as ReevaluateIntervalMin]}` : ' · manual evaluation only'}
+   436→   436→              </p>
+   437→   437→            </div>
+   438→   438→            {create.isError && (
+   439→   439→              <p className="font-mono text-[10px] uppercase tracking-wide-mc text-crit" role="alert">
+   440→   440→                {create.error instanceof ApiRequestError ? `${create.error.code} — ${create.error.message}` : 'creation failed'}
+   441→   441→              </p>
+   442→   442→            )}
+   443→   443→          </form>
+   444→   444→        )}
+   445→   445→
+   446→   446→        {/* Evaluate/backtest-in-flight banner */}
+   447→   447→        {busy && (
+   448→   448→          <div className="flex flex-col gap-2" role="status" aria-live="polite">
+   449→   449→            <SweepLoader label={pending?.kind === 'backtest' ? 'Backtesting watchlist — replaying the real VIIRS archive for the historical window' : 'Evaluating watchlist — decoding real VIIRS tiles for uncovered days'} />
+   450→   450→            <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   451→   451→              gibs vector tiles in flight · archive gaps reported as no-data, never zero-filled
+   452→   452→            </p>
+   453→   453→          </div>
+   454→   454→        )}
+   455→   455→
+   456→   456→        {/* Watchlist cards */}
+   457→   457→        {watchlists.isLoading && (
+   458→   458→          <div className="telemetry px-1 text-[11px] text-faint" role="status">reading watchlists…</div>
+   459→   459→        )}
+   460→   460→        {watchlists.isError && (
+   461→   461→          <div className="hud border-crit/40 p-3 text-[11px] text-crit" role="alert">
+   462→   462→            Watchlist read failed — {watchlists.error instanceof ApiRequestError ? `${watchlists.error.code}: ${watchlists.error.message}` : 'unexpected error'}.
+   463→   463→            <Button variant="outline" size="sm" className="ml-3 h-7 font-mono text-[10px] uppercase tracking-wide-mc" onClick={() => watchlists.refetch()}>
+   464→   464→              retry
+   465→   465→            </Button>
+   466→   466→          </div>
+   467→   467→        )}
+   468→   468→        {!watchlists.isLoading && rows.length === 0 && (
+   469→   469→          <EmptyState
+   470→   470→            label="No watchlists yet"
+   471→   471→            hint="Create one to turn stored VIIRS detections into standing regional alerts: pick a preset (the Zambia Central dry-season preset shows real alerts Jul–Oct), set a radius and threshold, then Evaluate."
+   472→   472→          />
+   473→   473→        )}
+   474→   474→        <div className="grid gap-3 lg:grid-cols-2">
+   475→   475→          {rows.map((w) => (
+   476→   476→            <WatchlistCard
+   477→   477→              key={w.id}
+   478→   478→              w={w}
+   479→   479→              evaluating={evaluate.isPending && pending?.id === w.id}
+   480→   480→              pendingKind={pending?.id === w.id ? pending.kind : null}
+   481→   481→              onEvaluate={() => evaluate.mutate({ id: w.id })}
+   482→   482→              onBacktest={(end) => evaluate.mutate({ id: w.id, end })}
+   483→   483→              editing={editingId === w.id}
+   484→   484→              editForm={editForm}
+   485→   485→              onEditOpen={() => {
+   486→   486→                setEditingId(editingId === w.id ? null : w.id);
+   487→   487→                setEditForm(editingId === w.id ? {} : {
+   488→   488→                  name: w.name,
+   489→   489→                  radiusKm: w.radiusKm,
+   490→   490→                  minConfidence: w.minConfidence,
+   491→   491→                  lookbackDays: w.lookbackDays,
+   492→   492→                  detectionThreshold: w.detectionThreshold,
+   493→   493→                  notes: w.notes ?? '',
+   494→   494→                  reevaluateIntervalMin: w.reevaluateIntervalMin,
+   495→   495→                });
+   496→   496→              }}
+   497→   497→              onEditChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
+   498→   498→              onEditSubmit={() => update.mutate({ id: w.id, body: editForm })}
+   499→   499→              editPending={update.isPending && editingId === w.id}
+   500→   500→              onDelete={() => remove.mutate(w.id)}
+   501→   501→              deletePending={remove.isPending && remove.variables === w.id}
+   502→   502→              onFocus={() => {
+   503→   503→                setLocation({ lat: w.lat, lon: w.lon, label: w.label ?? w.name, country: undefined, context: w.notes ?? undefined });
+   504→   504→                toast({ title: 'Console geography set', description: `Targeting ${w.label ?? w.name} — ingest the window above to inspect its detections ledger.` });
+   505→   505→                logEvent({
+   506→   506→                  severity: 'info',
+   507→   507→                  category: 'FIRE',
+   508→   508→                  title: `Console geography set — ${w.label ?? w.name}`,
+   509→   509→                  detail: `Targeted from fire watchlist “${w.name}” (${w.lat.toFixed(2)}°, ${w.lon.toFixed(2)}°, radius ${w.radiusKm.toFixed(0)} km).`,
+   510→   510→                  view: 'fire',
+   511→   511→                });
+   512→   512→              }}
+   513→   513→              onShowLedger={() => {
+   514→   514→                setLocation({ lat: w.lat, lon: w.lon, label: w.label ?? w.name });
+   515→   515→                setView('explorer');
+   516→   516→              }}
+   517→   517→            />
+   518→   518→          ))}
+   519→   519→        </div>
+   520→   520→
+   521→   521→        <p className="text-[10px] leading-relaxed text-faint">
+   522→   522→          Watchlist states describe the last recorded evaluation only. A header alert chip appears console-wide while any
+   523→   523→          watchlist is in ALERT. Evaluations share the stored detection pool with the detections ledger — every row is a real
+   524→   524→          VIIRS observation with provenance in Evidence &amp; Provenance. Backtests and scheduled runs take the identical
+   525→   525→          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler’s live state is reported
+   526→   526→          in System Health, and every scheduled run is written to the mission log.
+   527→   527→        </p>
+   528→   528→      </HudPanel>
+   529→   529→    </motion.section>
+   530→   530→  );
+   531→   531→}
+   532→   532→
+   533→   533→function WatchlistCard({
+   534→   534→  w, evaluating, pendingKind, onEvaluate, onBacktest, editing, editForm, onEditOpen, onEditChange, onEditSubmit, editPending, onDelete, deletePending, onFocus, onShowLedger,
+   535→   535→}: {
+   536→   536→  w: WatchlistRow;
+   537→   537→  evaluating: boolean;
+   538→   538→  pendingKind: 'live' | 'backtest' | null;
+   539→   539→  onEvaluate: () => void;
+   540→   540→  onBacktest: (end: string) => void;
+   541→   541→  editing: boolean;
+   542→   542→  editForm: Partial<WatchlistInput>;
+   543→   543→  onEditOpen: () => void;
+   544→   544→  onEditChange: (patch: Partial<WatchlistInput>) => void;
+   545→   545→  onEditSubmit: () => void;
+   546→   546→  editPending: boolean;
+   547→   547→  onDelete: () => void;
+   548→   548→  deletePending: boolean;
+   549→   549→  onFocus: () => void;
+   550→   550→  onShowLedger: () => void;
+   551→   551→}) {
+   552→   552→  const last = w.lastEvent;
+   553→   553→  const statusIcon =
+   554→   554→    w.lastStatus === 'alert' ? <BellRing className="h-3.5 w-3.5" aria-hidden />
+   555→   555→    : w.lastStatus === 'watch' ? <Bell className="h-3.5 w-3.5" aria-hidden />
+   556→   556→    : w.lastStatus === 'clear' ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+   557→   557→    : <History className="h-3.5 w-3.5" aria-hidden />;
+   558→   558→
+   559→   559→  // Backtest date-picker state: bounded by the VIIRS archive start (the full
+   560→   560→  // lookback window must fit) and today. Defaults to the latest fully
+   561→   561→  // observed day; the live window is what "Evaluate now" uses.
+   562→   562→  const [btEnd, setBtEnd] = useState<string>(() => yesterdayIso());
+   563→   563→  const today = new Date().toISOString().slice(0, 10);
+   564→   564→  const btMin = minBacktestEndIso(w.lookbackDays);
+   565→   565→  const btValid = btEnd >= btMin && btEnd <= today;
+   566→   566→  const btWindow = btValid ? windowFor(btEnd, w.lookbackDays) : null;
+   567→   567→
+   568→   568→  return (
+   569→   569→    <div className={cn('flex flex-col gap-2.5 rounded-sm border p-3.5', STATUS_TONE_BG[w.lastStatus] || 'border-edge bg-panel-2/40')}>
+   570→   570→      {/* Card header */}
+   571→   571→      <div className="flex flex-wrap items-start justify-between gap-2">
+   572→   572→        <div className="min-w-0">
+   573→   573→          <p className="truncate font-display text-[13px] font-bold uppercase tracking-wide-mc text-ink">{w.name}</p>
+   574→   574→          <p className="telemetry mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-faint">
+   575→   575→            <CoordReadout lat={w.lat} lon={w.lon} />
+   576→   576→            <span>· {w.radiusKm.toFixed(0)} km</span>
+   577→   577→            {w.label && <span className="truncate">· {w.label}</span>}
+   578→   578→          </p>
+   579→   579→        </div>
+   580→   580→        <StatusPill status={w.lastStatus} pulse={w.lastStatus === 'alert'} className={STATUS_TONE[w.lastStatus]} />
+   581→   581→      </div>
+   582→   582→
+   583→   583→      {/* Rule line */}
+   584→   584→      <p className="telemetry text-[10px] uppercase tracking-wide-mc text-dim">
+   585→   585→        rule — alert at ≥ {w.detectionThreshold} · {CONF_LABEL[w.minConfidence]} · within {w.lookbackDays} d
+   586→   586→        <span className="text-faint"> (watch at ≥ {w.watchThreshold})</span>
+   587→   587→      </p>
+   588→   588→      {w.reevaluateIntervalMin !== null && (
+   589→   589→        <p className="telemetry flex items-center gap-1.5 text-[10px] uppercase tracking-wide-mc text-signal">
+   590→   590→          <Clock className="h-3 w-3" aria-hidden />
+   591→   591→          auto re-eval {REEVALUATE_LABELS[w.reevaluateIntervalMin as ReevaluateIntervalMin]}
+   592→   592→          {w.nextReevaluateAt ? ` · next ${w.nextReevaluateAt.slice(0, 16).replace('T', ' ')}Z` : ' · armed'}
+   593→   593→        </p>
+   594→   594→      )}
+   595→   595→      {w.notes && <p className="text-[11px] leading-relaxed text-faint">{w.notes}</p>}
+   596→   596→
+   597→   597→      {/* Last evaluation */}
+   598→   598→      {last ? (
+   599→   599→        <div className="flex flex-col gap-2 rounded-sm border border-edge/70 bg-void/40 p-2.5">
+   600→   600→          <div className="flex flex-wrap items-center justify-between gap-2">
+   601→   601→            <span className="telemetry text-[10px] uppercase tracking-wide-mc text-faint">
+   602→   602→              last eval {new Date(last.evaluatedAt).toISOString().slice(0, 16).replace('T', ' ')}Z · {last.windowStart} → {last.windowEnd}
+   603→   603→              {last.trigger !== 'manual' && (
+   604→   604→                <span className={cn('ml-1.5 border px-1 py-px', last.trigger === 'backtest' ? 'border-caution/50 text-caution' : 'border-signal/50 text-signal')}>
+   605→   605→                  {last.trigger}
+   606→   606→                </span>
+   607→   607→              )}
+   608→   608→            </span>
+   609→   609→            <span className="telemetry text-[10px] text-dim">
+   610→   610→              {last.detectionCount} qualifying · {last.highConfidenceCount} high / {last.nominalCount} nominal / {last.lowCount} low
+   611→   611→              {last.maxFrpMW !== null ? ` · max FRP ${last.maxFrpMW.toFixed(1)} MW` : ''}
+   612→   612→            </span>
+   613→   613→          </div>
+   614→   614→          {last.perDay.length > 0 && <DayBars perDay={last.perDay} />}
+   615→   615→          {last.rationale && <p className="text-[10px] leading-relaxed text-dim">{last.rationale}</p>}
+   616→   616→          {(last.daysNoDataList.length > 0 || last.daysUnchecked.length > 0) && (
+   617→   617→            <p className="font-mono text-[9px] uppercase tracking-wide-mc text-caution">
+   618→   618→              {last.daysNoDataList.length > 0 && `${last.daysNoDataList.length} archive-gap day(s) reported`}
+   619→   619→              {last.daysNoDataList.length > 0 && last.daysUnchecked.length > 0 && ' · '}
+   620→   620→              {last.daysUnchecked.length > 0 && `${last.daysUnchecked.length} unchecked day(s)`}
+   621→   621→            </p>
+   622→   622→          )}
+   623→   623→        </div>
+   624→   624→      ) : (
+   625→   625→        <p className="telemetry text-[10px] uppercase tracking-wide-mc text-caution">
+   626→   626→          unverified — never evaluated; run a live check
+   627→   627→        </p>
+   628→   628→      )}
+   629→   629→
+   630→   630→      {/* Edit form */}
+   631→   631→      {editing && (
+   632→   632→        <div className="grid gap-2.5 rounded-sm border border-edge bg-panel-2/40 p-3">
+   633→   633→          <div className="flex flex-wrap items-end gap-2">
+   634→   634→            <Field label="Name" className="min-w-40 flex-1">
+   635→   635→              <Input
+   636→   636→                value={editForm.name ?? ''}
+   637→   637→                maxLength={60}
+   638→   638→                onChange={(e) => onEditChange({ name: e.target.value })}
+   639→   639→                className="h-8 border-edge bg-panel text-xs text-ink"
+   640→   640→                aria-label="Edit watchlist name"
+   641→   641→              />
+   642→   642→            </Field>
+   643→   643→            <Field label="Radius">
+   644→   644→              <Select value={String(editForm.radiusKm ?? w.radiusKm)} onValueChange={(v) => onEditChange({ radiusKm: Number(v) })}>
+   645→   645→                <SelectTrigger className="h-8 w-24 border-edge bg-panel text-xs text-dim" aria-label="Edit radius">
+   646→   646→                  <SelectValue />
+   647→   647→                </SelectTrigger>
+   648→   648→                <SelectContent className="border-edge bg-popover text-dim">
+   649→   649→                  {RADIUS_OPTIONS.map((r) => <SelectItem key={r} value={String(r)} className="text-xs">{r} km</SelectItem>)}
+   650→   650→                </SelectContent>
+   651→   651→              </Select>
+   652→   652→            </Field>
+   653→   653→          </div>
+   654→   654→          <div className="flex flex-wrap items-end gap-2">
+   655→   655→            <Field label="Confidence floor">
+   656→   656→              <Select value={editForm.minConfidence ?? w.minConfidence} onValueChange={(v) => onEditChange({ minConfidence: v as WatchConfidence })}>
+   657→   657→                <SelectTrigger className="h-8 w-32 border-edge bg-panel text-xs text-dim" aria-label="Edit confidence floor">
+   658→   658→                  <SelectValue />
+   659→   659→                </SelectTrigger>
+   660→   660→                <SelectContent className="border-edge bg-popover text-dim">
+   661→   661→                  <SelectItem value="low" className="text-xs">any confidence</SelectItem>
+   662→   662→                  <SelectItem value="nominal" className="text-xs">nominal + high</SelectItem>
+   663→   663→                  <SelectItem value="high" className="text-xs">high only</SelectItem>
+   664→   664→                </SelectContent>
+   665→   665→              </Select>
+   666→   666→            </Field>
+   667→   667→            <Field label="Lookback">
+   668→   668→              <Select value={String(editForm.lookbackDays ?? w.lookbackDays)} onValueChange={(v) => onEditChange({ lookbackDays: Number(v) })}>
+   669→   669→                <SelectTrigger className="h-8 w-24 border-edge bg-panel text-xs text-dim" aria-label="Edit lookback window">
+   670→   670→                  <SelectValue />
+   671→   671→                </SelectTrigger>
+   672→   672→                <SelectContent className="border-edge bg-popover text-dim">
+   673→   673→                  {LOOKBACK_OPTIONS.map((d) => <SelectItem key={d} value={String(d)} className="text-xs">{d} days</SelectItem>)}
+   674→   674→                </SelectContent>
+   675→   675→              </Select>
+   676→   676→            </Field>
+   677→   677→            <Field label="Alert threshold">
+   678→   678→              <Input
+   679→   679→                type="number" min={1} max={500}
+   680→   680→                value={editForm.detectionThreshold ?? w.detectionThreshold}
+   681→   681→                onChange={(e) => onEditChange({ detectionThreshold: Math.max(1, Number(e.target.value) || 1) })}
+   682→   682→                className="telemetry h-8 w-20 border-edge bg-panel text-xs text-dim"
+   683→   683→                aria-label="Edit alert threshold"
+   684→   684→              />
+   685→   685→            </Field>
+   686→   686→            <Field label="Auto re-evaluate">
+   687→   687→              <Select
+   688→   688→                value={String(editForm.reevaluateIntervalMin ?? 0)}
+   689→   689→                onValueChange={(v) => onEditChange({ reevaluateIntervalMin: v === '0' ? null : Number(v) })}
+   690→   690→              >
+   691→   691→                <SelectTrigger className="h-8 w-32 border-edge bg-panel text-xs text-dim" aria-label="Scheduled re-evaluation cadence">
+   692→   692→                  <SelectValue />
+   693→   693→                </SelectTrigger>
+   694→   694→                <SelectContent className="border-edge bg-popover text-dim">
+   695→   695→                  <SelectItem value="0" className="text-xs">off (manual)</SelectItem>
+   696→   696→                  <SelectItem value="360" className="text-xs">every 6 h</SelectItem>
+   697→   697→                  <SelectItem value="720" className="text-xs">every 12 h</SelectItem>
+   698→   698→                  <SelectItem value="1440" className="text-xs">every 24 h</SelectItem>
+   699→   699→                </SelectContent>
+   700→   700→              </Select>
+   701→   701→            </Field>
+   702→   702→          </div>
+   703→   703→          <Field label="Notes">
+   704→   704→            <Textarea
+   705→   705→              value={editForm.notes ?? ''}
+   706→   706→              maxLength={300}
+   707→   707→              rows={2}
+   708→   708→              onChange={(e) => onEditChange({ notes: e.target.value })}
+   709→   709→              className="border-edge bg-panel text-xs text-ink"
+   710→   710→              aria-label="Edit watchlist notes"
+   711→   711→            />
+   712→   712→          </Field>
+   713→   713→          <div className="flex items-center gap-2">
+   714→   714→            <Button size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditSubmit} disabled={editPending}>
+   715→   715→              {editPending ? 'Saving…' : 'Save changes'}
+   716→   716→            </Button>
+   717→   717→            <Button variant="outline" size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditOpen}>
+   718→   718→              Cancel
+   719→   719→            </Button>
+   720→   720→            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified · cadence runs on the in-process scheduler (audit-trailed)</span>
+   721→   721→          </div>
+   722→   722→        </div>
+   723→   723→      )}
+   724→   724→
+   725→   725→      {/* Actions */}
+   726→   726→      <div className="flex flex-wrap items-center gap-2">
+   727→   727→        <Button
+   728→   728→          size="sm"
+   729→   729→          onClick={onEvaluate}
+   730→   730→          disabled={evaluating}
+   731→   731→          className={cn('h-8 font-mono text-[11px] uppercase tracking-wide-mc', w.lastStatus === 'alert' && 'bg-crit/90 hover:bg-crit')}
+   732→   732→          aria-label={`Evaluate watchlist ${w.name} live from the GIBS VIIRS archive`}
+   733→   733→        >
+   734→   734→          {pendingKind === 'live' ? (
+   735→   735→            <><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> Evaluating…</>
+   736→   736→          ) : (
+   737→   737→            <>{statusIcon} Evaluate now</>
+   738→   738→          )}
+   739→   739→        </Button>
+   740→   740→        <Popover>
+   741→   741→          <PopoverTrigger asChild>
+   742→   742→            <Button
+   743→   743→              variant="outline"
+   744→   744→              size="sm"
+   745→   745→              disabled={evaluating}
+   746→   746→              className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+   747→   747→              aria-label={`Backtest watchlist ${w.name} against a historical window`}
+   748→   748→            >
+   749→   749→              <CalendarClock className="h-3.5 w-3.5" aria-hidden /> Backtest
+   750→   750→            </Button>
+   751→   751→          </PopoverTrigger>
+   752→   752→          <PopoverContent align="start" className="w-80 border-edge bg-popover p-3">
+   753→   753→            <div className="flex flex-col gap-2.5">
+   754→   754→              <div>
+   755→   755→                <p className="font-display text-[12px] font-bold uppercase tracking-wide-mc text-ink">Backtest “{w.name}”</p>
+   756→   756→                <p className="mt-1 text-[10px] leading-relaxed text-dim">
+   757→   757→                  Replays the exact rule over a historical window ending on the chosen date, from the real GIBS VIIRS
+   758→   758→                  archive — the same pipeline as Evaluate, anchored to the past. Stored as a normal evaluation event
+   759→   759→                  (trigger=backtest); nothing is simulated.
+   760→   760→                </p>
+   761→   761→              </div>
+   762→   762→              <Field label="Window end date">
+   763→   763→                <Input
+   764→   764→                  type="date"
+   765→   765→                  value={btEnd}
+   766→   766→                  min={btMin}
+   767→   767→                  max={today}
+   768→   768→                  onChange={(e) => setBtEnd(e.target.value)}
+   769→   769→                  className="telemetry h-8 border-edge bg-panel text-xs text-dim"
+   770→   770→                  aria-label="Backtest window end date"
+   771→   771→                />
+   772→   772→              </Field>
+   773→   773→              <p className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">
+   774→   774→                {btWindow
+   775→   775→                  ? `window ${btWindow.start} → ${btWindow.end} · ${btWindow.days.length} day(s) · latest fully observed day is ${yesterdayIso()}`
+   776→   776→                  : `invalid date — the ${w.lookbackDays}-day window must fit inside the archive: end dates ${btMin} → ${today}`}
+   777→   777→              </p>
+   778→   778→              <div className="flex items-center gap-2">
+   779→   779→                <Button
+   780→   780→                  size="sm"
+   781→   781→                  className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
+   782→   782→                  disabled={!btValid || evaluating}
+   783→   783→                  onClick={() => onBacktest(btEnd)}
+   784→   784→                >
+   785→   785→                  {pendingKind === 'backtest' ? (
+   786→   786→                    <><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> Backtesting…</>
+   787→   787→                  ) : (
+   788→   788→                    <><CalendarClock className="h-3.5 w-3.5" aria-hidden /> Run backtest</>
+   789→   789→                  )}
+   790→   790→                </Button>
+   791→   791→                {btEnd !== yesterdayIso() && (
+   792→   792→                  <Button
+   793→   793→                    variant="outline"
+   794→   794→                    size="sm"
+   795→   795→                    className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+   796→   796→                    onClick={() => setBtEnd(yesterdayIso())}
+   797→   797→                  >
+   798→   798→                    Use latest day
+   799→   799→                  </Button>
+   800→   800→                )}
+   801→   801→              </div>
+   802→   802→            </div>
+   803→   803→          </PopoverContent>
+   804→   804→        </Popover>
+   805→   805→        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onEditOpen} aria-expanded={editing}>
+   806→   806→          <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
+   807→   807→        </Button>
+   808→   808→        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onFocus}>
+   809→   809→          <MapPin className="h-3.5 w-3.5" aria-hidden /> Set console location
+   810→   810→        </Button>
+   811→   811→        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onShowLedger}>
+   812→   812→          <ShieldAlert className="h-3.5 w-3.5" aria-hidden /> Map region
+   813→   813→        </Button>
+   814→   814→        <AlertDialog>
+   815→   815→          <AlertDialogTrigger asChild>
+   816→   816→            <Button
+   817→   817→              variant="outline"
+   818→   818→              size="sm"
+   819→   819→              className="h-8 border-crit/30 bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:border-crit/60 hover:text-crit"
+   820→   820→              aria-label={`Delete watchlist ${w.name}`}
+   821→   821→            >
+   822→   822→              <Trash2 className="h-3.5 w-3.5" aria-hidden /> Delete
+   823→   823→            </Button>
+   824→   824→          </AlertDialogTrigger>
+   825→   825→          <AlertDialogContent className="border-edge bg-popover">
+   826→   826→            <AlertDialogHeader>
+   827→   827→              <AlertDialogTitle className="font-display text-sm uppercase tracking-wide-mc text-ink">
+   828→   828→                Delete “{w.name}”?
+   829→   829→              </AlertDialogTitle>
+   830→   830→              <AlertDialogDescription className="text-xs leading-relaxed text-dim">
+   831→   831→                Removes the watchlist and its {w.eventCount} recorded evaluation(s). Stored fire detections remain — they are
+   832→   832→                shared real observations. This cannot be undone.
+   833→   833→              </AlertDialogDescription>
+   834→   834→            </AlertDialogHeader>
+   835→   835→            <AlertDialogFooter>
+   836→   836→              <AlertDialogCancel className="font-mono text-[11px] uppercase tracking-wide-mc">Keep</AlertDialogCancel>
+   837→   837→              <AlertDialogAction
+   838→   838→                className="bg-crit font-mono text-[11px] uppercase tracking-wide-mc hover:bg-crit/90"
+   839→   839→                onClick={onDelete}
+   840→   840→                disabled={deletePending}
+   841→   841→              >
+   842→   842→                {deletePending ? 'Deleting…' : 'Delete watchlist'}
+   843→   843→              </AlertDialogAction>
+   844→   844→            </AlertDialogFooter>
+   845→   845→          </AlertDialogContent>
+   846→   846→        </AlertDialog>
+   847→   847→        {w.lastStatus === 'alert' && (
+   848→   848→          <span className="telemetry flex items-center gap-1.5 text-[10px] uppercase tracking-wide-mc text-crit" role="status">
+   849→   849→            <BellRing className="h-3 w-3 anim-blink" aria-hidden /> alerting
+   850→   850→          </span>
+   851→   851→        )}
+   852→   852→      </div>
+   853→   853→    </div>
+   854→   854→  );
+   855→   855→}
+   856→   856→
