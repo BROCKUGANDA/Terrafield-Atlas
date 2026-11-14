@@ -30,26 +30,117 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-  const text = await res.text();
-  let data: unknown = null;
+/**
+ * Console-side transport hardening (pairs with the server's retry policy):
+ *  - every request is bounded by a 20 s timeout (no hung tabs on a dead link);
+ *  - a gateway/service that answers with an HTML error page (e.g. a proxy's
+ *    502 while the dev server restarts) is reported as GATEWAY_HTML with a
+ *    human reason — raw HTML never leaks into the UI's reason line;
+ *  - idempotent GET requests auto-retry ONCE on transient outcomes (5xx,
+ *    network drop) after a short backoff; mutations never auto-retry (a
+ *    POST could double-run an evaluation).
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
+
+function isHtml(text: string): boolean {
+  return /^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text);
+}
+
+function friendlyStatus(status: number, statusText: string): string {
+  if (status === 502) return 'gateway returned 502 — the console API is restarting or unreachable from this network';
+  if (status === 503) return 'console API temporarily unavailable (503)';
+  if (status === 504) return 'console API timed out upstream (504)';
+  return `HTTP ${status} ${statusText}`.trim();
+}
+
+async function attempt<T>(path: string, init: RequestInit | undefined): Promise<{ res: Response; text: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = null;
+    const res = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...(init?.body ? { 'content-type': 'application/json' } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+    const text = await res.text();
+    return { res, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const idempotent = method === 'GET' || method === 'HEAD';
+  const maxAttempts = idempotent ? 2 : 1;
+
+  let lastRes: Response | null = null;
+  let lastText = '';
+  let networkError: Error | null = null;
+
+  for (let a = 1; a <= maxAttempts; a++) {
+    networkError = null;
+    try {
+      const { res, text } = await attempt(path, init);
+      lastRes = res;
+      lastText = text;
+      if (res.ok) {
+        let data: unknown = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = null;
+        }
+        return data as T;
+      }
+      if (!(res.status >= 500 || res.status === 429) || a >= maxAttempts) break;
+      await new Promise((r) => setTimeout(r, 400 * a));
+    } catch (err) {
+      networkError = err instanceof Error ? err : new Error('network error');
+      if (a >= maxAttempts) break;
+      await new Promise((r) => setTimeout(r, 400 * a));
+    }
+  }
+
+  if (networkError && !lastRes) {
+    const aborted = networkError.name === 'AbortError';
+    throw new ApiRequestError(0, {
+      code: aborted ? 'TIMEOUT' : 'NETWORK',
+      message: aborted
+        ? `request exceeded the ${REQUEST_TIMEOUT_MS / 1000}s console budget — the API may be busy or down`
+        : 'console API unreachable from this browser (network error)',
+    });
+  }
+
+  const res = lastRes as Response;
+  let data: unknown = null;
+  if (lastText) {
+    try {
+      data = JSON.parse(lastText);
+    } catch {
+      data = null;
+    }
   }
   if (!res.ok) {
+    if (!data && isHtml(lastText)) {
+      throw new ApiRequestError(res.status, {
+        code: 'GATEWAY_HTML',
+        message: `${friendlyStatus(res.status, res.statusText)} — an HTML error page came back instead of console JSON`,
+      });
+    }
     const err = (data as { error?: ApiError } | null)?.error;
-    throw new ApiRequestError(res.status, err ?? { code: 'HTTP_' + res.status, message: text.slice(0, 300) || res.statusText });
+    throw new ApiRequestError(res.status, err ?? { code: 'HTTP_' + res.status, message: friendlyStatus(res.status, res.statusText) });
   }
-  return data as T;
+  // 2xx but not JSON — treat as a contract fault, not silent success
+  throw new ApiRequestError(res.status, {
+    code: 'BAD_PAYLOAD',
+    message: isHtml(lastText)
+      ? `${friendlyStatus(res.status, res.statusText)} — an HTML error page came back instead of console JSON`
+      : 'console API returned a non-JSON payload',
+  });
 }
 
 // ---- contracts ----
@@ -454,6 +545,12 @@ export interface DigestChannelStatus {
       urlConfigured: boolean;
       host: string | null;
       secretPresent: boolean;
+      secretBytes?: number;
+      secretAdequate?: boolean;
+      rotationSecretPresent?: boolean;
+      targetSafe?: boolean | null;
+      targetUnsafeReason?: string | null;
+      signingScheme?: string;
       attempts: number;
       delivered: number;
       failed: number;
@@ -541,7 +638,7 @@ export interface SystemStatus {
     running: boolean;
     startedAt: string | null;
     lastTickAt: string | null;
-    lastTick: { tickAt: string; ran: number; dueCount: number; runs: { watchlistId: string; name: string; ok: boolean; status?: string; detectionCount?: number; error?: string }[] } | null;
+    lastTick: { tickAt: string; ran: number; dueCount: number; runs: { watchlistId: string; name: string; ok: boolean; status?: string; detectionCount?: number; error?: string; lostRace?: boolean }[] } | null;
     ticksFired: number;
     ticksSkippedBusy: number;
     consecutiveFailedRuns: number;
@@ -551,9 +648,41 @@ export interface SystemStatus {
     note: string;
   };
   digestChannel: DigestChannelStatus;
-  providers: Record<string, { status: string; note?: string }>;
+  providers: Record<string, { status: string; latencyMs?: number | null; note?: string }>;
+  sourceSigns?: { checkedAt: string; probeMs: number; summary: { live: number; degraded: number; unreachable: number } };
   reliability: Record<string, string>;
   methodology: { trend: string; rotation: string };
+}
+
+// ---- live source signs (probe-backed chips) ----
+
+export type SourceSignState = 'live' | 'degraded' | 'unreachable' | 'checking';
+
+export interface SourceSign {
+  key: string;
+  label: string;
+  state: SourceSignState;
+  latencyMs: number | null;
+  checkedAt: string;
+  detail: string;
+  servingFireDetections?: boolean;
+}
+
+export interface SourcesLiveResponse {
+  checkedAt: string;
+  probeMs: number;
+  signs: SourceSign[];
+  summary: { live: number; degraded: number; unreachable: number };
+  eonet: {
+    ok: boolean;
+    fresh: boolean;
+    staleMs: number | null;
+    days: number;
+    count: number;
+    events: { id: string; title: string; startedAt: string | null; lon: number | null; lat: number | null; source: string | null }[];
+    note: string;
+  };
+  note: string;
 }
 
 export interface IngestResponse {
@@ -660,5 +789,6 @@ export const api = {
     request<WatchDigestResponse>(`/api/v1/fires/watchlists/${id}/digest${hours !== undefined ? `?hours=${hours}` : ''}`),
   provenance: (limit = 50) => request<ProvenanceResponse>(`/api/v1/provenance?limit=${limit}`),
   systemStatus: () => request<SystemStatus>('/api/v1/system/status'),
+  systemSources: (force = false) => request<SourcesLiveResponse>(`/api/v1/system/sources${force ? '?force=1' : ''}`),
   report: (farmId: string) => request<ReportResponse>('/api/v1/reports', { method: 'POST', body: JSON.stringify({ farmId }) }),
 };

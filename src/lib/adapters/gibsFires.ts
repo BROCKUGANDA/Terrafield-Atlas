@@ -2,7 +2,8 @@ import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import { gunzipSync } from 'zlib';
 import { resilientFetch, ProviderUnavailableError } from '@/lib/http';
-import { cacheGet, cacheSet, stableHash } from '@/lib/cache';
+import { cacheGet, cacheGetStale, cacheSet, stableHash } from '@/lib/cache';
+import { createManyIdempotent } from '@/lib/db-write';
 import { db } from '@/lib/db';
 
 /**
@@ -76,6 +77,9 @@ export interface FireTileResult {
   tiles: number;
   tilesWithData: number;
   dataAvailable: boolean;
+  /** True when served from a past-TTL snapshot during a provider outage. */
+  stale?: boolean;
+  staleMs?: number;
 }
 
 /**
@@ -93,12 +97,19 @@ export async function fetchFiresForDate(
   const cached = cacheGet<FireTileResult>(cacheKey);
   if (cached) return cached;
 
+  // Stale-while-revalidate: when the tile fetch below fails (network or
+  // provider outage), fall back to the last good snapshot — labeled stale —
+  // instead of a hard failure. An operator console stays usable; the UI
+  // shows the staleness honestly.
+  const lastGood = cacheGetStale<FireTileResult>(cacheKey);
+
   const tiles = tilesForBbox(bbox);
   if (tiles.length > 12) throw new Error('fire area query too large: max 12 tiles (~27° × 27°) per date');
 
   const detections: FireDetection[] = [];
   let tilesWithData = 0;
   let tiles404 = 0;
+  let tilesNetworkFail = 0;
 
   for (const t of tiles) {
     const url =
@@ -119,7 +130,8 @@ export async function fetchFiresForDate(
         tiles404++;
         continue;
       }
-      throw err;
+      tilesNetworkFail++;
+      continue;
     }
     if (!outcome.ok) {
       tiles404++;
@@ -167,6 +179,17 @@ export async function fetchFiresForDate(
     }
   }
 
+  // Total network outage of the tile host: degrade to the last good snapshot
+  // (labeled stale) instead of an empty answer that could be misread as
+  // "no fires". A 404-day is NOT an outage — it stays an honest no-data day.
+  if (tilesNetworkFail === tiles.length && tiles.length > 0 && lastGood) {
+    return {
+      ...lastGood.value,
+      stale: true,
+      staleMs: lastGood.staleMs,
+    };
+  }
+
   const result: FireTileResult = {
     date,
     detections,
@@ -176,6 +199,30 @@ export async function fetchFiresForDate(
   };
   cacheSet(cacheKey, result, 12 * 60 * 60 * 1000);
   return result;
+}
+
+/**
+ * Failure path used by callers that must never hard-fail: serves the last
+ * good cached tile result for this date+bbox with `stale: true`, or an
+ * honest empty result when no snapshot exists. Never fabricates rows.
+ */
+export function staleFireTileResult(date: string, bboxKey: string): FireTileResult {
+  const cacheKey = `GIBS:fires:${stableHash(`${date}|${bboxKey}`)}`;
+  const stale = cacheGetStale<FireTileResult>(cacheKey);
+  if (stale) {
+    return {
+      ...stale.value,
+      stale: true,
+      staleMs: stale.staleMs,
+    };
+  }
+  return {
+    date,
+    detections: [],
+    tiles: 0,
+    tilesWithData: 0,
+    dataAvailable: false,
+  };
 }
 
 /** Upsert real detections into the persistent store (idempotent on SQLite). */
@@ -228,8 +275,10 @@ export async function persistFireDetections(
       return true;
     });
     if (deduped.length === 0) continue;
-    const res = await db.fireObservation.createMany({ data: deduped });
-    written += res.count;
+    // Race-safe insert: a concurrent ingest that wins the same natural key
+    // resolves row-by-row; duplicates count as success (data present).
+    const res = await createManyIdempotent(db.fireObservation, deduped, { chunkSize: 200 });
+    written += res;
   }
   return written;
 }

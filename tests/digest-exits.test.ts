@@ -3,8 +3,12 @@ import { createHmac } from 'node:crypto';
 import {
   parseWebhookConfig,
   buildWebhookHeaders,
+  verifyWebhookSignature,
+  signWebhookV1,
+  assertWebhookTargetSafe,
   shouldRetryWebhookAttempt,
   WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_SIGNATURE_TOLERANCE_SEC,
 } from '@/lib/fires/digest-exit-webhook';
 import {
   parseEmailConfig,
@@ -66,31 +70,145 @@ describe('webhook exit configuration', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Webhook exit — headers / signature
+// Webhook exit — headers / OWASP signature scheme (t=,v1=)
 // ---------------------------------------------------------------------------
 
-describe('webhook exit headers', () => {
-  test('headers carry JSON content type and the project user-agent', () => {
-    const h = buildWebhookHeaders({ secret: null, bodyText: '{"a":1}' });
+describe('webhook exit headers (OWASP signature scheme)', () => {
+  const T = 1_700_000_000;
+
+  test('headers carry JSON content type, the project user-agent and the topic', () => {
+    const h = buildWebhookHeaders({ secret: null, bodyText: '{"a":1}', timestampSec: T });
     expect(h['content-type']).toBe('application/json');
     expect(h['user-agent']).toContain('terrafield-atlas');
+    expect(h['x-terrafield-topic']).toBe('watchlist.digest');
     expect(h['x-terrafield-signature']).toBeUndefined();
   });
 
-  test('the signature is the HMAC-SHA256 of the EXACT body bytes, sha256= prefixed', () => {
+  test('signature is timestamp-bound: t=<sec>,v1=hex(HMAC(secret, "<t>.<body>"))', () => {
     const bodyText = JSON.stringify({ type: 'digest', watchlistName: 'Zambia Central — dry-season watch' });
-    const h = buildWebhookHeaders({ secret: 'topsecret', bodyText });
-    const expected = createHmac('sha256', 'topsecret').update(bodyText, 'utf8').digest('hex');
-    expect(h['x-terrafield-signature']).toBe(`sha256=${expected}`);
-    // A receiver recomputing the MAC over the same bytes gets the same value.
-    const recomputed = createHmac('sha256', 'topsecret').update(bodyText, 'utf8').digest('hex');
-    expect(h['x-terrafield-signature']).toBe(`sha256=${recomputed}`);
+    const h = buildWebhookHeaders({ secret: 'topsecret', bodyText, timestampSec: T });
+    expect(h['x-terrafield-signature']).toBe(`t=${T},v1=${signWebhookV1('topsecret', bodyText, T)}`);
+    const expected = createHmac('sha256', 'topsecret').update(`${T}.${bodyText}`, 'utf8').digest('hex');
+    expect(h['x-terrafield-signature']).toContain(expected);
+    // legacy compat header still carries the body-only MAC
+    expect(h['x-terrafield-signature-sha256']).toBe(`sha256=${createHmac('sha256', 'topsecret').update(bodyText, 'utf8').digest('hex')}`);
   });
 
-  test('one byte of difference changes the signature', () => {
-    const h1 = buildWebhookHeaders({ secret: 's', bodyText: '{"a":1}' });
-    const h2 = buildWebhookHeaders({ secret: 's', bodyText: '{"a":2}' });
+  test('one byte of difference in body or timestamp changes the signature', () => {
+    const h1 = buildWebhookHeaders({ secret: 's'.repeat(40), bodyText: '{"a":1}', timestampSec: T });
+    const h2 = buildWebhookHeaders({ secret: 's'.repeat(40), bodyText: '{"a":2}', timestampSec: T });
+    const h3 = buildWebhookHeaders({ secret: 's'.repeat(40), bodyText: '{"a":1}', timestampSec: T + 1 });
     expect(h1['x-terrafield-signature']).not.toBe(h2['x-terrafield-signature']);
+    expect(h1['x-terrafield-signature']).not.toBe(h3['x-terrafield-signature']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Webhook exit — receiver-side verification (verifyWebhookSignature)
+// ---------------------------------------------------------------------------
+
+describe('webhook signature verification', () => {
+  const T = 1_700_000_000;
+  const body = JSON.stringify({ type: 'digest', evaluations: 3 });
+  const secret = 'k'.repeat(32);
+  const header = buildWebhookHeaders({ secret, bodyText: body, timestampSec: T })['x-terrafield-signature'];
+
+  test('a correct signature within the replay window verifies', () => {
+    const res = verifyWebhookSignature({ rawBody: body, header, secrets: [secret], nowSec: T + 10 });
+    expect(res.valid).toBe(true);
+    expect(res.matchedSecretIndex).toBe(0);
+  });
+
+  test('a missing header never verifies', () => {
+    expect(verifyWebhookSignature({ rawBody: body, header: null, secrets: [secret], nowSec: T }).valid).toBe(false);
+  });
+
+  test('malformed headers never verify (old sha256= scheme included)', () => {
+    const legacy = `sha256=${createHmac('sha256', secret).update(body, 'utf8').digest('hex')}`;
+    expect(verifyWebhookSignature({ rawBody: body, header: legacy, secrets: [secret], nowSec: T }).reason).toBe('malformed');
+    expect(verifyWebhookSignature({ rawBody: body, header: 't=abc,v1=zz', secrets: [secret], nowSec: T }).reason).toBe('malformed');
+  });
+
+  test('replay outside the ±300 s window is refused even with a valid MAC', () => {
+    expect(WEBHOOK_SIGNATURE_TOLERANCE_SEC).toBe(300);
+    const late = verifyWebhookSignature({ rawBody: body, header, secrets: [secret], nowSec: T + 301 });
+    expect(late.valid).toBe(false);
+    expect(late.reason).toBe('replay-window');
+    // inside the window (exactly at the edge) it still verifies
+    expect(verifyWebhookSignature({ rawBody: body, header, secrets: [secret], nowSec: T + 300 }).valid).toBe(true);
+  });
+
+  test('a tampered body fails the MAC check', () => {
+    const res = verifyWebhookSignature({ rawBody: body + ' ', header, secrets: [secret], nowSec: T });
+    expect(res.valid).toBe(false);
+    expect(res.reason).toBe('signature-mismatch');
+  });
+
+  test('wrong secret fails; rotation accepts the previous secret in order', () => {
+    const newSecret = 'n'.repeat(32);
+    expect(verifyWebhookSignature({ rawBody: body, header, secrets: [newSecret], nowSec: T }).reason).toBe('signature-mismatch');
+    const rotated = verifyWebhookSignature({ rawBody: body, header, secrets: [newSecret, secret], nowSec: T });
+    expect(rotated.valid).toBe(true);
+    expect(rotated.matchedSecretIndex).toBe(1); // the previous secret matched
+  });
+
+  test('no secrets configured → explicit refusal, not a crash', () => {
+    expect(verifyWebhookSignature({ rawBody: body, header, secrets: [], nowSec: T }).reason).toBe('no-secrets-configured');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Webhook exit — SSRF guard on outbound targets
+// ---------------------------------------------------------------------------
+
+describe('webhook SSRF guard', () => {
+  test('public https targets pass', () => {
+    expect(assertWebhookTargetSafe('https://hooks.example.org/ingest').ok).toBe(true);
+    expect(assertWebhookTargetSafe('http://ops.acme.io:8080/relay?key=1').ok).toBe(true);
+  });
+
+  test('loopback, RFC1918, metadata and CGNAT targets are refused', () => {
+    for (const url of [
+      'http://localhost:3000/digest',
+      'http://127.0.0.1:4317/digest',
+      'http://10.1.2.3/digest',
+      'http://172.16.0.9/digest',
+      'http://172.31.255.255/digest',
+      'http://192.168.1.1/digest',
+      'http://169.254.169.254/latest/meta-data', // cloud metadata
+      'http://100.100.100.200/digest', // CGNAT (Alibaba DNS range)
+      'http://0.0.0.0/digest',
+      'http://[::1]/digest',
+      'http://svc.internal/digest',
+      'http://my-host.local/digest',
+      'file:///etc/passwd',
+    ]) {
+      expect(assertWebhookTargetSafe(url).ok).toBe(false);
+    }
+    // 172.32+ is public — must pass
+    expect(assertWebhookTargetSafe('http://172.32.0.1/digest').ok).toBe(true);
+    // 100.128+ is outside CGNAT — must pass
+    expect(assertWebhookTargetSafe('http://100.128.0.1/digest').ok).toBe(true);
+  });
+
+  test('configuration reports the guard verdict for the armed URL', () => {
+    const bad = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'http://169.254.169.254/x', DIGEST_WEBHOOK_SECRET: 'k'.repeat(32) });
+    expect(bad.enabled).toBe(true);
+    expect(bad.targetSafe).toBe(false);
+    expect(bad.targetUnsafeReason).toContain('metadata');
+    const good = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'https://hooks.example.org/x' });
+    expect(good.targetSafe).toBe(true);
+    expect(good.secretBytes).toBe(0);
+  });
+
+  test('secret strength facts are surfaced (≥32 bytes recommended)', () => {
+    const strong = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'https://hooks.example.org/x', DIGEST_WEBHOOK_SECRET: 'k'.repeat(32) });
+    expect(strong.secretAdequate).toBe(true);
+    const weak = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'https://hooks.example.org/x', DIGEST_WEBHOOK_SECRET: 'short' });
+    expect(weak.secretAdequate).toBe(false);
+    expect(weak.secretBytes).toBe(5);
+    const rotating = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'https://hooks.example.org/x', DIGEST_WEBHOOK_SECRET: 'k'.repeat(32), DIGEST_WEBHOOK_SECRET_PREVIOUS: 'old' });
+    expect(rotating.rotationSecretPresent).toBe(true);
   });
 });
 

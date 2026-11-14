@@ -68,6 +68,8 @@ export interface TickRunResult {
   error?: string;
   claimedNextAt: string;
   correlationId: string;
+  /** True when ANOTHER claimant won the conditional update — this tick skipped. */
+  lostRace?: boolean;
 }
 
 export interface TickResult {
@@ -86,8 +88,13 @@ export interface TickDeps {
   maxRuns: number;
   /** All watchlists with a cadence set (due or not). */
   listCandidates(): Promise<SchedulableWatch[]>;
-  /** Claim the next run: persist nextReevaluateAt BEFORE evaluating. */
-  claim(w: SchedulableWatch, nextAt: Date): Promise<void>;
+  /**
+   * Claim the next run: persist nextReevaluateAt BEFORE evaluating.
+   * ATOMIC: implementations must conditionally advance the row only when it
+   * is still due (null or <= now) and return whether THIS caller won. A
+   * loser (another tick/manual run claimed first) is skipped, never re-run.
+   */
+  claim(w: SchedulableWatch, nextAt: Date, now: Date): Promise<boolean>;
   /** Run the live evaluation; resolves with status/count or throws. */
   evaluate(w: SchedulableWatch, ctx: { correlationId: string; now: Date }): Promise<{ status: string; detectionCount: number }>;
   /** Persist the outcome for the operator (audit ledger). */
@@ -115,7 +122,21 @@ export async function runSchedulerTick(deps: TickDeps): Promise<TickResult> {
     const interval = w.reevaluateIntervalMin as ReevaluateIntervalMin;
     const claimedNextAt = nextRunAfter(deps.now.getTime(), interval);
     const correlationId = schedulerCorrelationId(w, deps.now);
-    await deps.claim(w, claimedNextAt);
+    // Conditional claim: exactly one caller can win. Losing means another
+    // claimant advanced the row first — skipping is the honest outcome (the
+    // evaluation is not lost; it runs on the winner's claim).
+    const won = await deps.claim(w, claimedNextAt, deps.now);
+    if (!won) {
+      runs.push({
+        watchlistId: w.id,
+        name: w.name,
+        ok: true,
+        claimedNextAt: claimedNextAt.toISOString(),
+        correlationId,
+        lostRace: true,
+      });
+      continue;
+    }
     try {
       const res = await deps.evaluate(w, { correlationId, now: deps.now });
       await deps.recordOutcome(w, { ok: true, status: res.status, detectionCount: res.detectionCount, claimedNextAt, correlationId });

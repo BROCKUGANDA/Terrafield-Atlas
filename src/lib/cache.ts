@@ -27,6 +27,27 @@ export function cacheGet<T>(key: string): T | undefined {
   return entry.value;
 }
 
+export interface StaleResult<T> {
+  value: T;
+  /** How far past the TTL the entry is (0 when still fresh). */
+  staleMs: number;
+}
+
+/**
+ * Stale-while-revalidate read: returns the cached value EVEN IF EXPIRED so a
+ * provider outage can degrade to "serving the last good snapshot, labeled
+ * stale" instead of a hard failure. Fresh entries report staleMs=0.
+ */
+export function cacheGetStale<T>(key: string): StaleResult<T> | undefined {
+  const entry = store.get(key) as Entry<T> | undefined;
+  if (!entry) return undefined;
+  const now = Date.now();
+  // keep expired entries addressable: refresh LRU but do NOT delete
+  store.delete(key);
+  store.set(key, entry);
+  return { value: entry.value, staleMs: Math.max(0, now - entry.expiresAt) };
+}
+
 export function cacheSet<T>(key: string, value: T, ttlMs: number): void {
   if (store.size >= MAX_ENTRIES) {
     const oldest = store.keys().next().value;

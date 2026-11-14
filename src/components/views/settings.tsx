@@ -278,13 +278,16 @@ export function SettingsView() {
                           k="Webhook exit"
                           v={
                             s.digestChannel.exits.webhook.state === 'configured'
-                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ' · HMAC signed' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
+                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ` · HMAC signed${s.digestChannel.exits.webhook.secretAdequate === false ? ' (secret <32 bytes — rotate)' : ' (v1, timestamped)'}` : ' · UNSIGNED'}${s.digestChannel.exits.webhook.targetSafe === false ? ' · SSRF GUARD REFUSED TARGET' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
                               : s.digestChannel.exits.webhook.state === 'disabled'
                                 ? 'disabled by DIGEST_WEBHOOK_OFF=1'
                                 : 'not configured (set DIGEST_WEBHOOK_URL to arm — zero outbound work while unset)'
                           }
                           mono
                         />
+                        {s.digestChannel.exits.webhook.state === 'configured' && s.digestChannel.exits.webhook.signingScheme && (
+                          <Row k="Signing" v={s.digestChannel.exits.webhook.signingScheme} mono />
+                        )}
                         <Row
                           k="Email exit"
                           v={
@@ -317,9 +320,14 @@ export function SettingsView() {
                     <div key={name} className="rounded-sm border border-edge bg-panel-2/40 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">{name}</span>
-                        <StatusPill status={p.status.split(' ')[0]} pulse={!p.status.startsWith('operational')} />
+                        <span className="inline-flex items-center gap-2">
+                          {p.latencyMs !== null && p.latencyMs !== undefined && p.status === 'live' && (
+                            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{p.latencyMs} ms probe</span>
+                          )}
+                          <StatusPill status={p.status} pulse={p.status === 'live'} />
+                        </span>
                       </div>
-                      <p className="mt-1.5 text-[11px] leading-relaxed text-faint">{p.status}{p.note ? ` — ${p.note}` : ''}</p>
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-faint">{p.status === 'live' || p.status === 'unreachable' ? `probe: ${p.status}` : p.status}{p.note ? ` — ${p.note}` : ''}</p>
                     </div>
                   ))}
                 </div>

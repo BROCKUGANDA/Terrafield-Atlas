@@ -55,7 +55,7 @@ The demo needs **no signup**:
 bun run dev            # dev server (auto-run in this sandbox)
 bun run lint           # ESLint
 bun run db:push        # apply the Prisma schema
-bun test tests/            # 138 unit tests (fixtures only — no network)
+bun test tests/            # 151 unit tests (fixtures only — no network)
 bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/ISRIC endpoints
 bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the scheduler; verifies the webhook digest exit end-to-end (HMAC signature, provenance + audit rows)
 ```
@@ -68,8 +68,27 @@ bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the schedule
 | `FIRMS_MAP_KEY` | no | enables the FIRMS CSV adapter (free NASA registration). Without it the adapter reports `credentials-not-configured` and fire features are served from the GIBS VIIRS stream (same detections). The key is server-side only and never exposed to the client. |
 | `WATCH_SCHEDULER_OFF` | no | `=1` disables the in-process watchlist re-evaluation scheduler (on-demand evaluation remains). |
 | `DIGEST_PUSH_OFF` | no | `=1` disables the SSE digest push channel (digests remain available on demand from `GET …/digest`). |
-| `DIGEST_WEBHOOK_URL` | no | arms the **webhook digest exit**: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to this http(s) URL as the identical digest payload. `DIGEST_WEBHOOK_SECRET` adds an `X-TerraField-Signature: sha256=…` HMAC header; `DIGEST_WEBHOOK_OFF=1` disables. Transient-only retry (max 3 attempts), one provenance row per attempt, one audit row per outcome. |
+| `DIGEST_WEBHOOK_URL` | no | arms the **webhook digest exit**: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to this http(s) URL as the identical digest payload. `DIGEST_WEBHOOK_SECRET` signs every POST per OWASP webhook guidance: `X-Terrafield-Signature: t=<unix-sec>,v1=hex(HMAC-SHA256(secret, "<t>.<exact body>"))` — timestamp-bound with a ±300 s replay window, constant-time verification (`verifyWebhookSignature`, exported for receivers), zero-downtime rotation via `DIGEST_WEBHOOK_SECRET_PREVIOUS`, and an SSRF guard that refuses loopback/RFC1918/link-local/metadata targets before any request. `DIGEST_WEBHOOK_OFF=1` disables. Transient-only retry (max 3 attempts), one provenance row per attempt, one audit row per outcome. |
 | `DIGEST_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TO` | no | arms the **email digest exit** (nodemailer/SMTP): completed scheduled re-evaluations and failed scheduled runs are emailed to the `_TO` list; manual and backtest evaluations are console-feedback-only by design. Without the credentials the exit reports `credentials-not-configured` and attempts zero sends — the same honest state as FIRMS without a MAP_KEY. `DIGEST_EMAIL_OFF=1` disables. |
+
+## Live source signs & critical infrastructure (hardening round 2)
+
+- **Live source signs** — every provider chip in the console is backed by a real reachability probe (`GET /api/v1/system/sources`, 60 s cache): the FIRMS host (`FIRMS_API`), the FIRMS detection stream via GIBS (`FIRMS_STREAM`, one real VIIRS 375 m tile — a 404 gap-day still proves the host answers), EONET, GIBS, POWER, SoilGrids. One transient failure within 5 min of a success reads as `DEGRADED`, not `UNREACHABLE`; probes never open circuits or spam the provenance ledger. `FIRMS_API` unreachable simply reflects network egress — the detection stream keeps flowing via GIBS, and the FIRMS adapter chain (MAP_KEY area API → keyless continental CSV archives) engages wherever full egress exists.
+- **Probes surface:** `/api/v1/system/sources` (per-sign state + latency + NASA EONET open wildfire events), mirrored into `/api/v1/system/status` (`providers` + `sourceSigns`) and the DataSource table.
+- **Liveness / readiness:** `GET /api/v1/healthz` (process-only), `GET /api/v1/readyz` (DB + seed baseline + scheduler heartbeat + channel) — 503 with named failing checks, never a bare false.
+- **Watchdog & safety nets:** `src/instrumentation.ts` registers a 5-min watchdog that restarts a hung scheduler timer (`ensureSchedulerAlive`), logs `unhandledRejection`/`uncaughtException` (serve continues; readiness reports honestly), and closes Prisma on SIGTERM/SIGINT.
+- **Always-live degradation:** GIBS tile fetches serve the last good snapshot labeled `stale` on a total host outage; EONET serves stale snapshots with a labeled note; a hard error only ever means "no snapshot ever existed", never fabricated data.
+- **Race safety:** scheduler claims are conditional atomic updates (`updateMany` guarded on `nextReevaluateAt` — losers skip, never double-run); bulk inserts (POWER observations, fire detections) are P2002-safe (`lib/db-write.ts`): concurrent duplicate natural keys resolve row-by-row instead of failing the job.
+- **Security headers:** X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, COOP, HSTS (next.config.ts). CSP is a documented non-goal at the Next layer (inline flight scripts need a nonce strategy; a broken CSP would break serving).
+- **Transport hardening (client):** 20 s request budget, gateway HTML-502 detection (`GATEWAY_HTML` — raw HTML never leaks into a reason line), one automatic retry for idempotent GETs only (mutations never auto-retry).
+- **Error/loading UX:** themed SSR `loading.tsx` / `error.tsx` / `global-error.tsx` / `not-found.tsx`, per-module error boundaries with fault digests + copyable diagnostics, unified QueryState skeletons/fault/empty panels.
+
+## Hackathon submission package
+
+- `download/hackathon/terrafield-atlas-demo.mp4` — 2:44 end-to-end demo with voice narration (agent-browser captures → Pillow compositing → z-ai TTS → ffmpeg).
+- `download/hackathon/narration-script.md` — the 10-scene narration script.
+- `download/hackathon/SUBMISSION.md` — the submission write-up (pitch, feature map, architecture, judging mapping).
+- `scripts/demo-video/` — the reproducible pipeline (frames, compositor, TTS generator, ffmpeg assembly).
 
 ## Documentation
 

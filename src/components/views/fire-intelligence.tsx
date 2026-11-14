@@ -15,6 +15,7 @@ import { useToast } from '@/hooks/use-toast';
 import { FireCalendarChart } from '@/components/charts/scientific-charts';
 import { SectionHeader, StatusPill, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel, EmptyState } from '@/components/system/query-state';
+import { SourceSignsStrip, EonetEventsPanel, useSourceSigns } from '@/components/system/source-signs';
 import { StatSkeletonRow, SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
 import { FireWatchlistsSection } from '@/components/views/fire-watchlists';
 import { Flame, Loader2, Download, ShieldAlert, MapPin, FileDown } from 'lucide-react';
@@ -139,6 +140,11 @@ export function FireIntelligenceView() {
   };
 
   const rangeInvalid = range.to < range.from;
+  // LIVE reachability signs — the FIRMS story is told from real probes,
+  // not a hardcoded claim about this deployment's network.
+  const sourceSigns = useSourceSigns();
+  const firmsStreamSign = sourceSigns.data?.signs.find((s) => s.key === 'FIRMS_STREAM');
+  const firmsApiSign = sourceSigns.data?.signs.find((s) => s.key === 'FIRMS_API');
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -221,11 +227,34 @@ export function FireIntelligenceView() {
               range end precedes range start — ingest disabled
             </p>
           )}
-          <p className="max-w-3xl text-[11px] leading-relaxed text-faint">
-            Detections are decoded server-side from NASA GIBS <span className="font-mono text-dim">VIIRS_SNPP_Thermal_Anomalies_375m_All</span> vector
-            tiles — the same VIIRS detection stream NASA FIRMS distributes. The FIRMS CSV API itself is unreachable
-            from this deployment sandbox and is health-flagged, never faked.
-          </p>
+          {/* LIVE source signs — probe-backed chips (FIRMS host vs FIRMS detection stream) */}
+          <div className="flex flex-col gap-2">
+            <SourceSignsStrip
+              signs={sourceSigns.data?.signs}
+              probeMs={sourceSigns.data?.probeMs}
+              checkedAt={sourceSigns.data?.checkedAt}
+            />
+            <p className="max-w-3xl text-[11px] leading-relaxed text-faint">
+              Detections are decoded server-side from NASA GIBS{' '}
+              <span className="font-mono text-dim">VIIRS_SNPP_Thermal_Anomalies_375m_All</span> vector tiles — the same
+              VIIRS detection stream NASA FIRMS distributes.{' '}
+              {firmsStreamSign?.state === 'live' ? (
+                <>
+                  The FIRMS detection stream is <span className="text-signal">LIVE right now</span>
+                  {firmsStreamSign.latencyMs !== null ? ` (probe ${firmsStreamSign.latencyMs} ms)` : ''}; the FIRMS CSV API host is{' '}
+                  <span className={firmsApiSign?.state === 'live' ? 'text-signal' : 'text-crit'}>
+                    {firmsApiSign?.state === 'live' ? 'also reachable' : 'unreachable from this network and health-flagged'}
+                  </span>{' '}
+                  — both facts are probed, never asserted.
+                </>
+              ) : (
+                <>
+                  Live probe status for the detection stream: <span className="text-crit">not confirmed yet</span> — the chips above
+                  re-probe every 60 s and the ingest below re-requests the live source. Nothing is faked while the stream is down.
+                </>
+              )}
+            </p>
+          </div>
           {ingest.isPending && (
             <div className="flex flex-col gap-2" role="status" aria-live="polite">
               <SweepLoader label="Decoding VIIRS tiles" />
@@ -237,6 +266,7 @@ export function FireIntelligenceView() {
           {ingest.isError && (
             <FaultPanel error={ingest.error} onRetry={() => ingest.mutate()} label="VIIRS ingestion" />
           )}
+          <EonetEventsPanel className="hud-calm" />
         </HudPanel>
       </Reveal>
 

@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { MissionPatch } from '@/components/ui-mc/logo';
 import { DegradedBanner } from '@/components/system/degraded-banner';
 import { ErrorBoundary } from '@/components/system/error-boundary';
+import { SourceSignsSummaryChip } from '@/components/system/source-signs';
 import { CommandPalette, CommandPaletteTrigger, ShortcutsHelp } from '@/components/system/command-palette';
 import { MissionLogButton } from '@/components/system/mission-log';
 import { GuidedTour } from '@/components/system/guided-tour';
@@ -196,7 +197,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
         <p className="font-mono text-[9px] leading-relaxed tracking-wide text-faint">
-          POWER · GIBS · SMAP · FIRMS<br />
+          POWER · GIBS · EONET · FIRMS<br />
           every number traceable to source + retrieval time
         </p>
       </div>
@@ -255,6 +256,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <MissionClock />
                 </span>
                 <LinkCheck dataUpdatedAt={health.dataUpdatedAt} isFetching={health.isFetching} />
+
+                <SourceSignsSummaryChip />
 
                 <FireWatchAlerts />
 

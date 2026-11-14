@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { fetchPowerDaily } from '@/lib/adapters/power';
+import { createManyIdempotent } from '@/lib/db-write';
 import type { VariableKey } from '@/lib/types';
 
 /**
@@ -114,13 +115,12 @@ export async function ingestPowerForLocation(
       const fresh = rows.filter(
         (r) => !existingKeys.has(`${r.variable}|${r.obsDate.toISOString().slice(0, 10)}`),
       );
-      // insert in chunks of 500
+      // insert in chunks of 500 — race-safe: a concurrent ingest inserting
+      // the same natural key resolves row-by-row instead of failing the job
       for (let i = 0; i < fresh.length; i += 500) {
         const slice = fresh.slice(i, i + 500);
-        const written = await db.environmentalObservation.createMany({
-          data: slice,
-        });
-        rowsWritten += written.count;
+        const written = await createManyIdempotent(db.environmentalObservation, slice);
+        rowsWritten += written;
       }
     } catch (err) {
       firstError = firstError ?? (err instanceof Error ? err.message : String(err));

@@ -1,0 +1,80 @@
+[
+ {
+  "id": "00-title",
+  "kind": "title",
+  "label": "TERRAFIELD ATLAS",
+  "narration": "TerraField Atlas \u2014 NASA Earth intelligence for agricultural resilience, built for the NASA Space Apps Challenge. This is the end-to-end tour.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/00-00-title.wav"
+ },
+ {
+  "id": "01-landing",
+  "kind": "shot",
+  "frame": "s01-landing.png",
+  "label": "MISSION OVERVIEW \u00b7 GUIDED TOUR",
+  "narration": "The mission overview briefs the operator, and a guided seventeen-step tour walks new users through every module \u2014 automatically on first run.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/01-01-landing.wav"
+ },
+ {
+  "id": "02-dashboard",
+  "kind": "shot",
+  "frame": "s02-dashboard.png",
+  "label": "EARTH INTELLIGENCE \u00b7 HONEST TRENDS",
+  "narration": "Earth Intelligence ingests the real NASA POWER record and tests it with seasonal Mann-Kendall statistics and multiple-testing control. Missing days are reported as missing \u2014 never imputed.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/02-02-dashboard.wav"
+ },
+ {
+  "id": "03-fire-signs",
+  "kind": "shot",
+  "frame": "s03b-fire-top.png",
+  "label": "FIRE INTELLIGENCE \u00b7 LIVE SOURCE SIGNS",
+  "narration": "Fire Intelligence decodes the VIIRS thermal anomaly stream \u2014 the same detections NASA FIRMS distributes. Live probes show which upstreams answer right now: the detection stream is live; the FIRMS API host is blocked here \u2014 flagged, never faked. NASA EONET adds live wildfire events.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/03-03-fire-signs.wav"
+ },
+ {
+  "id": "04-fire-calendar",
+  "kind": "shot",
+  "frame": "s04-fire-calendar.png",
+  "label": "FIRE CALENDAR \u00b7 DETECTION LEDGER",
+  "narration": "Detections land in a queryable ledger with a fire calendar, confidence classes, and radiative power. Archive gaps are reported as no-data \u2014 never zero-filled.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/04-04-fire-calendar.wav"
+ },
+ {
+  "id": "05-watchlists",
+  "kind": "shot",
+  "frame": "s06-push-live.png",
+  "label": "FIRE WATCHLISTS \u00b7 SCHEDULED RUN",
+  "narration": "Regional watchlists define a geography and a threshold rule. This Zambia list runs on a six-hour cadence: the scheduler claimed it atomically, evaluated the real GIBS stream, and recorded a scheduled run \u2014 while backtest mode replays the same rule on any historical date.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/05-05-watchlists.wav"
+ },
+ {
+  "id": "06-digest-push",
+  "kind": "shot",
+  "frame": "s07-digest.png",
+  "label": "PUSH DIGEST \u00b7 SSE CHANNEL",
+  "narration": "Every run pushes a cadence-aware digest over Server-Sent Events \u2014 the push chip counts it live. The digest window derives from the cadence itself, and the same payload exits through a signed webhook.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/06-06-digest-push.wav"
+ },
+ {
+  "id": "07-system-health",
+  "kind": "shot",
+  "frame": "s08b-settings-providers.png",
+  "label": "SYSTEM HEALTH \u00b7 CRITICAL INFRASTRUCTURE",
+  "narration": "System Health is the operational truth: liveness and readiness probes, a scheduler watchdog, circuit breakers, and per-provider latency \u2014 one hundred twenty requests logged, success and failure, nothing hidden.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/07-07-system-health.wav"
+ },
+ {
+  "id": "08-provenance",
+  "kind": "shot",
+  "frame": "s10-provenance.png",
+  "label": "EVIDENCE & PROVENANCE",
+  "narration": "Every number is traceable: the evidence ledger records each request \u2014 status, latency, and correlation I D \u2014 so any claim audits back to its exact retrieval.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/08-08-provenance.wav"
+ },
+ {
+  "id": "09-closing",
+  "kind": "closing",
+  "label": "REAL DATA \u00b7 HONEST GAPS \u00b7 PUSH-DELIVERED INTELLIGENCE",
+  "narration": "Webhooks are signed with timestamped H MAC signatures under O W A S P guidance \u2014 replay protection and SSRF guards included. TerraField Atlas: real data, honest gaps, push-delivered intelligence.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio/09-09-closing.wav"
+ }
+]

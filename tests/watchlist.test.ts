@@ -367,6 +367,7 @@ describe('scheduling core', () => {
       listCandidates: async () => rows,
       claim: async (w, nextAt) => {
         claims.push({ id: w.id, nextAt: nextAt.toISOString() });
+        return true;
       },
       evaluate: async (w) => {
         evaluated.push(w.id);
@@ -399,7 +400,7 @@ describe('scheduling core', () => {
       now: NOW,
       maxRuns: 5,
       listCandidates: async () => rows,
-      claim: async () => {},
+      claim: async () => true,
       evaluate: async () => {
         evaluations += 1;
         throw new Error('GIBS unreachable');
@@ -430,7 +431,7 @@ describe('scheduling core', () => {
       now: NOW,
       maxRuns: 2,
       listCandidates: async () => rows,
-      claim: async () => {},
+      claim: async () => true,
       evaluate: async (w) => {
         evaluated.push(w.id);
         return { status: 'watch', detectionCount: 2 };
@@ -442,5 +443,49 @@ describe('scheduling core', () => {
     expect(res.skippedRunning).toBe(true);
     expect(evaluated).toEqual(['queued0001', 'queued0002']); // budget of 2 respected
     expect(res.ran).toBe(2);
+  });
+
+  test('runSchedulerTick skips a lost claim race (atomic claim contract)', async () => {
+    const rows = [watch({ id: 'racelose1', name: 'Contended', reevaluateIntervalMin: 360, nextReevaluateAt: '2026-11-14T06:00:00Z' })];
+    let evaluations = 0;
+    const deps: TickDeps = {
+      now: NOW,
+      maxRuns: 5,
+      listCandidates: async () => rows,
+      // another claimant won the conditional update between select and claim
+      claim: async () => false,
+      evaluate: async () => {
+        evaluations += 1;
+        return { status: 'clear', detectionCount: 0 };
+      },
+      recordOutcome: async () => {
+        throw new Error('a lost race must not record an outcome');
+      },
+      isInFlight: () => false,
+    };
+    const res = await runSchedulerTick(deps);
+    expect(res.ran).toBe(1);
+    expect(evaluations).toBe(0); // the winner runs it — this caller skipped
+    expect(res.runs[0].lostRace).toBe(true);
+    expect(res.runs[0].ok).toBe(true);
+  });
+
+  test('claim receives the tick now so the guard window matches due time', async () => {
+    const rows = [watch({ id: 'nowcheck1', name: 'Timing', reevaluateIntervalMin: 360, nextReevaluateAt: '2026-11-14T06:00:00Z' })];
+    const seen: string[] = [];
+    const deps: TickDeps = {
+      now: NOW,
+      maxRuns: 1,
+      listCandidates: async () => rows,
+      claim: async (_w, _nextAt, now) => {
+        seen.push(now.toISOString());
+        return true;
+      },
+      evaluate: async () => ({ status: 'clear', detectionCount: 0 }),
+      recordOutcome: async () => {},
+      isInFlight: () => false,
+    };
+    await runSchedulerTick(deps);
+    expect(seen).toEqual([NOW.toISOString()]);
   });
 });

@@ -14,7 +14,7 @@ import { stableHash } from '@/lib/cache';
  *   is short-circuited for a cooldown window instead of hammering it.
  */
 
-export type Provider = 'NASA_POWER' | 'GIBS' | 'SOILGRIDS' | 'FIRMS';
+export type Provider = 'NASA_POWER' | 'GIBS' | 'SOILGRIDS' | 'FIRMS' | 'EONET';
 
 export class ProviderUnavailableError extends Error {
   constructor(provider: Provider, detail: string) {
@@ -34,7 +34,7 @@ const COOLDOWN_MS = 60_000;
 
 export function circuitStatus() {
   const now = Date.now();
-  return (['NASA_POWER', 'GIBS', 'SOILGRIDS', 'FIRMS'] as Provider[]).map((p) => {
+  return (['NASA_POWER', 'GIBS', 'SOILGRIDS', 'FIRMS', 'EONET'] as Provider[]).map((p) => {
     const c = circuits.get(p);
     return {
       provider: p,

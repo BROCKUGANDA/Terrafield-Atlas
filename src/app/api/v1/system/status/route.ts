@@ -7,6 +7,7 @@ import { CROP_CATALOGUE_VERSION, CROP_CATALOGUE } from '@/lib/crops/catalogue';
 import { RULE_VERSION } from '@/lib/crops/rotation-engine';
 import { schedulerStatus, startScheduler } from '@/lib/scheduler';
 import { digestChannelStatus } from '@/lib/fires/digest-channel';
+import { sourceSigns } from '@/lib/source-health';
 
 /**
  * GET  /api/v1/system/status — settings & diagnostics
@@ -31,6 +32,9 @@ export async function GET() {
   const farmCount = await db.farm.count();
   const watchlistCount = await db.fireWatchlist.count();
   const watchEventCount = await db.fireWatchEvent.count();
+  // LIVE provider signs: real reachability probes (60 s cache) instead of
+  // static strings — the chips in the console read from this.
+  const signs = await sourceSigns();
 
   return jsonResponse({
     service: 'terrafield-atlas',
@@ -55,18 +59,44 @@ export async function GET() {
     scheduler,
     digestChannel: digestChannelStatus(),
     providers: {
-      NASA_POWER: { status: 'operational (public, no auth)' },
-      GIBS: { status: 'operational (public, no auth)' },
-      SOILGRIDS: { status: 'operational with intermittent slowness' },
-      FIRMS: {
-        status: firmsConfigured() ? 'MAP_KEY configured; host unreachable from this sandbox' : 'MAP_KEY not configured; host unreachable from this sandbox',
-        note: 'Fire features are served from the GIBS VIIRS 375 m stream instead; nothing is fabricated.',
+      NASA_POWER: {
+        status: signs.signs.find((s) => s.key === 'NASA_POWER')?.state === 'live' ? 'live' : 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'NASA_POWER')?.latencyMs ?? null,
+        note: 'Public API, no auth. State = live reachability probe (60 s cache), not a claim of infinite uptime.',
+      },
+      GIBS: {
+        status: signs.signs.find((s) => s.key === 'GIBS')?.state === 'live' ? 'live' : 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'GIBS')?.latencyMs ?? null,
+        note: 'WMTS raster + vector tiles, no auth. Serves the VIIRS 375 m thermal-anomaly stream (fire detections).',
+      },
+      SOILGRIDS: {
+        status: signs.signs.find((s) => s.key === 'SOILGRIDS')?.state === 'live' ? 'live' : 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'SOILGRIDS')?.latencyMs ?? null,
+        note: 'ISRIC REST API, no auth; intermittently slow under load — circuit breaker applies.',
+      },
+      FIRMS_API: {
+        status: signs.signs.find((s) => s.key === 'FIRMS_API')?.state ?? 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'FIRMS_API')?.latencyMs ?? null,
+        note: firmsConfigured()
+          ? 'MAP_KEY configured. Host probed directly; wherever egress policy blocks it, the detection stream keeps flowing via GIBS (see FIRMS_STREAM).'
+          : 'No MAP_KEY configured (set FIRMS_MAP_KEY to arm the direct CSV API). Host probed directly; the FIRMS detection stream keeps flowing via GIBS either way.',
+      },
+      FIRMS_STREAM: {
+        status: signs.signs.find((s) => s.key === 'FIRMS_STREAM')?.state ?? 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'FIRMS_STREAM')?.latencyMs ?? null,
+        note: 'The VIIRS 375 m NRT detection stream FIRMS distributes, read through NASA GIBS vector tiles — the path fire features actually serve from. Probe requests one real tile; HTTP 404 on a gap day still proves the stream host answers.',
+      },
+      EONET: {
+        status: signs.signs.find((s) => s.key === 'EONET')?.state ?? 'unreachable',
+        latencyMs: signs.signs.find((s) => s.key === 'EONET')?.latencyMs ?? null,
+        note: 'NASA Earth Observatory Natural Event Tracker v3 — live open wildfire events (event-level context, not per-pixel detections).',
       },
       EARTHDATA_APPEARS: {
         status: 'not configured',
         note: 'MOD13Q1/SMAP science files (QA flags, quantitative values) require Earthdata credentials; adapters for those sources return explicit not-configured states.',
       },
     },
+    sourceSigns: { checkedAt: signs.checkedAt, probeMs: signs.probeMs, summary: signs.summary },
     reliability: {
       retryPolicy: 'exponential backoff with full jitter, max 3 attempts, transient-only (429/5xx/network)',
       circuitBreaker: 'per-provider, opens after 4 consecutive failures for 60 s',

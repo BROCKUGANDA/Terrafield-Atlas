@@ -77,8 +77,23 @@ async function listCandidates(): Promise<SchedulableWatch[]> {
   return rows;
 }
 
-async function claim(w: SchedulableWatch, nextAt: Date): Promise<void> {
-  await db.fireWatchlist.update({ where: { id: w.id }, data: { nextReevaluateAt: nextAt } });
+/**
+ * ATOMIC claim (race-safe). The blind `update` this used to be could double-
+ * run a watchlist when two claimants raced between read and write (e.g. dev
+ * HMR double-register or a manual evaluate landing mid-tick). Now the claim
+ * is a single conditional UPDATE: it only advances nextReevaluateAt when the
+ * row is STILL due (null or <= now), and reports whether THIS caller won.
+ * A loser simply skips — the winner runs the evaluation.
+ */
+async function claim(w: SchedulableWatch, nextAt: Date, now: Date): Promise<boolean> {
+  const res = await db.fireWatchlist.updateMany({
+    where: {
+      id: w.id,
+      OR: [{ nextReevaluateAt: null }, { nextReevaluateAt: { lte: now } }],
+    },
+    data: { nextReevaluateAt: nextAt },
+  });
+  return res.count === 1;
 }
 
 async function evaluate(w: SchedulableWatch, ctx: { correlationId: string; now: Date }): Promise<{ status: string; detectionCount: number }> {
@@ -173,6 +188,37 @@ export function schedulerEnabled(): boolean {
 /** Tick period in seconds (fixed by this module). */
 export function schedulerStatusTickSec(): number {
   return TICK_MS / 1_000;
+}
+
+/** Readiness heartbeat: is the tick timer alive and current? Pure runtime read. */
+export function schedulerHeartbeat(): { enabled: boolean; tickEverySec: number; staleSec: number | null } {
+  const rt = runtime();
+  return {
+    enabled: rt.enabled,
+    tickEverySec: TICK_MS / 1_000,
+    staleSec: rt.lastTickAt ? (Date.now() - rt.lastTickAt.getTime()) / 1000 : null,
+  };
+}
+
+/**
+ * Watchdog restart (called from instrumentation's process watchdog): if the
+ * timer is enabled but the last tick is stale beyond 3 periods (a hung or
+ * cleared interval — dev HMR can do this), restart it. Idempotent and cheap.
+ */
+export function ensureSchedulerAlive(): boolean {
+  const rt = runtime();
+  if (!rt.enabled) return false;
+  if (rt.running) return true; // mid-tick: alive by definition
+  const staleMs = rt.lastTickAt ? Date.now() - rt.lastTickAt.getTime() : Infinity;
+  if (staleMs > TICK_MS * 3) {
+    console.warn(`[scheduler] watchdog: last tick ${Math.round(staleMs / 1000)}s ago — restarting timer`);
+    if (rt.timer) clearInterval(rt.timer);
+    rt.timer = setInterval(() => void tickOnce(), TICK_MS);
+    rt.timer.unref?.();
+    void tickOnce();
+    return true;
+  }
+  return true;
 }
 
 /** Start the interval timer (idempotent; no-op when WATCH_SCHEDULER_OFF=1). */
