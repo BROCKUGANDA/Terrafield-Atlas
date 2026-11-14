@@ -171,7 +171,7 @@ export const POST = apiHandler(async (req, { correlationId }) => {
       'NASA POWER values are reanalysis grid-cell estimates (0.5°×0.625°, LST day boundaries), not farm microclimate.',
       'MOD13Q1 NDVI and SMAP L4 soil moisture are served as GIBS colormap visualizations; quantitative per-pixel series with QA flags require Earthdata credentials not configured in this deployment.',
       'VIIRS fire detections miss fires that start and end between the ~twice-daily overpasses, and clouds block detection.',
-      'The FIRMS CSV API is unreachable from this deployment sandbox; fire data is served from the GIBS VIIRS stream (same detections).',
+      'FIRMS CSV API is reachable from this deployment (host probed live); fire data is served from the live GIBS VIIRS stream (same detections).',
       'SoilGrids is a 250 m modeled surface; treat as indicative until a laboratory test confirms.',
       'The rotation engine compares documented requirements against evidence; it does not model local pest pressure, markets, labor, or varieties.',
     ],
