@@ -30,6 +30,29 @@ export interface Operator {
   authenticatedAt: string;
 }
 
+/** Rotation-planner working drafts — kept in the session store so switching
+ *  console modules never destroys a farmer's in-progress scenario work. */
+export interface RotationDraft {
+  name: string;
+  cropKeys: string[];
+}
+
+export const DEFAULT_ROTATION_DRAFTS: RotationDraft[] = [
+  { name: 'A: Current practice', cropKeys: ['maize', 'maize', 'maize', 'maize'] },
+  { name: 'B: Legume-integrated', cropKeys: ['maize', 'cowpea', 'maize', 'common_bean'] },
+  { name: 'C: Drought-hardy mix', cropKeys: ['sorghum', 'pearl_millet', 'cowpea', 'sunflower'] },
+];
+
+export const DEFAULT_ROTATION_PRIORITIES = {
+  soilHealth: 0.25,
+  waterEfficiency: 0.25,
+  seasonalAdaptability: 0.15,
+  nutrientManagement: 0.15,
+  cropDiversity: 0.1,
+  economics: 0,
+  foodSecurity: 0.1,
+};
+
 interface SessionState {
   view: ViewKey;
   setView: (v: ViewKey) => void;
@@ -43,6 +66,10 @@ interface SessionState {
   setFireDetectionsGeoJson: (fc: GeoJSON.FeatureCollection | null) => void;
   farmBoundary: number[][] | null; // exterior ring being drawn
   setFarmBoundary: (ring: number[][] | null) => void;
+  rotationDrafts: RotationDraft[];
+  setRotationDrafts: (drafts: RotationDraft[]) => void;
+  rotationPriorities: typeof DEFAULT_ROTATION_PRIORITIES;
+  setRotationPriorities: (p: typeof DEFAULT_ROTATION_PRIORITIES) => void;
   operator: Operator | null;
   login: (callsign: string) => void;
   logout: () => void;
@@ -65,6 +92,10 @@ export const useSession = create<SessionState>()(
       setFireDetectionsGeoJson: (fireDetectionsGeoJson) => set({ fireDetectionsGeoJson }),
       farmBoundary: null,
       setFarmBoundary: (farmBoundary) => set({ farmBoundary }),
+      rotationDrafts: DEFAULT_ROTATION_DRAFTS,
+      setRotationDrafts: (rotationDrafts) => set({ rotationDrafts }),
+      rotationPriorities: DEFAULT_ROTATION_PRIORITIES,
+      setRotationPriorities: (rotationPriorities) => set({ rotationPriorities }),
       operator: null,
       login: (callsign) =>
         set({
@@ -79,7 +110,13 @@ export const useSession = create<SessionState>()(
     }),
     {
       name: 'terrafield-console-session',
-      partialize: (s) => ({ operator: s.operator, location: s.location }),
+      partialize: (s) => ({
+        operator: s.operator,
+        location: s.location,
+        activeFarmId: s.activeFarmId,
+        rotationDrafts: s.rotationDrafts,
+        rotationPriorities: s.rotationPriorities,
+      }),
     },
   ),
 );

@@ -54,23 +54,21 @@ function ScoreBar({ pct, tone = 'score', delay = 0 }: { pct: number; tone?: 'sco
   );
 }
 
-interface ScenarioDraft {
-  name: string;
-  cropKeys: string[];
-}
-
 /** Crop Rotation Planner: build scenarios, set priorities, compare alternatives. */
 export function RotationPlannerView() {
-  const { activeFarmId, setView } = useSession();
+  // Drafts live in the session store: switching console modules (or reloading)
+  // never destroys a farmer's in-progress scenario work.
+  const {
+    activeFarmId,
+    setView,
+    rotationDrafts: scenarios,
+    setRotationDrafts: setScenarios,
+    rotationPriorities: priorities,
+    setRotationPriorities: setPriorities,
+  } = useSession();
   const { toast } = useToast();
   const crops = useQuery({ queryKey: ['crops'], queryFn: api.crops });
 
-  const [scenarios, setScenarios] = useState<ScenarioDraft[]>([
-    { name: 'A: Current practice', cropKeys: ['maize', 'maize', 'maize', 'maize'] },
-    { name: 'B: Legume-integrated', cropKeys: ['maize', 'cowpea', 'maize', 'common_bean'] },
-    { name: 'C: Drought-hardy mix', cropKeys: ['sorghum', 'pearl_millet', 'cowpea', 'sunflower'] },
-  ]);
-  const [priorities, setPriorities] = useState({ soilHealth: 0.25, waterEfficiency: 0.25, seasonalAdaptability: 0.15, nutrientManagement: 0.15, cropDiversity: 0.1, economics: 0, foodSecurity: 0.1 });
   const [selectedCrop, setSelectedCrop] = useState('maize');
   const [activeScenario, setActiveScenario] = useState(0);
 

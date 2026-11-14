@@ -79,6 +79,39 @@ export const POST = apiHandler(async (req, { correlationId }) => {
 
   const ranked = [...results].sort((a, b) => b.overallScore - a.overallScore);
 
+  // Persist every compared alternative so field reports carry the comparison
+  // evidence chain. Idempotent per (farm, scenario name): a re-compare of the
+  // same named options replaces its stored rows, so reports always reflect the
+  // latest deterministic evaluation under the weights actually used.
+  const persistedScenarioIds: string[] = [];
+  for (const s of body.scenarios) {
+    const result = results.find((r) => r.scenarioName === s.name);
+    if (!result) continue;
+    await db.rotationScenario.deleteMany({ where: { farmId: body.farmId, name: s.name } });
+    const stored = await db.rotationScenario.create({
+      data: {
+        farmId: body.farmId,
+        name: s.name,
+        cropKeys: JSON.stringify(s.cropKeys),
+        ruleVersion: result.ruleVersion,
+        weights: JSON.stringify(priorities),
+        scoresJson: JSON.stringify(result),
+        overallScore: result.overallScore,
+        confidence: result.confidence,
+        incompatibleJson: JSON.stringify(result.incompatible),
+      },
+    });
+    persistedScenarioIds.push(stored.id);
+  }
+  await db.auditEvent.create({
+    data: {
+      actor: 'demo-user',
+      action: 'scenario.compare',
+      targetId: body.farmId,
+      detail: `${results.length} alternatives compared (${persistedScenarioIds.length} persisted): ${body.scenarios.map((x) => x.name).join(' | ')}`,
+    },
+  });
+
   const job = await db.processingJob.create({
     data: {
       type: 'rotation',
