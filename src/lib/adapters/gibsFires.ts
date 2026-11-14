@@ -234,4 +234,6 @@ export async function persistFireDetections(
   return written;
 }
 
-export const FIRE_ARCHIVE_START = '2015-01-01';
+// Canonical archive-start constant lives in the pure watchlist engine; kept as
+// a re-export here so every existing import path keeps working.
+export { FIRE_ARCHIVE_START } from '@/lib/fires/watchlist-engine';

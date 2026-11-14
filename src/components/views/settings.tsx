@@ -11,7 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
-import { Settings, Activity, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass } from 'lucide-react';
+import { Settings, Activity, Clock, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass } from 'lucide-react';
 import { useTourStore } from '@/components/state/tour-store';
 import { cn } from '@/lib/utils';
 
@@ -201,6 +201,45 @@ export function SettingsView() {
                 </div>
               </HudPanel>
             </motion.section>
+
+            {/* Scheduled re-evaluation (in-process background scheduler) */}
+            {s.scheduler && (
+              <motion.section variants={RISE} custom={2.5} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Watchlist re-evaluation scheduler">
+                <HudPanel>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Clock className="h-4 w-4 text-signal" aria-hidden />
+                    <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Watchlist re-evaluation scheduler</h3>
+                    <span className={cn(
+                      'telemetry rounded-sm border px-2 py-0.5 text-[10px] uppercase tracking-wide-mc',
+                      s.scheduler.enabled ? 'border-signal/40 text-signal' : 'border-caution/50 text-caution',
+                    )}>
+                      {s.scheduler.enabled ? 'running (in-process)' : s.scheduler.disabledByEnv ? 'disabled by WATCH_SCHEDULER_OFF' : 'not started'}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-1.5">
+                    <Row k="Topology" v="single Next.js runtime · 60 s tick · no broker or worker tier" />
+                    <Row k="Run budget" v={`max ${s.scheduler.maxRunsPerTick} evaluation(s) per tick`} mono />
+                    <Row k="Scheduled watchlists" v={`${s.scheduler.scheduledWatchlists} with a cadence set${s.scheduler.dueNow.length ? ` · ${s.scheduler.dueNow.length} due now (${s.scheduler.dueNow.map((w) => w.name).join(', ')})` : ''}`} />
+                    <Row k="Next due" v={s.scheduler.nextDueAt ? new Date(s.scheduler.nextDueAt).toISOString().slice(0, 16).replace('T', ' ') + 'Z' : '—'} mono />
+                    <Row
+                      k="Last tick"
+                      v={s.scheduler.lastTick
+                        ? `${new Date(s.scheduler.lastTick.tickAt).toISOString().slice(0, 16).replace('T', ' ')}Z · ran ${s.scheduler.lastTick.ran}/${s.scheduler.lastTick.dueCount} due`
+                        : s.scheduler.lastTickAt ? `${new Date(s.scheduler.lastTickAt).toISOString().slice(0, 16).replace('T', ' ')}Z · nothing due` : '—'}
+                      mono
+                    />
+                    {s.scheduler.lastTick && s.scheduler.lastTick.runs.length > 0 && (
+                      <Row
+                        k="Last runs"
+                        v={s.scheduler.lastTick.runs.map((r) => `${r.name}: ${r.ok ? (r.status ?? 'ok') + (r.detectionCount !== undefined ? ` (${r.detectionCount})` : '') : 'FAILED — ' + (r.error ?? 'unknown')}`).join(' · ')}
+                      />
+                    )}
+                    <Row k="Health" v={`${s.scheduler.ticksFired} tick(s) fired · ${s.scheduler.ticksSkippedBusy} skipped busy · ${s.scheduler.consecutiveFailedRuns} consecutive failed run(s)`} mono />
+                  </div>
+                  <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.scheduler.note}</p>
+                </HudPanel>
+              </motion.section>
+            )}
 
             {/* Provider availability */}
             <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Provider availability">

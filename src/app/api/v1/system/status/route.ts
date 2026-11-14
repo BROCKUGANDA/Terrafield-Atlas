@@ -5,12 +5,17 @@ import { circuitStatus } from '@/lib/http';
 import { firmsConfigured } from '@/lib/adapters/firms';
 import { CROP_CATALOGUE_VERSION, CROP_CATALOGUE } from '@/lib/crops/catalogue';
 import { RULE_VERSION } from '@/lib/crops/rotation-engine';
+import { schedulerStatus, startScheduler } from '@/lib/scheduler';
 
 /**
  * GET  /api/v1/system/status — settings & diagnostics
  * POST /api/v1/system/status — actions (cache invalidate)
  */
 export async function GET() {
+  // startScheduler is idempotent; calling it here guarantees a started timer
+  // even if instrumentation bootstrapping was skipped in this environment.
+  startScheduler();
+  const scheduler = await schedulerStatus();
   const failedJobs = await db.processingJob.findMany({
     where: { status: 'failed' },
     orderBy: { startedAt: 'desc' },
@@ -46,6 +51,7 @@ export async function GET() {
     },
     cache: cacheStats(),
     circuitBreakers: circuitStatus(),
+    scheduler,
     providers: {
       NASA_POWER: { status: 'operational (public, no auth)' },
       GIBS: { status: 'operational (public, no auth)' },

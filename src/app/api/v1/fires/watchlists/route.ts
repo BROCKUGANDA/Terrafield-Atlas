@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
-import { FIRE_ARCHIVE_START } from '@/lib/adapters/gibsFires';
-import { watchThresholdFor, type WatchConfidence } from '@/lib/fires/watchlist-engine';
+import { FIRE_ARCHIVE_START } from '@/lib/fires/watchlist-engine';
+import { isReevaluateInterval, nextRunAfter, REEVALUATE_INTERVALS } from '@/lib/schedule-core';
+import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
 
 /**
  * GET  /api/v1/fires/watchlists — list watchlists with last evaluation state
@@ -10,8 +11,16 @@ import { watchThresholdFor, type WatchConfidence } from '@/lib/fires/watchlist-e
  *
  * The list read is database-only (no provider traffic): it reports the LAST
  * recorded evaluation. Live re-evaluation happens via
- * POST /api/v1/fires/watchlists/[id]/evaluate.
+ * POST /api/v1/fires/watchlists/[id]/evaluate; a watchlist can also opt into
+ * scheduled re-evaluation (reevaluateIntervalMin, in-process scheduler).
  */
+
+// null (or absent) = manual only; otherwise one of the supported cadences.
+const reevaluateSchema = z
+  .union([z.null(), z.number().int()])
+  .refine((v) => v === null || isReevaluateInterval(v), {
+    message: `reevaluateIntervalMin must be null or one of ${REEVALUATE_INTERVALS.join(' | ')} minutes`,
+  });
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -23,87 +32,12 @@ const createSchema = z.object({
   lookbackDays: z.number().int().min(3).max(30).default(7),
   detectionThreshold: z.number().int().min(1).max(500).default(5),
   notes: z.string().trim().max(300).optional(),
+  reevaluateIntervalMin: reevaluateSchema.optional(),
 });
 
-export function serializeEvent(e: {
-  id: string;
-  evaluatedAt: Date;
-  windowStart: Date;
-  windowEnd: Date;
-  status: string;
-  detectionCount: number;
-  highConfidenceCount: number;
-  nominalCount: number;
-  lowCount: number;
-  maxFrpMW: number | null;
-  daysWithDetections: number;
-  daysChecked: number;
-  daysNoData: number;
-  triggeredAlert: boolean;
-  detailJson: string;
-}) {
-  let detail: Record<string, unknown> = {};
-  try {
-    detail = JSON.parse(e.detailJson) as Record<string, unknown>;
-  } catch {
-    detail = {};
-  }
-  return {
-    id: e.id,
-    evaluatedAt: e.evaluatedAt.toISOString(),
-    windowStart: e.windowStart.toISOString().slice(0, 10),
-    windowEnd: e.windowEnd.toISOString().slice(0, 10),
-    status: e.status,
-    detectionCount: e.detectionCount,
-    highConfidenceCount: e.highConfidenceCount,
-    nominalCount: e.nominalCount,
-    lowCount: e.lowCount,
-    maxFrpMW: e.maxFrpMW,
-    daysWithDetections: e.daysWithDetections,
-    daysChecked: e.daysChecked,
-    daysNoData: e.daysNoData,
-    triggeredAlert: e.triggeredAlert,
-    rationale: (detail.rationale as string) ?? '',
-    daysNoDataList: (detail.daysNoData as string[]) ?? [],
-    daysUnchecked: (detail.daysUnchecked as string[]) ?? [],
-    perDay: (detail.perDay as { date: string; total: number; qualifying: number }[]) ?? [],
-  };
-}
-
-export function serializeWatchlist(w: {
-  id: string;
-  name: string;
-  label: string | null;
-  lat: number;
-  lon: number;
-  radiusKm: number;
-  minConfidence: string;
-  lookbackDays: number;
-  detectionThreshold: number;
-  notes: string | null;
-  lastStatus: string;
-  lastDetectionCount: number | null;
-  lastEvaluatedAt: Date | null;
-  createdAt: Date;
-}) {
-  return {
-    id: w.id,
-    name: w.name,
-    label: w.label,
-    lat: w.lat,
-    lon: w.lon,
-    radiusKm: w.radiusKm,
-    minConfidence: w.minConfidence as WatchConfidence,
-    lookbackDays: w.lookbackDays,
-    detectionThreshold: w.detectionThreshold,
-    watchThreshold: watchThresholdFor(w.detectionThreshold),
-    notes: w.notes,
-    lastStatus: w.lastStatus,
-    lastDetectionCount: w.lastDetectionCount,
-    lastEvaluatedAt: w.lastEvaluatedAt ? w.lastEvaluatedAt.toISOString() : null,
-    createdAt: w.createdAt.toISOString(),
-  };
-}
+// Serializers live in lib/fires/watchlist-serialize.ts (shared with the
+// evaluation core); re-exported here for backward-compatible import paths.
+export { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
 
 export const GET = apiHandler(async (_req, { correlationId }) => {
   const lists = await db.fireWatchlist.findMany({ orderBy: { createdAt: 'asc' } });
@@ -136,7 +70,7 @@ export const GET = apiHandler(async (_req, { correlationId }) => {
     {
       watchlists: rows,
       summary,
-      note: `Statuses reflect the last recorded evaluation only (database read, no provider traffic). Live check: POST /api/v1/fires/watchlists/{id}/evaluate. VIIRS archive starts ${FIRE_ARCHIVE_START}.`,
+      note: `Statuses reflect the last recorded evaluation only (database read, no provider traffic). Live check: POST /api/v1/fires/watchlists/{id}/evaluate (body { end } backtests any historical window). Watchlists with reevaluateIntervalMin set are re-evaluated automatically by the in-process scheduler. VIIRS archive starts ${FIRE_ARCHIVE_START}.`,
       correlationId,
     },
     { correlationId },
@@ -158,6 +92,7 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     );
   }
 
+  const interval = body.reevaluateIntervalMin === undefined ? null : body.reevaluateIntervalMin;
   const created = await db.fireWatchlist.create({
     data: {
       name: body.name,
@@ -170,6 +105,8 @@ export const POST = apiHandler(async (req, { correlationId }) => {
       detectionThreshold: body.detectionThreshold,
       notes: body.notes,
       lastStatus: 'unverified',
+      reevaluateIntervalMin: interval,
+      nextReevaluateAt: interval ? nextRunAfter(Date.now(), interval) : null,
     },
   });
   await db.auditEvent.create({
@@ -177,11 +114,16 @@ export const POST = apiHandler(async (req, { correlationId }) => {
       actor: 'demo-user',
       action: 'watchlist.create',
       targetId: created.id,
-      detail: JSON.stringify({ name: created.name, lat: created.lat, lon: created.lon, radiusKm: created.radiusKm, minConfidence: created.minConfidence, lookbackDays: created.lookbackDays, detectionThreshold: created.detectionThreshold }),
+      detail: JSON.stringify({ name: created.name, lat: created.lat, lon: created.lon, radiusKm: created.radiusKm, minConfidence: created.minConfidence, lookbackDays: created.lookbackDays, detectionThreshold: created.detectionThreshold, reevaluateIntervalMin: interval }),
     },
   });
   return jsonResponse(
-    { watchlist: serializeWatchlist(created), note: 'Created as unverified — evaluate it to query the real GIBS VIIRS record for the window.' },
+    {
+      watchlist: serializeWatchlist(created),
+      note: interval
+        ? `Created as unverified — the first scheduled re-evaluation runs at ${created.nextReevaluateAt?.toISOString().slice(0, 16).replace('T', ' ')}Z; evaluate manually any time before that.`
+        : 'Created as unverified — evaluate it to query the real GIBS VIIRS record for the window.',
+    },
     { status: 201, correlationId },
   );
 });

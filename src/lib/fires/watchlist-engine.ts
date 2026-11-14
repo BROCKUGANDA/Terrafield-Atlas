@@ -23,6 +23,12 @@
 export type WatchConfidence = 'low' | 'nominal' | 'high';
 export type WatchStatus = 'unverified' | 'clear' | 'watch' | 'alert';
 
+/**
+ * First day of the NASA GIBS VIIRS active-fire archive (canonical constant —
+ * the gibsFires adapter re-exports this so every consumer sees one value).
+ */
+export const FIRE_ARCHIVE_START = '2015-01-01';
+
 export const CONFIDENCE_RANK: Record<WatchConfidence, number> = { low: 0, nominal: 1, high: 2 };
 
 export const MIN_CONFIDENCE_LABELS: Record<WatchConfidence, string> = {
@@ -54,6 +60,48 @@ export function windowFor(endIso: string, lookbackDays: number): { start: string
     days.push(d.toISOString().slice(0, 10));
   }
   return { start: start.toISOString().slice(0, 10), end: endIso, days };
+}
+
+// --- calendar-day helpers for backtests and scheduling (pure; UTC day grid) ---
+
+/** Shift an ISO date by whole calendar days (UTC). */
+export function addDaysIso(iso: string, days: number): string {
+  return new Date(new Date(`${iso}T00:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** The most recent fully-observed VIIRS day: the archive typically lags one day. */
+export function yesterdayIso(now: Date = new Date()): string {
+  return new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Earliest window END for which the full lookback window still lies inside the
+ * VIIRS archive: FIRE_ARCHIVE_START + (lookbackDays - 1). A backtest ending
+ * earlier could never reach complete coverage, so it is rejected instead of
+ * reporting a guaranteed-unverified window.
+ */
+export function minBacktestEndIso(lookbackDays: number, archiveStart: string = FIRE_ARCHIVE_START): string {
+  return addDaysIso(archiveStart, Math.max(1, Math.floor(lookbackDays)) - 1);
+}
+
+/**
+ * Validate an evaluation end date. Returns an error message, or null when the
+ * date is usable. `today` and `archiveStart` are injected so callers (and
+ * tests) stay deterministic.
+ */
+export function validateEvalEnd(
+  end: string,
+  lookbackDays: number,
+  today: string,
+  archiveStart: string = FIRE_ARCHIVE_START,
+): string | null {
+  if (end > today) return `end date cannot be in the future (today is ${today})`;
+  if (end < archiveStart) return `VIIRS fire archive starts ${archiveStart}`;
+  const minEnd = minBacktestEndIso(lookbackDays, archiveStart);
+  if (end < minEnd) {
+    return `a ${Math.max(1, Math.floor(lookbackDays))}-day window ending ${end} would start before the VIIRS archive begins (${archiveStart}); use an end date of ${minEnd} or later`;
+  }
+  return null;
 }
 
 /** Bbox (degrees) that covers a circle of radiusKm around (lat, lon), capped at 0.3° padding. */

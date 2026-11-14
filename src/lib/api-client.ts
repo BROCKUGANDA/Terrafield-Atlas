@@ -240,6 +240,8 @@ export interface WatchEvent {
   daysNoDataList: string[];
   daysUnchecked: string[];
   perDay: { date: string; total: number; qualifying: number }[];
+  /** What fired this evaluation: console click, historical backtest, scheduler. */
+  trigger: 'manual' | 'backtest' | 'scheduled';
 }
 
 export interface Watchlist {
@@ -257,6 +259,10 @@ export interface Watchlist {
   lastStatus: WatchStatus;
   lastDetectionCount: number | null;
   lastEvaluatedAt: string | null;
+  /** Scheduled re-evaluation cadence (minutes) — null = manual only. */
+  reevaluateIntervalMin: number | null;
+  /** Next claimed scheduler run (ISO) — null when no cadence is set. */
+  nextReevaluateAt: string | null;
   createdAt: string;
 }
 
@@ -276,6 +282,10 @@ export interface WatchEvaluateResponse {
   evaluation: WatchEvaluationResult;
   event: WatchEvent;
   recentEvents: WatchEvent[];
+  /** 'backtest' when the request pinned an explicit historical end date. */
+  mode: 'live' | 'backtest';
+  requestedEnd: string;
+  trigger: 'manual' | 'backtest' | 'scheduled';
   source: string;
 }
 
@@ -308,6 +318,8 @@ export interface WatchlistInput {
   lookbackDays?: number;
   detectionThreshold?: number;
   notes?: string;
+  /** Scheduled re-evaluation cadence in minutes (360 | 720 | 1440) or null to disable. */
+  reevaluateIntervalMin?: number | null;
 }
 
 export interface DataSourceRow {
@@ -364,6 +376,24 @@ export interface SystemStatus {
   };
   cache: { liveEntries: number; expiredEntries: number; maxEntries: number };
   circuitBreakers: { provider: string; consecutiveFailures: number; open: boolean; cooldownRemainingMs: number }[];
+  scheduler: {
+    kind: 'in-process';
+    enabled: boolean;
+    disabledByEnv: boolean;
+    tickEverySec: number;
+    maxRunsPerTick: number;
+    running: boolean;
+    startedAt: string | null;
+    lastTickAt: string | null;
+    lastTick: { tickAt: string; ran: number; dueCount: number; runs: { watchlistId: string; name: string; ok: boolean; status?: string; detectionCount?: number; error?: string }[] } | null;
+    ticksFired: number;
+    ticksSkippedBusy: number;
+    consecutiveFailedRuns: number;
+    scheduledWatchlists: number;
+    nextDueAt: string | null;
+    dueNow: { id: string; name: string }[];
+    note: string;
+  };
   providers: Record<string, { status: string; note?: string }>;
   reliability: Record<string, string>;
   methodology: { trend: string; rotation: string };

@@ -5,6 +5,8 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput } from '@/lib/api-client';
+import { minBacktestEndIso, windowFor, yesterdayIso } from '@/lib/fires/watchlist-engine';
+import { REEVALUATE_LABELS, type ReevaluateIntervalMin } from '@/lib/schedule-core';
 import { logEvent } from '@/components/state/log-store';
 import { useSession } from '@/components/state/store';
 import { Button } from '@/components/ui/button';
@@ -12,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -20,7 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { HudPanel, StatusPill, CoordReadout } from '@/components/ui-mc/kit';
 import { EmptyState } from '@/components/system/query-state';
 import { SweepLoader } from '@/components/system/skeletons';
-import { Bell, BellRing, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History } from 'lucide-react';
+import { Bell, BellRing, CalendarClock, Clock, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -106,10 +109,11 @@ export function FireWatchlistsSection() {
     lookbackDays: 7,
     detectionThreshold: 5,
     notes: '',
+    reevaluateIntervalMin: null,
   }));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<WatchlistInput>>({});
-  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ id: string; kind: 'live' | 'backtest' } | null>(null);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fire-watchlists'] });
 
@@ -141,24 +145,25 @@ export function FireWatchlistsSection() {
   });
 
   const evaluate = useMutation({
-    mutationFn: (id: string) => {
-      setEvaluatingId(id);
-      return api.evaluateWatchlist(id);
+    mutationFn: ({ id, end }: { id: string; end?: string }) => {
+      setPending({ id, kind: end ? 'backtest' : 'live' });
+      return api.evaluateWatchlist(id, end);
     },
-    onSettled: () => setEvaluatingId(null),
-    onSuccess: (res, id) => {
+    onSettled: () => setPending(null),
+    onSuccess: (res) => {
       const w = res.watchlist;
       const ev = res.evaluation;
+      const backtest = res.mode === 'backtest';
       toast({
-        title: `${w.name} — ${ev.status.toUpperCase()}`,
-        description: `${ev.detectionCount} qualifying detection(s) ${ev.windowStart} → ${ev.windowEnd}${ev.daysFetchedFromGibs ? ` · ${ev.daysFetchedFromGibs} day(s) fetched live from GIBS` : ''}${ev.daysNoData.length ? ` · ${ev.daysNoData.length} archive-gap day(s) reported` : ''}.`,
+        title: `${w.name} — ${backtest ? 'BACKTEST ' : ''}${ev.status.toUpperCase()}`,
+        description: `${ev.detectionCount} qualifying detection(s) ${ev.windowStart} → ${ev.windowEnd}${backtest ? ' (historical window)' : ''}${ev.daysFetchedFromGibs ? ` · ${ev.daysFetchedFromGibs} day(s) fetched live from GIBS` : ''}${ev.daysNoData.length ? ` · ${ev.daysNoData.length} archive-gap day(s) reported` : ''}.`,
         variant: ev.status === 'alert' ? 'destructive' : undefined,
       });
       logEvent({
         severity: ev.status === 'alert' ? 'crit' : ev.status === 'watch' ? 'warn' : 'success',
         category: 'FIRE',
-        title: `Watchlist evaluated — ${w.name}: ${ev.status.toUpperCase()}`,
-        detail: `${ev.rationale}${ev.daysFetchedFromGibs ? ` ${ev.daysFetchedFromGibs} day(s) of the window were fetched live from the real GIBS VIIRS stream; ${ev.rowsWritten} new row(s) stored.` : ' All days were already covered by stored archive checks.'}`,
+        title: `Watchlist ${backtest ? 'backtest' : 'evaluated'} — ${w.name}: ${ev.status.toUpperCase()}`,
+        detail: `${backtest ? `BACKTEST of the rule against the historical window ${ev.windowStart} → ${ev.windowEnd} — ` : ''}${ev.rationale}${ev.daysFetchedFromGibs ? ` ${ev.daysFetchedFromGibs} day(s) of the window were fetched live from the real GIBS VIIRS stream; ${ev.rowsWritten} new row(s) stored.` : ' All days were already covered by stored archive checks.'}${backtest ? ' Stored as a normal evaluation event flagged trigger=backtest.' : ''}`,
         view: 'fire',
       });
       void invalidate();
@@ -178,8 +183,13 @@ export function FireWatchlistsSection() {
 
   const update = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Partial<WatchlistInput> }) => api.updateWatchlist(id, body),
-    onSuccess: (res) => {
-      toast({ title: 'Watchlist updated', description: `“${res.watchlist.name}” saved. Rule parameters changed → status reset to unverified until the next evaluation.` });
+    onSuccess: (res, vars) => {
+      const scheduleChanged = vars.body.reevaluateIntervalMin !== undefined;
+      const interval = res.watchlist.reevaluateIntervalMin;
+      toast({
+        title: 'Watchlist updated',
+        description: `“${res.watchlist.name}” saved.${scheduleChanged ? interval ? ` Scheduled re-evaluation ${REEVALUATE_LABELS[interval as ReevaluateIntervalMin]} — next run ${res.watchlist.nextReevaluateAt ? res.watchlist.nextReevaluateAt.slice(0, 16).replace('T', ' ') : 'pending'}Z.` : ' Scheduled re-evaluation switched off.' : ''}${vars.body.minConfidence !== undefined || vars.body.lookbackDays !== undefined || vars.body.detectionThreshold !== undefined ? ' Rule parameters changed → status reset to unverified until the next evaluation.' : ''}`,
+      });
       logEvent({
         severity: 'info',
         category: 'FIRE',
@@ -225,7 +235,7 @@ export function FireWatchlistsSection() {
 
   const rows = watchlists.data?.watchlists ?? [];
   const summary = watchlists.data?.summary;
-  const busy = evaluatingId !== null;
+  const busy = pending !== null;
 
   return (
     <motion.section
@@ -247,6 +257,8 @@ export function FireWatchlistsSection() {
               Define a geography, radius and threshold rule; <span className="text-ink">Evaluate</span> ensures every day of the
               lookback window is checked against the real GIBS VIIRS 375 m stream, then reports clear / watch / alert from
               stored detections only. Days the archive simply does not have are reported as no-data — never zero-filled.
+              <span className="text-ink"> Backtest</span> replays the same rule against any historical window via the date
+              picker; watchlists with a cadence set are re-evaluated automatically by the in-process scheduler.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -382,6 +394,22 @@ export function FireWatchlistsSection() {
                   aria-label="Alert threshold in qualifying detections"
                 />
               </Field>
+              <Field label="Auto re-evaluate">
+                <Select
+                  value={String(form.reevaluateIntervalMin ?? 0)}
+                  onValueChange={(v) => setForm({ ...form, reevaluateIntervalMin: v === '0' ? null : Number(v) })}
+                >
+                  <SelectTrigger className="h-9 w-32 border-edge bg-panel text-xs text-dim" aria-label="Scheduled re-evaluation cadence">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-edge bg-popover text-dim">
+                    <SelectItem value="0" className="text-xs">off (manual)</SelectItem>
+                    <SelectItem value="360" className="text-xs">every 6 h</SelectItem>
+                    <SelectItem value="720" className="text-xs">every 12 h</SelectItem>
+                    <SelectItem value="1440" className="text-xs">every 24 h</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
             <Field label="Notes (optional)">
               <Textarea
@@ -404,6 +432,7 @@ export function FireWatchlistsSection() {
               </Button>
               <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
                 alert at ≥ {form.detectionThreshold} {CONF_LABEL[form.minConfidence ?? 'nominal']} detection(s) within {form.lookbackDays} day(s) · watch at ≥ {Math.max(1, Math.ceil((form.detectionThreshold ?? 5) / 2))}
+                {form.reevaluateIntervalMin ? ` · auto re-eval ${REEVALUATE_LABELS[form.reevaluateIntervalMin as ReevaluateIntervalMin]}` : ' · manual evaluation only'}
               </p>
             </div>
             {create.isError && (
@@ -414,10 +443,10 @@ export function FireWatchlistsSection() {
           </form>
         )}
 
-        {/* Evaluate-all-in-flight banner */}
+        {/* Evaluate/backtest-in-flight banner */}
         {busy && (
           <div className="flex flex-col gap-2" role="status" aria-live="polite">
-            <SweepLoader label="Evaluating watchlist — decoding real VIIRS tiles for uncovered days" />
+            <SweepLoader label={pending?.kind === 'backtest' ? 'Backtesting watchlist — replaying the real VIIRS archive for the historical window' : 'Evaluating watchlist — decoding real VIIRS tiles for uncovered days'} />
             <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
               gibs vector tiles in flight · archive gaps reported as no-data, never zero-filled
             </p>
@@ -447,8 +476,10 @@ export function FireWatchlistsSection() {
             <WatchlistCard
               key={w.id}
               w={w}
-              evaluating={evaluate.isPending && evaluatingId === w.id}
-              onEvaluate={() => evaluate.mutate(w.id)}
+              evaluating={evaluate.isPending && pending?.id === w.id}
+              pendingKind={pending?.id === w.id ? pending.kind : null}
+              onEvaluate={() => evaluate.mutate({ id: w.id })}
+              onBacktest={(end) => evaluate.mutate({ id: w.id, end })}
               editing={editingId === w.id}
               editForm={editForm}
               onEditOpen={() => {
@@ -460,6 +491,7 @@ export function FireWatchlistsSection() {
                   lookbackDays: w.lookbackDays,
                   detectionThreshold: w.detectionThreshold,
                   notes: w.notes ?? '',
+                  reevaluateIntervalMin: w.reevaluateIntervalMin,
                 });
               }}
               onEditChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
@@ -489,7 +521,9 @@ export function FireWatchlistsSection() {
         <p className="text-[10px] leading-relaxed text-faint">
           Watchlist states describe the last recorded evaluation only. A header alert chip appears console-wide while any
           watchlist is in ALERT. Evaluations share the stored detection pool with the detections ledger — every row is a real
-          VIIRS observation with provenance in Evidence &amp; Provenance.
+          VIIRS observation with provenance in Evidence &amp; Provenance. Backtests and scheduled runs take the identical
+          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler’s live state is reported
+          in System Health, and every scheduled run is written to the mission log.
         </p>
       </HudPanel>
     </motion.section>
@@ -497,11 +531,13 @@ export function FireWatchlistsSection() {
 }
 
 function WatchlistCard({
-  w, evaluating, onEvaluate, editing, editForm, onEditOpen, onEditChange, onEditSubmit, editPending, onDelete, deletePending, onFocus, onShowLedger,
+  w, evaluating, pendingKind, onEvaluate, onBacktest, editing, editForm, onEditOpen, onEditChange, onEditSubmit, editPending, onDelete, deletePending, onFocus, onShowLedger,
 }: {
   w: WatchlistRow;
   evaluating: boolean;
+  pendingKind: 'live' | 'backtest' | null;
   onEvaluate: () => void;
+  onBacktest: (end: string) => void;
   editing: boolean;
   editForm: Partial<WatchlistInput>;
   onEditOpen: () => void;
@@ -519,6 +555,15 @@ function WatchlistCard({
     : w.lastStatus === 'watch' ? <Bell className="h-3.5 w-3.5" aria-hidden />
     : w.lastStatus === 'clear' ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
     : <History className="h-3.5 w-3.5" aria-hidden />;
+
+  // Backtest date-picker state: bounded by the VIIRS archive start (the full
+  // lookback window must fit) and today. Defaults to the latest fully
+  // observed day; the live window is what "Evaluate now" uses.
+  const [btEnd, setBtEnd] = useState<string>(() => yesterdayIso());
+  const today = new Date().toISOString().slice(0, 10);
+  const btMin = minBacktestEndIso(w.lookbackDays);
+  const btValid = btEnd >= btMin && btEnd <= today;
+  const btWindow = btValid ? windowFor(btEnd, w.lookbackDays) : null;
 
   return (
     <div className={cn('flex flex-col gap-2.5 rounded-sm border p-3.5', STATUS_TONE_BG[w.lastStatus] || 'border-edge bg-panel-2/40')}>
@@ -540,6 +585,13 @@ function WatchlistCard({
         rule — alert at ≥ {w.detectionThreshold} · {CONF_LABEL[w.minConfidence]} · within {w.lookbackDays} d
         <span className="text-faint"> (watch at ≥ {w.watchThreshold})</span>
       </p>
+      {w.reevaluateIntervalMin !== null && (
+        <p className="telemetry flex items-center gap-1.5 text-[10px] uppercase tracking-wide-mc text-signal">
+          <Clock className="h-3 w-3" aria-hidden />
+          auto re-eval {REEVALUATE_LABELS[w.reevaluateIntervalMin as ReevaluateIntervalMin]}
+          {w.nextReevaluateAt ? ` · next ${w.nextReevaluateAt.slice(0, 16).replace('T', ' ')}Z` : ' · armed'}
+        </p>
+      )}
       {w.notes && <p className="text-[11px] leading-relaxed text-faint">{w.notes}</p>}
 
       {/* Last evaluation */}
@@ -548,6 +600,11 @@ function WatchlistCard({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="telemetry text-[10px] uppercase tracking-wide-mc text-faint">
               last eval {new Date(last.evaluatedAt).toISOString().slice(0, 16).replace('T', ' ')}Z · {last.windowStart} → {last.windowEnd}
+              {last.trigger !== 'manual' && (
+                <span className={cn('ml-1.5 border px-1 py-px', last.trigger === 'backtest' ? 'border-caution/50 text-caution' : 'border-signal/50 text-signal')}>
+                  {last.trigger}
+                </span>
+              )}
             </span>
             <span className="telemetry text-[10px] text-dim">
               {last.detectionCount} qualifying · {last.highConfidenceCount} high / {last.nominalCount} nominal / {last.lowCount} low
@@ -626,6 +683,22 @@ function WatchlistCard({
                 aria-label="Edit alert threshold"
               />
             </Field>
+            <Field label="Auto re-evaluate">
+              <Select
+                value={String(editForm.reevaluateIntervalMin ?? 0)}
+                onValueChange={(v) => onEditChange({ reevaluateIntervalMin: v === '0' ? null : Number(v) })}
+              >
+                <SelectTrigger className="h-8 w-32 border-edge bg-panel text-xs text-dim" aria-label="Scheduled re-evaluation cadence">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-edge bg-popover text-dim">
+                  <SelectItem value="0" className="text-xs">off (manual)</SelectItem>
+                  <SelectItem value="360" className="text-xs">every 6 h</SelectItem>
+                  <SelectItem value="720" className="text-xs">every 12 h</SelectItem>
+                  <SelectItem value="1440" className="text-xs">every 24 h</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
           <Field label="Notes">
             <Textarea
@@ -644,7 +717,7 @@ function WatchlistCard({
             <Button variant="outline" size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditOpen}>
               Cancel
             </Button>
-            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified</span>
+            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified · cadence runs on the in-process scheduler (audit-trailed)</span>
           </div>
         </div>
       )}
@@ -658,12 +731,77 @@ function WatchlistCard({
           className={cn('h-8 font-mono text-[11px] uppercase tracking-wide-mc', w.lastStatus === 'alert' && 'bg-crit/90 hover:bg-crit')}
           aria-label={`Evaluate watchlist ${w.name} live from the GIBS VIIRS archive`}
         >
-          {evaluating ? (
+          {pendingKind === 'live' ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> Evaluating…</>
           ) : (
             <>{statusIcon} Evaluate now</>
           )}
         </Button>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={evaluating}
+              className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+              aria-label={`Backtest watchlist ${w.name} against a historical window`}
+            >
+              <CalendarClock className="h-3.5 w-3.5" aria-hidden /> Backtest
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 border-edge bg-popover p-3">
+            <div className="flex flex-col gap-2.5">
+              <div>
+                <p className="font-display text-[12px] font-bold uppercase tracking-wide-mc text-ink">Backtest “{w.name}”</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-dim">
+                  Replays the exact rule over a historical window ending on the chosen date, from the real GIBS VIIRS
+                  archive — the same pipeline as Evaluate, anchored to the past. Stored as a normal evaluation event
+                  (trigger=backtest); nothing is simulated.
+                </p>
+              </div>
+              <Field label="Window end date">
+                <Input
+                  type="date"
+                  value={btEnd}
+                  min={btMin}
+                  max={today}
+                  onChange={(e) => setBtEnd(e.target.value)}
+                  className="telemetry h-8 border-edge bg-panel text-xs text-dim"
+                  aria-label="Backtest window end date"
+                />
+              </Field>
+              <p className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">
+                {btWindow
+                  ? `window ${btWindow.start} → ${btWindow.end} · ${btWindow.days.length} day(s) · latest fully observed day is ${yesterdayIso()}`
+                  : `invalid date — the ${w.lookbackDays}-day window must fit inside the archive: end dates ${btMin} → ${today}`}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
+                  disabled={!btValid || evaluating}
+                  onClick={() => onBacktest(btEnd)}
+                >
+                  {pendingKind === 'backtest' ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> Backtesting…</>
+                  ) : (
+                    <><CalendarClock className="h-3.5 w-3.5" aria-hidden /> Run backtest</>
+                  )}
+                </Button>
+                {btEnd !== yesterdayIso() && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+                    onClick={() => setBtEnd(yesterdayIso())}
+                  >
+                    Use latest day
+                  </Button>
+                )}
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onEditOpen} aria-expanded={editing}>
           <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
         </Button>

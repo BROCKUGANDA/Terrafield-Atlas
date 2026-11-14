@@ -282,12 +282,19 @@ model FireWatchlist {
   lastStatus         String    @default("unverified") // unverified | clear | watch | alert
   lastDetectionCount Int?
   lastEvaluatedAt    DateTime?
+  // Scheduled re-evaluation (in-process scheduler — see lib/scheduler.ts).
+  // reevaluateIntervalMin = null → manual evaluation only. Allowed cadences:
+  // 360 (6 h) | 720 (12 h) | 1440 (24 h); nextReevaluateAt is claimed ahead of
+  // each run so a crash never hot-loops.
+  reevaluateIntervalMin Int?
+  nextReevaluateAt      DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   events FireWatchEvent[]
 
   @@index([lastStatus])
+  @@index([nextReevaluateAt])
 }
 
 // One row per watchlist evaluation — the alert history ledger.
