@@ -106,8 +106,8 @@ const DATA_SOURCES = [
     license: 'NASA open data',
     attribution: 'NASA FIRMS / LANCE',
     limitations:
-      'NOT REACHABLE from this deployment sandbox (connection timeouts verified) and MAP_KEY not configured. The adapter is implemented and health-flagged; fire features are served from the GIBS VIIRS thermal-anomaly stream instead. No data is ever fabricated for this source.',
-    status: 'unreachable',
+      'FIRMS host is reachable from this deployment (probed live). The CSV area API still requires a free MAP_KEY (set FIRMS_MAP_KEY to arm it); until then fire features are served from the live GIBS VIIRS thermal-anomaly stream (same detections). No data is ever fabricated for this source.',
+    status: 'operational',
   },
   {
     provider: 'ISRIC — World Soil Information',
