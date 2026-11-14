@@ -1,5 +1,7 @@
 import { createDigestHub, MAX_STREAM_CLIENTS, buildDigestPushPayload, type DigestHub, type DigestHubStatus, type DigestPushReason } from '@/lib/fires/digest-push';
 import { computeWatchlistDigest } from '@/lib/fires/watchlist-digest-service';
+import { parseWebhookConfig, webhookExitStatus, deliverDigestWebhook, type WebhookExitStatus } from '@/lib/fires/digest-exit-webhook';
+import { parseEmailConfig, emailExitStatus, deliverDigestEmail, shouldEmailDigest, type EmailExitStatus } from '@/lib/fires/digest-exit-email';
 
 /**
  * Digest push channel — the RUNTIME half (process-wide singleton + publish
@@ -43,6 +45,7 @@ export function digestChannelStatus(): DigestHubStatus & {
   enabled: boolean;
   disabledByEnv: boolean;
   maxClients: number;
+  exits: { webhook: WebhookExitStatus; email: EmailExitStatus };
   note: string;
 } {
   const rt = runtime();
@@ -52,22 +55,34 @@ export function digestChannelStatus(): DigestHubStatus & {
     disabledByEnv: rt.disabledByEnv,
     maxClients: MAX_STREAM_CLIENTS,
     ...rt.hub.status(),
-    note: 'Push-style digest delivery over Server-Sent Events (GET /api/v1/fires/watchlists/digest-stream) — one channel on the single exposed HTTP port, no broker or extra port. A cadence-aware digest is recomputed and pushed to every open console the moment an evaluation event lands or a scheduled run fails; with zero subscribers the channel does no database work. Missed events remain available from the per-watchlist digest endpoint.',
+    exits: { webhook: webhookExitStatus(), email: emailExitStatus() },
+    note: 'Push-style digest delivery over Server-Sent Events (GET /api/v1/fires/watchlists/digest-stream) — one channel on the single exposed HTTP port, no broker or extra port. A cadence-aware digest is recomputed and pushed to every open console the moment an evaluation event lands or a scheduled run fails; with zero subscribers and no armed exits the channel does no database work. Missed events remain available from the per-watchlist digest endpoint. Additional delivery exits (env-gated): a webhook POST (DIGEST_WEBHOOK_URL) and SMTP email for scheduler facts (DIGEST_SMTP_*).',
   };
 }
 
 export type DigestPublishOutcome = {
   published: number; // connections the digest was written to
   skipped: boolean;
-  skipReason?: 'disabled' | 'no-subscribers' | 'watchlist-gone';
+  skipReason?: 'disabled' | 'no-subscribers' | 'watchlist-gone' | 'no-exits';
+  /** Webhook exit result — null when the exit was not armed. */
+  webhook: { delivered: boolean; attempts: number; status: number; error: string | null } | null;
+  /** Email exit result — null when the exit was not armed or the fact was not scheduler activity. */
+  email: { sent: boolean; error: string | null } | null;
 };
 
 /**
- * Recompute the cadence-aware digest for one watchlist and push it onto every
- * open stream connection. Fire-and-forget by contract — NEVER throws.
+ * Recompute the cadence-aware digest for one watchlist and fan it out over
+ * EVERY armed delivery exit. Fire-and-forget by contract — NEVER throws.
  *
- *  - DIGEST_PUSH_OFF=1 or zero open consoles → resolves without touching the DB.
- *  - a watchlist deleted between its run and this push → skipped honestly.
+ * Exits, in firing order (one digest computation shared by all of them):
+ *  1. SSE channel — skipped with zero work when disabled or no consoles.
+ *  2. Webhook exit — POSTs the identical payload to DIGEST_WEBHOOK_URL when
+ *     armed (any digest-relevant fact).
+ *  3. Email exit — SMTP send for SCHEDULER facts only, when DIGEST_SMTP_* is
+ *     configured (manual/backtest feedback already exists at the console).
+ *
+ * When NO exit is armed, this resolves without touching the DB. A watchlist
+ * deleted between its run and this push → skipped honestly.
  *
  * The digest is computed with the watchlist's own window (cadence or the 24 h
  * default) — exactly what the Digest popover shows by default — so a pushed
@@ -80,13 +95,23 @@ export async function publishDigestForWatchlist(
 ): Promise<DigestPublishOutcome> {
   try {
     const rt = runtime();
-    if (rt.disabledByEnv || rt.hub.subscriberCount() === 0) {
-      return { published: 0, skipped: true, skipReason: rt.disabledByEnv ? 'disabled' : 'no-subscribers' };
+    const webhookCfg = parseWebhookConfig(process.env as Record<string, string | undefined>);
+    const emailCfg = parseEmailConfig(process.env as Record<string, string | undefined>);
+    const sseActive = !rt.disabledByEnv && rt.hub.subscriberCount() > 0;
+
+    if (!sseActive && !webhookCfg.enabled && !emailCfg.enabled) {
+      return {
+        published: 0,
+        skipped: true,
+        skipReason: rt.disabledByEnv ? 'disabled' : 'no-exits',
+        webhook: null,
+        email: null,
+      };
     }
 
     const computed = await computeWatchlistDigest(watchlistId, { now: ctx.now });
     if (!computed.ok) {
-      return { published: 0, skipped: true, skipReason: 'watchlist-gone' };
+      return { published: 0, skipped: true, skipReason: 'watchlist-gone', webhook: null, email: null };
     }
 
     const now = ctx.now ?? new Date();
@@ -105,12 +130,31 @@ export async function publishDigestForWatchlist(
       digest: computed.result.digest,
     });
 
-    const res = rt.hub.publish('watchlist.digest', payload);
-    return { published: res.delivered, skipped: false };
+    let published = 0;
+    if (sseActive) {
+      const res = rt.hub.publish('watchlist.digest', payload);
+      published = res.delivered;
+    }
+
+    // Exit 2 — outbound webhook POST (any digest-relevant fact when armed).
+    let webhook: DigestPublishOutcome['webhook'] = null;
+    if (webhookCfg.enabled) {
+      const outcome = await deliverDigestWebhook(payload, { correlationId: ctx.correlationId, now });
+      webhook = { delivered: outcome.delivered, attempts: outcome.attempts, status: outcome.status, error: outcome.error };
+    }
+
+    // Exit 3 — SMTP email (scheduler facts only when armed).
+    let email: DigestPublishOutcome['email'] = null;
+    if (emailCfg.enabled && shouldEmailDigest(payload)) {
+      const outcome = await deliverDigestEmail(payload, { correlationId: ctx.correlationId, now });
+      email = { sent: outcome.sent, error: outcome.error };
+    }
+
+    return { published, skipped: false, webhook, email };
   } catch (err) {
     // Delivery must never take anything else down (the REST digest and the
     // runs history remain the durable records).
     console.error('[digest-push] publish failed:', err instanceof Error ? err.message : err);
-    return { published: 0, skipped: true };
+    return { published: 0, skipped: true, webhook: null, email: null };
   }
 }

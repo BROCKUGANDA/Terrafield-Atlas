@@ -447,6 +447,34 @@ export interface DigestChannelStatus {
   connectionsOpened: number;
   eventsDelivered: number;
   lastEventAt: string | null;
+  /** Additional env-gated delivery exits beyond the SSE channel. */
+  exits: {
+    webhook: {
+      state: 'configured' | 'not-configured' | 'disabled';
+      urlConfigured: boolean;
+      host: string | null;
+      secretPresent: boolean;
+      attempts: number;
+      delivered: number;
+      failed: number;
+      lastAttemptAt: string | null;
+      lastDeliveredAt: string | null;
+      lastError: string | null;
+      note: string;
+    };
+    email: {
+      state: 'configured' | 'not-configured' | 'disabled' | 'incomplete';
+      host: string | null;
+      port: number;
+      recipients: number;
+      missing: string[];
+      sent: number;
+      failed: number;
+      lastSentAt: string | null;
+      lastError: string | null;
+      note: string;
+    };
+  };
   note: string;
 }
 

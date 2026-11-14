@@ -272,6 +272,32 @@ export function SettingsView() {
                       mono
                     />
                     <Row k="Capacity" v={`${s.digestChannel.maxClients} concurrent stream connection(s); excess gets 503 + Retry-After`} mono />
+                    {s.digestChannel.exits && (
+                      <>
+                        <Row
+                          k="Webhook exit"
+                          v={
+                            s.digestChannel.exits.webhook.state === 'configured'
+                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ' · HMAC signed' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
+                              : s.digestChannel.exits.webhook.state === 'disabled'
+                                ? 'disabled by DIGEST_WEBHOOK_OFF=1'
+                                : 'not configured (set DIGEST_WEBHOOK_URL to arm — zero outbound work while unset)'
+                          }
+                          mono
+                        />
+                        <Row
+                          k="Email exit"
+                          v={
+                            s.digestChannel.exits.email.state === 'configured'
+                              ? `armed → ${s.digestChannel.exits.email.host}:${s.digestChannel.exits.email.port} · ${s.digestChannel.exits.email.recipients} recipient(s) · scheduler facts only · ${s.digestChannel.exits.email.sent} sent / ${s.digestChannel.exits.email.failed} failed`
+                              : s.digestChannel.exits.email.state === 'disabled'
+                                ? 'disabled by DIGEST_EMAIL_OFF=1'
+                                : `credentials not configured${s.digestChannel.exits.email.missing.length ? ` (missing: ${s.digestChannel.exits.email.missing.join(', ')})` : ''} — zero sends attempted, nothing fabricated`
+                          }
+                          mono
+                        />
+                      </>
+                    )}
                   </div>
                   <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.digestChannel.note}</p>
                 </HudPanel>

@@ -30,7 +30,7 @@ The demo needs **no signup**:
 5. **Environmental Analysis** — run the trend pipeline (seasonal Mann-Kendall, Theil-Sen, FDR).
 6. **Farm Workspace** — create a farm, enter a soil test (or fetch the supplementary SoilGrids profile).
 7. **Rotation Planner** — build scenarios, set priorities, compare alternatives with full factor-level explanations.
-8. **Fire Intelligence** — ingest real VIIRS 375 m detections (e.g. the Zambia preset, Jul–Oct), view the fire calendar, and set up **regional fire watchlists**: pick a geography, radius, confidence floor and threshold; *Evaluate now* checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only (a red header chip surfaces alerts from anywhere in the console). Every completed evaluation and every scheduler failure is **pushed live** to the console as a cadence-aware digest over the Server-Sent-Events channel (the `push live` chip in the watchlists header shows the connection).
+8. **Fire Intelligence** — ingest real VIIRS 375 m detections (region presets now cover the fire-active geographies — Zambia Central miombo, Rondônia Amazon frontier, Top End savanna, San Joaquin/Sierra foothills — each carrying its real fire season), view the fire calendar, and set up **regional fire watchlists**: pick a geography, radius, confidence floor and threshold; *Evaluate now* checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only (a red header chip surfaces alerts from anywhere in the console). Every completed evaluation and every scheduler failure is **pushed live** to the console as a cadence-aware digest over the Server-Sent-Events channel (the `push live` chip in the watchlists header shows the connection) — and, when armed, over the **webhook exit** (HMAC-signed POST) and the **email exit** (SMTP, scheduler facts only).
 9. **Reports** — compile and print the farm assessment (browser print → PDF).
 10. **Evidence & Provenance / System Health** — inspect the request ledger, source register and diagnostics.
 
@@ -55,8 +55,9 @@ The demo needs **no signup**:
 bun run dev            # dev server (auto-run in this sandbox)
 bun run lint           # ESLint
 bun run db:push        # apply the Prisma schema
-bun test tests/        # 115 unit tests (fixtures only — no network)
+bun test tests/            # 138 unit tests (fixtures only — no network)
 bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/ISRIC endpoints
+bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the scheduler; verifies the webhook digest exit end-to-end (HMAC signature, provenance + audit rows)
 ```
 
 ## Environment variables
@@ -67,6 +68,8 @@ bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/IS
 | `FIRMS_MAP_KEY` | no | enables the FIRMS CSV adapter (free NASA registration). Without it the adapter reports `credentials-not-configured` and fire features are served from the GIBS VIIRS stream (same detections). The key is server-side only and never exposed to the client. |
 | `WATCH_SCHEDULER_OFF` | no | `=1` disables the in-process watchlist re-evaluation scheduler (on-demand evaluation remains). |
 | `DIGEST_PUSH_OFF` | no | `=1` disables the SSE digest push channel (digests remain available on demand from `GET …/digest`). |
+| `DIGEST_WEBHOOK_URL` | no | arms the **webhook digest exit**: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to this http(s) URL as the identical digest payload. `DIGEST_WEBHOOK_SECRET` adds an `X-TerraField-Signature: sha256=…` HMAC header; `DIGEST_WEBHOOK_OFF=1` disables. Transient-only retry (max 3 attempts), one provenance row per attempt, one audit row per outcome. |
+| `DIGEST_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TO` | no | arms the **email digest exit** (nodemailer/SMTP): completed scheduled re-evaluations and failed scheduled runs are emailed to the `_TO` list; manual and backtest evaluations are console-feedback-only by design. Without the credentials the exit reports `credentials-not-configured` and attempts zero sends — the same honest state as FIRMS without a MAP_KEY. `DIGEST_EMAIL_OFF=1` disables. |
 
 ## Documentation
 
