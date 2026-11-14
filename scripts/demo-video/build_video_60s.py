@@ -2,10 +2,11 @@
 """
 TerraField Atlas — 60-second cut assembly (ffmpeg).
 
-Same clip contract as build_video.py (composed 1280×720 PNG → subtle Ken
+Same clip contract as build_video.py (composed PNG → subtle Ken
 Burns zoom → H.264 clip with the scene's TTS narration, 300 ms lead-in /
 700 ms tail → codec-identical concat), driven by scenes-60.json and the
-audio-60/ narration.
+audio-60/ narration. Honors TF_VIDEO_SCALE (default 1.0 → 1280×720;
+1.5 → 1920×1080, the judges'-screen final take).
 
 Output: download/hackathon/terrafield-atlas-demo-60s.mp4 (+ clips-60/).
 """
@@ -24,6 +25,8 @@ FINAL = OUTDIR / "terrafield-atlas-demo-60s.mp4"
 FPS = 30
 LEAD_S = 0.25
 TAIL_S = 0.55
+SCALE = float(__import__("os").environ.get("TF_VIDEO_SCALE", "1"))
+VW, VH = int(round(1280 * SCALE)), int(round(720 * SCALE))
 
 scenes = json.loads((ROOT / "scenes-60.json").read_text())
 
@@ -52,7 +55,7 @@ def build_clip(i: int, scene: dict) -> pathlib.Path:
         return clip  # already encoded — skip (rerun-safe)
     zoom_expr = "min(1.0+0.00035*on,1.09)"
     fc = (
-        f"[0:v]zoompan=z='{zoom_expr}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1280x720:fps={FPS},"
+        f"[0:v]zoompan=z='{zoom_expr}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={VW}x{VH}:fps={FPS},"
         f"format=yuv420p[v];"
         f"[1:a]aresample=48000,adelay={int(LEAD_S*1000)}|{int(LEAD_S*1000)},apad=pad_dur={TAIL_S+0.5}[a]"
     )
@@ -89,7 +92,7 @@ def main() -> None:
     ])
     final_dur = media_duration(FINAL)
     size_mb = FINAL.stat().st_size / 1e6
-    print(f"FINAL: {FINAL} — {final_dur:.1f}s (target ≈60 s), {size_mb:.1f} MB, clips-sum {total:.1f}s")
+    print(f"FINAL: {FINAL} — {final_dur:.1f}s (target ≈60 s), {size_mb:.1f} MB, clips-sum {total:.1f}s, {VW}x{VH}")
 
 
 if __name__ == "__main__":

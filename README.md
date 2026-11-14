@@ -103,12 +103,13 @@ bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the schedule
 ## Hackathon submission package
 
 - `download/hackathon/terrafield-atlas-demo.mp4` — 2:44 end-to-end demo with voice narration (agent-browser captures → Pillow compositing → z-ai TTS → ffmpeg).
-- `download/hackathon/terrafield-atlas-demo-60s.mp4` — **55.8 s cut for the submission form** (6 scenes, condensed `jam` narration at speed 1.25, same pipeline; `NN/06` scene counters).
+- `download/hackathon/terrafield-atlas-demo-60s.mp4` — **56.5 s final take for the submission form at 1920×1080** (6 scenes, condensed `jam` narration at speed 1.25, native 1080p compositing; `NN/06` scene counters). Judges'-screen resolution assumption: 16:9 → 1920×1080; re-render at any target with `TF_VIDEO_SCALE=<factor> bash scripts/demo-video/build_final_take.sh` (1.0 → 1280×720, 1.5 → 1920×1080).
 - `download/hackathon/narration-script.md` — the 10-scene narration script; `download/hackathon/narration-script-60.md` — the 60 s cut script.
 - `download/hackathon/SUBMISSION.md` — the submission write-up (pitch, feature map, architecture, judging mapping).
 - `download/hackathon/exits/` — durable signed-delivery proof: `webhook-deliveries.jsonl` (per-POST HMAC scheme verdicts from the verification receiver) + `smtp-deliveries.jsonl` (per-message SMTP transcripts from the verification sink).
 - `scripts/demo-video/` — the reproducible pipeline (frames, compositor, TTS generator, ffmpeg assembly; `*-60s` variants for the cut).
 - `scripts/arm-digest-exits.sh` + `scripts/exercise-digest-exits.sh` — arm both signed exits live and exercise them end-to-end through the real scheduler.
+- `scripts/webhook-receiver.mjs` — the local **ops relay**: a verification-first receiver (`node scripts/webhook-receiver.mjs <port> <jsonl-path> <tolerance-ms>`, default 4317) that checks `x-terrafield-signature` per scheme, refuses replays, and appends one JSONL verdict per POST — `DIGEST_WEBHOOK_URL` points at it with `DIGEST_WEBHOOK_ALLOWLIST=127.0.0.1:4317` as the explicit operator opt-in.
 
 ## Documentation
 

@@ -9,6 +9,7 @@ ffmpeg assembly step turns into the narrated demo video.
 Mission palette matches the console: void navy, NASA blue, ember accents.
 """
 import json
+import os
 import pathlib
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -17,7 +18,12 @@ FRAMES = ROOT / "frames"
 OUT = ROOT / "composed"
 OUT.mkdir(exist_ok=True)
 
-W, H = 1280, 720
+# Design space is 1280×720; TF_VIDEO_SCALE (default 1.0) renders every card
+# natively at scale× that (e.g. 1.5 → 1920×1080 for the judges'-screen final
+# take). Coordinates and font sizes are scaled by a draw proxy — no layout
+# literals are touched.
+SCALE = float(os.environ.get("TF_VIDEO_SCALE", "1"))
+W, H = int(round(1280 * SCALE)), int(round(720 * SCALE))
 VOID = (5, 9, 20)
 PANEL = (10, 16, 31)
 NASA = (90, 200, 250)
@@ -31,7 +37,43 @@ EDGE = (38, 48, 66)
 
 F = "/usr/share/fonts/truetype/dejavu/"
 def font(name: str, size: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(F + name, size)
+    return ImageFont.truetype(F + name, max(1, int(round(size * SCALE))))
+
+
+class _ScaledDraw:
+    """Draw proxy that scales every coordinate and stroke width by SCALE."""
+
+    def __init__(self, d: ImageDraw.ImageDraw) -> None:
+        self._d = d
+
+    def _pt(self, xy):  # point, box, or list of points
+        if isinstance(xy, (list, tuple)):
+            if xy and isinstance(xy[0], (list, tuple)):
+                return [tuple(int(round(c * SCALE)) for c in p) for p in xy]
+            return tuple(int(round(c * SCALE)) for c in xy)
+        return xy
+
+    @staticmethod
+    def _width(kw: dict) -> dict:
+        if "width" in kw:
+            kw["width"] = max(1, int(round(kw["width"] * SCALE)))
+        return kw
+
+    def text(self, xy, txt, **kw):
+        return self._d.text(self._pt(xy), txt, **kw)
+
+    def line(self, xy, **kw):
+        return self._d.line(self._pt(xy), **self._width(kw))
+
+    def rectangle(self, box, **kw):
+        return self._d.rectangle(self._pt(box), **self._width(kw))
+
+    def ellipse(self, box, **kw):
+        return self._d.ellipse(self._pt(box), **self._width(kw))
+
+
+def Draw(img: Image.Image) -> _ScaledDraw:
+    return _ScaledDraw(ImageDraw.Draw(img))
 
 F_MONO = "DejaVuSansMono.ttf"
 F_MONO_B = "DejaVuSansMono-Bold.ttf"
@@ -53,16 +95,17 @@ def kicker(draw, xy, text, color, size=13):
 
 def title_card() -> Image.Image:
     img = Image.new("RGB", (W, H), VOID)
-    d = ImageDraw.Draw(img)
+    d = Draw(img)
     crosshair_grid(d)
     # glow band
-    band = Image.new("RGB", (W, 160), VOID)
-    bd = ImageDraw.Draw(band)
-    for i in range(160):
-        t = abs(80 - i) / 80
+    bh = int(round(160 * SCALE))
+    band = Image.new("RGB", (W, bh), VOID)
+    bd = Draw(band)
+    for i in range(bh):
+        t = abs(bh / 2 - i) / (bh / 2)
         bd.line([(0, i), (W, i)], fill=(int(20 * (1 - t)), int(60 * (1 - t)), int(110 * (1 - t))))
-    img.paste(band.filter(ImageFilter.GaussianBlur(6)), (0, 210))
-    d = ImageDraw.Draw(img)
+    img.paste(band.filter(ImageFilter.GaussianBlur(6 * SCALE)), (0, int(round(210 * SCALE))))
+    d = Draw(img)
     # mission patch: concentric reticle
     cx, cy, r = 200, 320, 70
     for rr, c in [(r + 14, EDGE), (r, NASA), (r - 26, EDGE)]:
@@ -86,7 +129,7 @@ def title_card() -> Image.Image:
 
 def closing_card() -> Image.Image:
     img = Image.new("RGB", (W, H), VOID)
-    d = ImageDraw.Draw(img)
+    d = Draw(img)
     crosshair_grid(d)
     kicker(d, (64, 90), "MISSION SUMMARY", NASA, 15)
     rows = [
@@ -108,9 +151,9 @@ def closing_card() -> Image.Image:
 
 
 def hud_label(img: Image.Image, label: str, idx: int, total: int) -> Image.Image:
-    bar_h = 46
+    bar_h = int(round(46 * SCALE))
     out = img.copy()
-    d = ImageDraw.Draw(out)
+    d = Draw(out)
     # top-left HUD chip
     d.rectangle([0, 0, 560, bar_h], fill=(7, 12, 24))
     d.rectangle([0, 0, 4, bar_h], fill=EMBER)
@@ -122,7 +165,8 @@ def hud_label(img: Image.Image, label: str, idx: int, total: int) -> Image.Image
 
 def shot_frame(name: str, label: str, idx: int, total: int) -> Image.Image:
     src = Image.open(FRAMES / name).convert("RGB")
-    # 1600×900 → cover 1280×720 (exact 0.8 scale, no crop needed)
+    # 1600×900 capture → cover the design frame (0.8 scale at 1280×720;
+    # at TF_VIDEO_SCALE=1.5 the capture upscales 1.2× with LANCZOS)
     if src.size != (W, H):
         src = src.resize((W, H), Image.LANCZOS)
     return hud_label(src, label, idx, total)
