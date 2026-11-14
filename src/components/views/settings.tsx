@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react';
 import { motion, type Variants } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
-import { Settings, Activity, Database, Zap, RefreshCw, ServerCog, ShieldAlert } from 'lucide-react';
+import { Settings, Activity, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -51,9 +53,44 @@ export function SettingsView() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['system-status'] });
       toast({ title: 'Cache invalidated', description: 'Provider responses will be re-fetched on next use.' });
+      logEvent({
+        severity: 'info',
+        category: 'SYSTEM',
+        title: 'Provider response cache invalidated',
+        detail: 'Operations request accepted — provider responses will be re-fetched with fresh retrieval times on next use.',
+        view: 'settings',
+      });
     },
-    onError: () => toast({ title: 'Cache invalidation failed', description: 'The operations request did not complete.', variant: 'destructive' }),
+    onError: () => {
+      toast({ title: 'Cache invalidation failed', description: 'The operations request did not complete.', variant: 'destructive' });
+      logEvent({
+        severity: 'warn',
+        category: 'SYSTEM',
+        title: 'Cache invalidation request failed',
+        detail: 'The operations request did not complete; cached provider responses remain in force.',
+        view: 'settings',
+      });
+    },
   });
+
+  const exportSystemSnapshot = () => {
+    const d = status.data;
+    if (!d) return;
+    const rows = Object.entries(d.providers).map(([name, info]) => [name, info.status, info.note ?? '']);
+    downloadCsv(
+      `terrafield-system-snapshot-${timestampSlug()}`,
+      ['provider', 'status', 'note'],
+      rows,
+    );
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'System health snapshot exported as CSV',
+      detail: `Engines: ${d.engines.trendEngine.split(',')[0]}… · providers: ${rows.map((r) => `${r[0]}=${r[1]}`).join(', ')}. Snapshot of a live poll, timestamped in the filename.`,
+      view: 'settings',
+    });
+    toast({ title: 'System snapshot exported', description: 'Provider availability snapshot written to CSV.' });
+  };
 
   const s = status.data;
 
@@ -65,23 +102,35 @@ export function SettingsView() {
           title="System Health"
           description="Engines, database counts, response cache, circuit breakers and provider availability — the operational state behind every number in the console."
           actions={
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn('h-8 uppercase', MONO_BTN)}
-              onClick={() => status.refetch()}
-              disabled={status.isFetching}
-            >
-              {status.isFetching ? (
-                <>
-                  <span className="anim-blink h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden /> Polling…
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh status
-                </>
-              )}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn('h-8 uppercase', MONO_BTN)}
+                onClick={() => status.refetch()}
+                disabled={status.isFetching}
+              >
+                {status.isFetching ? (
+                  <>
+                    <span className="anim-blink h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden /> Polling…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh status
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportSystemSnapshot}
+                disabled={!status.data}
+                className={cn('h-8 uppercase', MONO_BTN)}
+                aria-label="Export the system health snapshot as CSV"
+              >
+                <FileDown className="h-3.5 w-3.5" aria-hidden /> Export snapshot
+              </Button>
+            </div>
           }
         />
       </motion.div>

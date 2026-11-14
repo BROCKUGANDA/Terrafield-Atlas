@@ -6,6 +6,8 @@ import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api, ApiRequestError, type FireQueryResponse } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -14,7 +16,7 @@ import { FireCalendarChart } from '@/components/charts/scientific-charts';
 import { SectionHeader, StatusPill, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel, EmptyState } from '@/components/system/query-state';
 import { StatSkeletonRow, SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
-import { Flame, Loader2, Download, ShieldAlert, MapPin } from 'lucide-react';
+import { Flame, Loader2, Download, ShieldAlert, MapPin, FileDown } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -67,10 +69,25 @@ export function FireIntelligenceView() {
         title: 'VIIRS fire record ingested',
         description: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${res.rowsWritten.toLocaleString()} new rows)${res.noDataDays.length ? `; ${res.noDataDays.length} day(s) had no archive data (reported, not fabricated)` : ''}.`,
       });
+      logEvent({
+        severity: 'success',
+        category: 'FIRE',
+        title: 'VIIRS fire detections ingested',
+        detail: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${res.rowsWritten.toLocaleString()} new rows) for ${location.label}, ${range.from} → ${range.to}.${res.noDataDays.length ? ` ${res.noDataDays.length} day(s) had no archive data — reported as missing, not fabricated.` : ''}`,
+        view: 'fire',
+      });
       setQueryKey((k) => k + 1);
     },
     onError: (err) => {
       toast({ title: 'Fire ingestion failed', description: err instanceof ApiRequestError ? err.message : 'error', variant: 'destructive' });
+      logEvent({
+        severity: 'crit',
+        category: 'FIRE',
+        title: 'VIIRS fire ingestion failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error; no detections written.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'fire',
+      });
     },
   });
 
@@ -89,6 +106,35 @@ export function FireIntelligenceView() {
       })),
     });
     setView('explorer');
+  };
+
+  const exportDetections = () => {
+    const d = fires.data;
+    if (!d) return;
+    const rows = d.detections.map((det) => [
+      det.date,
+      det.time,
+      det.latitude,
+      det.longitude,
+      det.confidence,
+      det.dayNight === 'D' ? 'day' : 'night',
+      det.frp ?? '',
+      det.brightTi4 ?? '',
+      det.sensor,
+    ]);
+    downloadCsv(
+      `terrafield-fire-detections-${timestampSlug()}`,
+      ['date', 'timeUtc', 'latitude', 'longitude', 'confidence', 'dayNight', 'frpMW', 'brightTi4K', 'sensor'],
+      rows,
+    );
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Fire detections exported as CSV',
+      detail: `${rows.length} VIIRS 375 m detections for ${location.label}${d.truncated ? ' (API window truncated — the export covers exactly what the ledger shows)' : ''}. Source: ${d.source}.`,
+      view: 'fire',
+    });
+    toast({ title: 'Detections exported', description: `${rows.length} real VIIRS rows written to CSV.` });
   };
 
   const rangeInvalid = range.to < range.from;
@@ -282,11 +328,21 @@ export function FireIntelligenceView() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="ml-auto h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+                    className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
                     onClick={() => showOnMap(fires.data)}
                   >
                     <MapPin className="h-3.5 w-3.5" aria-hidden />
                     Show on map
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={exportDetections}
+                    className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:border-aqua/50 hover:text-aqua"
+                    aria-label="Export fire detections as CSV"
+                  >
+                    <FileDown className="h-3.5 w-3.5" aria-hidden />
+                    Export CSV
                   </Button>
                 </div>
                 <div className="max-h-96 overflow-y-auto overflow-x-auto rounded-sm border border-edge">

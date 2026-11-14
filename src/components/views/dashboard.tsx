@@ -5,13 +5,15 @@ import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { SectionHeader, StatusPill, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel, EmptyState, LoadingChip } from '@/components/system/query-state';
 import { SkeletonPanel, SkeletonRows, StatSkeletonRow, SweepLoader } from '@/components/system/skeletons';
-import { Download, MapPin, Database, Loader2, Activity } from 'lucide-react';
+import { Download, MapPin, Database, Loader2, Activity, FileDown } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -42,9 +44,21 @@ export function DashboardView() {
   const ingest = useMutation({
     mutationFn: () => api.ingest(activeFarmId ? { farmId: activeFarmId, years: 12 } : { lat: location.lat, lon: location.lon, years: 12 }),
     onSuccess: (res) => {
+      const idempotent = res.outcome.rowsWritten === 0 && res.outcome.validPoints > 0;
       toast({
-        title: 'NASA POWER record ingested',
-        description: `${res.outcome.rowsWritten.toLocaleString()} real observations stored (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported.`,
+        title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
+        description: idempotent
+          ? `0 new rows — all ${res.outcome.validPoints.toLocaleString()} real points for this window are already stored (idempotent upsert on variable+date). Re-verified against POWER ${res.outcome.start} → ${res.outcome.end}.`
+          : `${res.outcome.rowsWritten.toLocaleString()} real observations stored (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported.`,
+      });
+      logEvent({
+        severity: 'success',
+        category: 'INGEST',
+        title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
+        detail: idempotent
+          ? `Idempotent re-ingest for ${location.label}: ${res.outcome.validPoints.toLocaleString()} real points re-verified from POWER (${res.outcome.start} → ${res.outcome.end}); 0 new rows because every variable+date is already stored. Nothing duplicated, nothing fabricated.`
+          : `${res.outcome.rowsWritten.toLocaleString()} real observations for ${location.label} (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported as missing.`,
+        view: 'dashboard',
       });
       queryClient.invalidateQueries({ queryKey: ['system-status'] });
       queryClient.invalidateQueries({ queryKey: ['observations'] });
@@ -54,6 +68,14 @@ export function DashboardView() {
         title: 'POWER ingestion failed',
         description: err instanceof ApiRequestError ? err.message : 'Unexpected error. No data fabricated.',
         variant: 'destructive',
+      });
+      logEvent({
+        severity: 'crit',
+        category: 'INGEST',
+        title: 'POWER ingestion failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error; no data fabricated.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'dashboard',
       });
     },
   });
@@ -66,6 +88,23 @@ export function DashboardView() {
 
   const recentIngest = obs.data;
   const seriesEntries = Object.entries(obs.data?.series ?? {});
+
+  const exportObservations = () => {
+    if (!obs.data) return;
+    const rows: unknown[][] = [];
+    for (const [variable, s] of seriesEntries) {
+      for (const p of s.points) rows.push([variable, p.date, p.value === null ? '' : p.value, s.unit]);
+    }
+    downloadCsv(`terrafield-observations-${timestampSlug()}`, ['variable', 'date', 'value', 'unit'], rows);
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Observations exported as CSV',
+      detail: `${rows.length.toLocaleString()} stored rows for ${location.label} — missing days exported as empty cells, never substituted.`,
+      view: 'dashboard',
+    });
+    toast({ title: 'Observations exported', description: `${rows.length.toLocaleString()} stored rows written to CSV (${obs.data.datasetVersions.join(', ') || 'source version pending'}).` });
+  };
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -85,7 +124,7 @@ export function DashboardView() {
                 }}
               >
                 <SelectTrigger
-                  className="h-9 w-full border-edge bg-panel text-xs text-dim sm:w-72"
+                  className="h-9 w-full max-w-full border-edge bg-panel text-xs text-dim sm:w-72"
                   aria-label="Select demo region"
                   disabled={regions.isLoading}
                 >
@@ -254,11 +293,23 @@ export function DashboardView() {
       {/* Recent observations & data coverage */}
       <Reveal i={5}>
         <HudPanel calm className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Database className="h-4 w-4 text-aqua" aria-hidden />
             <h3 className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">
               Recent observations &amp; data coverage
             </h3>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportObservations}
+              disabled={!obs.data || seriesEntries.length === 0}
+              className="ml-auto h-7 gap-1.5 border-edge bg-transparent font-mono text-[10px] uppercase tracking-wide-mc text-dim hover:border-aqua/50 hover:text-aqua"
+              aria-label="Export stored observations as CSV"
+              title="Export the stored real observations (with missing days as empty cells) as CSV"
+            >
+              <FileDown className="h-3 w-3" aria-hidden />
+              Export CSV
+            </Button>
           </div>
           <QueryState
             isLoading={obs.isLoading}
@@ -300,7 +351,7 @@ export function DashboardView() {
               />
             }
           >
-            <div className="max-h-96 overflow-y-auto rounded-sm border border-edge">
+            <div className="max-h-96 overflow-x-auto overflow-y-auto rounded-sm border border-edge">
               <table className="mc-table w-full">
                 <thead className="sticky top-0 z-10 bg-panel">
                   <tr className="border-b border-edge">

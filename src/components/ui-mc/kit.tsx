@@ -33,7 +33,7 @@ export function SectionHeader({
         <h2 className="mt-2 font-display text-xl font-bold uppercase tracking-wide-mc text-ink sm:text-2xl">{title}</h2>
         {description && <p className="mt-2 text-sm leading-relaxed text-dim">{description}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2.5">{actions}</div>}
+      {actions && <div className="flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2.5">{actions}</div>}
     </div>
   );
 }

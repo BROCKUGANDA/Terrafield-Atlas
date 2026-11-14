@@ -438,3 +438,116 @@
   font-size: 0.75rem;
   color: var(--dim);
 }
+
+/* ------------------------------------------------------------------ */
+/* Print-light theme — field documents print clean on white            */
+/* The mission console is forced dark on screen; when an operator      */
+/* prints a Field Report (Ctrl+P or the report PRINT action), the      */
+/* whole theme flips to an ink-on-paper palette so the document can    */
+/* travel to the field.                                               */
+/* ------------------------------------------------------------------ */
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  :root,
+  .dark {
+    --void: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f3f5f7;
+    --edge: #c8cfd8;
+    --ink: #131c28;
+    --dim: #33414f;
+    --faint: #5a6674;
+    --nasa: #a8230f;
+    --signal: #0c6b43;
+    --aqua: #0e5d84;
+    --caution: #7a5e0a;
+    --crit: #96201f;
+    --sidebar: #ffffff;
+    --popover: #ffffff;
+    --background: #ffffff;
+    --foreground: #131c28;
+    --card: #ffffff;
+    --card-foreground: #131c28;
+    --muted: #f3f5f7;
+    --muted-foreground: #33414f;
+    --accent: rgba(168, 35, 15, 0.08);
+    --accent-foreground: #7a1a0c;
+    --border: #c8cfd8;
+    --input: #c8cfd8;
+    --ring: #a8230f;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background: #ffffff !important;
+    background-image: none !important;
+  }
+
+  /* Hide interactive console chrome: rails, command bar, footer, strips */
+  aside,
+  header,
+  footer,
+  [data-print-hidden],
+  .sticky {
+    display: none !important;
+  }
+
+  /* The console viewport becomes the paper */
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  .print-only {
+    display: block;
+  }
+
+  /* HUD panels become clean report blocks */
+  .hud {
+    background: #ffffff !important;
+    border: 1px solid #c8cfd8 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .hud::before,
+  .hud::after {
+    content: none !important;
+  }
+
+  .grid-bg,
+  .starfield {
+    background-image: none !important;
+  }
+  .scanlines::after {
+    content: none !important;
+  }
+  .sweep-mc,
+  .anim-blink,
+  .anim-pulse-soft,
+  .anim-float,
+  .anim-spin-slow,
+  .anim-fade-up,
+  .skeleton-mc::after {
+    animation: none !important;
+  }
+
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+
+  tr,
+  img,
+  svg {
+    break-inside: avoid;
+  }
+}
+
+/* force-recompile */

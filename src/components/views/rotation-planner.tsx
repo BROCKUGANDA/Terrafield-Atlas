@@ -5,6 +5,8 @@ import { motion, type Variants } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api, ApiRequestError, type CropDef, type RotationResult } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, downloadJson, timestampSlug } from '@/lib/export';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +18,7 @@ import { Kicker, SectionHeader, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, EmptyState, FaultPanel, LoadingChip } from '@/components/system/query-state';
 import { SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
 import { RainfallProfileChart } from '@/components/charts/scientific-charts';
-import { Sprout, Plus, X, Trophy, BookOpen, Scale, Droplets, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { Sprout, Plus, X, Trophy, BookOpen, Scale, Droplets, AlertTriangle, ShieldAlert, FileDown, Braces } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -84,6 +86,14 @@ export function RotationPlannerView() {
         title: 'Comparison complete',
         description: `${res.results.length} alternatives scored. Environment: ${res.environmentAvailable.rainfall ? 'POWER rainfall ✓' : 'no rainfall ✗'}; soil: ${res.soilAvailable.source ?? 'none'}.`,
       });
+      const winner = res.ranking.find((r) => r.rank === 1);
+      logEvent({
+        severity: 'success',
+        category: 'ROTATION',
+        title: `${res.results.length} rotation alternatives scored`,
+        detail: `Top match: “${winner?.scenarioName ?? '—'}” (${Math.round((winner?.overallScore ?? 0) * 100)}% score, ${Math.round((winner?.confidence ?? 0) * 100)}% confidence) under the farmer priorities set. Rules ${res.results[0]?.ruleVersion ?? '—'}. Environmental evidence: rainfall ${res.environmentAvailable.rainfall ? 'available' : 'missing'}, soil ${res.soilAvailable.source ?? 'none'}. Rank 1 is the best rule match — not a yield forecast.`,
+        view: 'rotation',
+      });
     },
     onError: (err) => {
       toast({
@@ -91,8 +101,82 @@ export function RotationPlannerView() {
         description: err instanceof ApiRequestError ? err.message : 'error',
         variant: 'destructive',
       });
+      logEvent({
+        severity: 'crit',
+        category: 'ROTATION',
+        title: 'Rotation comparison failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error; no scores produced.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'rotation',
+      });
     },
   });
+
+  const exportComparisonCsv = () => {
+    const d = compare.data;
+    if (!d) return;
+    const rows: unknown[][] = [];
+    for (const r of d.ranking) {
+      const res = d.results.find((x) => x.scenarioName === r.scenarioName);
+      const seq = res?.cropNames.join(' → ') ?? '';
+      const factors = res?.factors ?? [];
+      if (factors.length === 0) {
+        rows.push([r.scenarioName, r.rank, seq, (r.overallScore * 100).toFixed(1), (r.confidence * 100).toFixed(1), '', '', '', '', '']);
+      }
+      for (const f of factors) {
+        rows.push([
+          r.scenarioName,
+          r.rank,
+          seq,
+          (r.overallScore * 100).toFixed(1),
+          (r.confidence * 100).toFixed(1),
+          f.criterion,
+          f.weight.toFixed(2),
+          f.score === null ? 'missing' : (f.score * 100).toFixed(1),
+          f.missingDataReason ?? '',
+          f.explanation,
+        ]);
+      }
+    }
+    downloadCsv(
+      `terrafield-rotation-comparison-${timestampSlug()}`,
+      ['scenario', 'rank', 'sequence', 'overallScore%', 'confidence%', 'criterion', 'weight', 'score%', 'missingReason', 'explanation'],
+      rows,
+    );
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Rotation comparison exported as CSV',
+      detail: `${d.results.length} scenarios × criterion-level scores. Missing criteria exported as “missing” — never substituted.`,
+      view: 'rotation',
+    });
+    toast({ title: 'Comparison exported', description: `${rows.length} criterion rows written to CSV.` });
+  };
+
+  const exportComparisonJson = () => {
+    const d = compare.data;
+    if (!d) return;
+    downloadJson(`terrafield-rotation-comparison-${timestampSlug()}`, {
+      exportedAt: new Date().toISOString(),
+      jobId: d.jobId,
+      farmId: d.farmId,
+      ruleVersion: d.results[0]?.ruleVersion ?? null,
+      environmentAvailable: d.environmentAvailable,
+      soilAvailable: d.soilAvailable,
+      ranking: d.ranking,
+      results: d.results,
+      prioritiesUsed: priorities,
+      scenariosSubmitted: scenarios.map((s) => ({ name: s.name, cropKeys: s.cropKeys })),
+    });
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Rotation comparison exported as JSON',
+      detail: 'Full deterministic engine output incl. per-criterion factors, incompatibilities and missing-information lists.',
+      view: 'rotation',
+    });
+    toast({ title: 'Comparison exported', description: 'Full engine output written to JSON.' });
+  };
 
   const rainfallProfile = useQuery({
     queryKey: ['obs-profile', activeFarmId],
@@ -375,9 +459,29 @@ export function RotationPlannerView() {
                   evidence was available. Rank 1 is only the best match under the weights above — not a yield forecast.
                 </p>
               </div>
-              <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
-                rules {compare.data.results[0]?.ruleVersion ?? '—'}
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
+                  rules {compare.data.results[0]?.ruleVersion ?? '—'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportComparisonCsv}
+                  className="h-7 gap-1.5 border-edge bg-transparent font-mono text-[10px] uppercase tracking-wide-mc text-dim hover:border-aqua/50 hover:text-aqua"
+                  aria-label="Export the comparison as CSV"
+                >
+                  <FileDown className="h-3 w-3" aria-hidden /> CSV
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportComparisonJson}
+                  className="h-7 gap-1.5 border-edge bg-transparent font-mono text-[10px] uppercase tracking-wide-mc text-dim hover:border-iris/50 hover:text-iris"
+                  aria-label="Export the full engine output as JSON"
+                >
+                  <Braces className="h-3 w-3" aria-hidden /> JSON
+                </Button>
+              </div>
             </div>
 
             <Accordion type="single" collapsible className="mt-4">

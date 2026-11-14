@@ -2,8 +2,10 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { ShieldAlert, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { useSession } from '@/components/state/store';
 
 /**
  * Global operations banner. Critical-infrastructure behavior: when any data
@@ -26,6 +28,23 @@ export function DegradedBanner() {
     ? 'link-lost'
     : degradedSources.map((s) => s.datasetName).sort().join('|');
   const active = (linkLost || degradedSources.length > 0) && signature !== dismissedSignature;
+
+  // Critical-infra auditing: every distinct degradation state is written to the
+  // mission log exactly once (re-appearing after dismissal re-logs it).
+  const loggedSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!active || loggedSignatureRef.current === signature) return;
+    loggedSignatureRef.current = signature;
+    logEvent({
+      severity: 'warn',
+      category: 'SYSTEM',
+      title: linkLost ? 'Operations link degraded' : `Partial telemetry — ${degradedSources.length} provider${degradedSources.length > 1 ? 's' : ''} degraded`,
+      detail: linkLost
+        ? 'Console API unreachable; automatic retries in flight. Data shown may be stale — no substitution.'
+        : `${degradedSources.map((s) => s.datasetName.split('(')[0].trim()).join(', ')} degraded. Affected views show real data only; no substitution and no fabricated fallbacks.`,
+      view: useSession.getState().view,
+    });
+  }, [active, signature, linkLost, degradedSources]);
 
   if (!active) return null;
 

@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { logEvent } from '@/components/state/log-store';
 
 export type ViewKey =
   | 'landing'
@@ -97,16 +98,35 @@ export const useSession = create<SessionState>()(
       rotationPriorities: DEFAULT_ROTATION_PRIORITIES,
       setRotationPriorities: (rotationPriorities) => set({ rotationPriorities }),
       operator: null,
-      login: (callsign) =>
+      login: (callsign) => {
+        const cs = callsign.trim().toUpperCase() || 'GUEST';
         set({
           operator: {
-            callsign: callsign.trim().toUpperCase() || 'GUEST',
+            callsign: cs,
             role: 'mission-observer',
             authenticatedAt: new Date().toISOString(),
           },
           view: 'dashboard',
-        }),
-      logout: () => set({ operator: null, view: 'landing' }),
+        });
+        logEvent({
+          severity: 'success',
+          category: 'AUTH',
+          title: `Operator session opened — ${cs}`,
+          detail: 'Demo console access (local callsign, no real credentials). Session persisted for the next visit.',
+          view: 'dashboard',
+        });
+      },
+      logout: () => {
+        const cs = useSession.getState().operator?.callsign ?? 'guest';
+        set({ operator: null, view: 'landing' });
+        logEvent({
+          severity: 'info',
+          category: 'AUTH',
+          title: 'Operator signed out',
+          detail: `Session ended for ${cs}; console state kept for the next sign-in.`,
+          view: 'landing',
+        });
+      },
     }),
     {
       name: 'terrafield-console-session',

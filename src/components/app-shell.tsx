@@ -8,12 +8,15 @@ import {
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
+import { useConsoleHotkeys } from '@/hooks/use-console-hotkeys';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MissionPatch } from '@/components/ui-mc/logo';
 import { DegradedBanner } from '@/components/system/degraded-banner';
 import { ErrorBoundary } from '@/components/system/error-boundary';
+import { CommandPalette, CommandPaletteTrigger, ShortcutsHelp } from '@/components/system/command-palette';
+import { MissionLogButton } from '@/components/system/mission-log';
 import { cn } from '@/lib/utils';
 
 const NAV: { key: ViewKey; label: string; short: string; icon: React.ComponentType<{ className?: string }>; group: string }[] = [
@@ -56,9 +59,36 @@ function MissionClock() {
   );
 }
 
+/** Honest link-check countdown: seconds until the next REAL system-health poll. */
+function LinkCheck({ dataUpdatedAt, isFetching }: { dataUpdatedAt: number; isFetching: boolean }) {
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setLeft(Math.max(0, Math.round((dataUpdatedAt + 120_000 - Date.now()) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [dataUpdatedAt]);
+  return (
+    <span
+      className={cn('telemetry hidden items-center gap-1 whitespace-nowrap text-[10px] lg:flex', isFetching ? 'text-aqua' : 'text-faint')}
+      title="Automatic system-health poll every 120 s — a real console liveness check, not live field telemetry."
+      suppressHydrationWarning
+    >
+      {isFetching ? (
+        <span className="anim-blink">chk···</span>
+      ) : (
+        <span>
+          chk T-{left === null ? '--' : String(left).padStart(2, '0')}s
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { view, setView, location, activeFarmId, setActiveFarmId, operator, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
+  useConsoleHotkeys(!!operator);
 
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 120_000, retry: 1 });
   const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1 });
@@ -165,6 +195,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </SheetTrigger>
                 <SheetContent side="left" className="w-72 border-edge bg-sidebar p-0" aria-label="Console navigation">
                   <SheetTitle className="sr-only">Console navigation</SheetTitle>
+                  <SheetDescription className="sr-only">
+                    Mission modules: overview, earth intelligence, geospatial explorer, analysis, fire intelligence, farm workspace, rotation planner, reports, provenance and system health.
+                  </SheetDescription>
                   {navContent}
                 </SheetContent>
               </Sheet>
@@ -184,6 +217,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
               <div className="ml-auto flex items-center gap-3">
                 <MissionClock />
+                <LinkCheck dataUpdatedAt={health.dataUpdatedAt} isFetching={health.isFetching} />
 
                 <button
                   type="button"
@@ -226,6 +260,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Select>
 
                 {operator && (
+                  <>
+                    <CommandPaletteTrigger className="hidden sm:inline-flex" />
+                    <MissionLogButton />
+                  </>
+                )}
+
+                {operator && (
                   <button
                     type="button"
                     onClick={logout}
@@ -243,6 +284,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </header>
 
           <DegradedBanner />
+
+          {/* Console overlays — ⌘K command palette and ? shortcuts help */}
+          <CommandPalette />
+          <ShortcutsHelp />
 
           {/* Console viewport — each module is fault-isolated */}
           <main id="main" className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">

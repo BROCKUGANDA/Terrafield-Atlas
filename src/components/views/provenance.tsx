@@ -5,11 +5,14 @@ import { motion, type Variants } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { useSession } from '@/components/state/store';
 import { api } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, EmptyState, FaultPanel } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
-import { ScrollText, Database, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { ScrollText, Database, RefreshCw, CheckCircle2, XCircle, FileDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -42,6 +45,7 @@ function providerStatus(last: number | null): string {
 /** Evidence & Provenance: request ledger, source register, methodology pointer. */
 export function ProvenanceView() {
   const { setView } = useSession();
+  const { toast } = useToast();
   const [provider, setProvider] = useState<string>('all');
   const provenance = useQuery({
     queryKey: ['provenance', provider],
@@ -52,6 +56,36 @@ export function ProvenanceView() {
   const logs = (provenance.data?.requestLog ?? []).filter((l) => provider === 'all' || l.provider === provider);
   const providers = [...new Set((provenance.data?.requestLog ?? []).map((l) => l.provider))];
 
+  const exportLedger = () => {
+    const d = provenance.data;
+    if (!d) return;
+    const rows = d.requestLog.map((l) => [
+      l.retrievedAt,
+      l.provider,
+      l.datasetId ?? '',
+      l.operation,
+      l.status,
+      l.ok ? 'ok' : 'failed',
+      l.latencyMs,
+      l.responseBytes ?? '',
+      l.correlationId ?? '',
+      l.errorDetail ?? '',
+    ]);
+    downloadCsv(
+      `terrafield-provenance-ledger-${timestampSlug()}`,
+      ['retrievedAt', 'provider', 'dataset', 'operation', 'httpStatus', 'result', 'latencyMs', 'responseBytes', 'correlationId', 'errorDetail'],
+      rows,
+    );
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Provenance ledger exported as CSV',
+      detail: `${rows.length} provider requests incl. failures — status, latency, response size, correlation ID and retrieval timestamp.`,
+      view: 'provenance',
+    });
+    toast({ title: 'Provenance exported', description: `${rows.length} ledger rows written to CSV — failures included, nothing filtered.` });
+  };
+
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <motion.div variants={RISE} custom={0} initial="hidden" whileInView="show" viewport={{ once: true }}>
@@ -60,23 +94,35 @@ export function ProvenanceView() {
           title="Evidence & Provenance"
           description="Every external request this platform has made, successful or not, with status, latency, response size, correlation ID and retrieval timestamp. This is the evidence chain behind every number shown elsewhere."
           actions={
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn('h-8 uppercase', MONO_BTN)}
-              onClick={() => provenance.refetch()}
-              disabled={provenance.isFetching}
-            >
-              {provenance.isFetching ? (
-                <>
-                  <span className="anim-blink h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden /> Syncing…
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh ledger
-                </>
-              )}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn('h-8 uppercase', MONO_BTN)}
+                onClick={() => provenance.refetch()}
+                disabled={provenance.isFetching}
+              >
+                {provenance.isFetching ? (
+                  <>
+                    <span className="anim-blink h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden /> Syncing…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh ledger
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportLedger}
+                disabled={!provenance.data || provenance.data.requestLog.length === 0}
+                className={cn('h-8 uppercase', MONO_BTN)}
+                aria-label="Export the provider request ledger as CSV"
+              >
+                <FileDown className="h-3.5 w-3.5" aria-hidden /> Export CSV
+              </Button>
+            </div>
           }
         />
       </motion.div>

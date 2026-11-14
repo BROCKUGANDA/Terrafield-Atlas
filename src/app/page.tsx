@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { AppShell } from '@/components/app-shell';
 import { useSession } from '@/components/state/store';
+import { useConsoleUrlSync } from '@/hooks/use-console-sync';
 import { LandingView } from '@/components/views/landing';
 import { DashboardView } from '@/components/views/dashboard';
 import { ExplorerView } from '@/components/views/explorer';
@@ -24,6 +25,10 @@ export default function Home() {
   const view = useSession((s) => s.view);
   const operator = useSession((s) => s.operator);
   const activeView = operator ? view : 'landing';
+
+  // Mirror console state (view / farm / region) into the URL fragment so an
+  // exact console position is bookmarkable and shareable.
+  useConsoleUrlSync(!!operator);
 
   return (
     <AppShell>

@@ -5,6 +5,7 @@ import { motion, type Variants } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError, type SoilTest } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -59,9 +60,24 @@ export function FarmWorkspaceView() {
       queryClient.invalidateQueries({ queryKey: ['farms'] });
       queryClient.invalidateQueries({ queryKey: ['farm'] });
       toast({ title: 'Farm created', description: `${res.farm.name} at ${res.farm.centroidLat.toFixed(3)}, ${res.farm.centroidLon.toFixed(3)}.` });
+      logEvent({
+        severity: 'success',
+        category: 'FARM',
+        title: `Farm created — ${res.farm.name}`,
+        detail: `Profile registered at ${res.farm.centroidLat.toFixed(3)}, ${res.farm.centroidLon.toFixed(3)}${farmBoundary ? ' with a drawn boundary polygon' : ' (no boundary yet)'}. Made the active farm.`,
+        view: 'farm',
+      });
     },
     onError: (err) => {
       toast({ title: 'Farm creation failed', description: err instanceof ApiRequestError ? err.message : 'error', variant: 'destructive' });
+      logEvent({
+        severity: 'crit',
+        category: 'FARM',
+        title: 'Farm creation failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'farm',
+      });
     },
   });
 
@@ -75,6 +91,13 @@ export function FarmWorkspaceView() {
       setFarmBoundary(null);
       queryClient.invalidateQueries({ queryKey: ['farm'] });
       toast({ title: 'Boundary saved', description: 'Validated GeoJSON polygon stored with the farm profile.' });
+      logEvent({
+        severity: 'success',
+        category: 'FARM',
+        title: 'Farm boundary saved',
+        detail: `${farmBoundary ? farmBoundary.length : 0}-vertex GeoJSON polygon stored with the farm profile and re-validated.`,
+        view: 'farm',
+      });
     },
     onError: (err) => {
       toast({ title: 'Boundary not saved', description: err instanceof Error ? err.message : 'error', variant: 'destructive' });
@@ -89,12 +112,27 @@ export function FarmWorkspaceView() {
         title: 'SoilGrids profile stored',
         description: `Modeled values: ${res.retrieved.map((r) => `${r.property} ${r.value.toFixed(1)} ${r.unit}`).join(', ')}. Clearly labeled as model estimates.`,
       });
+      logEvent({
+        severity: 'success',
+        category: 'FARM',
+        title: 'SoilGrids supplementary profile stored',
+        detail: `Modeled values retrieved from ISRIC SoilGrids 2.0: ${res.retrieved.map((r) => `${r.property} ${r.value.toFixed(1)} ${r.unit}`).join(', ')}. Stored as MODEL estimates, clearly labeled — never blended with measured tests.`,
+        view: 'farm',
+      });
     },
     onError: (err) => {
       toast({
         title: 'SoilGrids unavailable',
         description: err instanceof ApiRequestError ? err.message : 'Provider unreachable — no values fabricated.',
         variant: 'destructive',
+      });
+      logEvent({
+        severity: 'crit',
+        category: 'FARM',
+        title: 'SoilGrids request failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Provider unreachable — no values fabricated.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'farm',
       });
     },
   });
@@ -309,6 +347,13 @@ function CropHistoryEditor({ farmId, current }: { farmId: string; current: strin
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['farm'] });
       toast({ title: 'Crop history saved' });
+      logEvent({
+        severity: 'success',
+        category: 'FARM',
+        title: 'Crop history saved',
+        detail: `${entries.length}-season farmer-supplied sequence stored with the farm profile.`,
+        view: 'farm',
+      });
     },
   });
   return (
@@ -380,6 +425,13 @@ function SoilSection({ farmId, tests, onSoilGrids, soilGridsPending }: { farmId:
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['farm'] });
       toast({ title: 'Soil measurement stored', description: `Labeled as ${form.source} measurement — never mixed with modeled values.` });
+      logEvent({
+        severity: 'success',
+        category: 'FARM',
+        title: 'Soil measurement stored',
+        detail: `${form.source} soil test (measured ${form.measuredAt}) recorded for the active farm — stored with its source label, never blended with modeled SoilGrids values.`,
+        view: 'farm',
+      });
       setForm({ ...form, ph: '', organicCarbonPct: '', nitrogenMgKg: '', phosphorusMgKg: '', potassiumCmolKg: '', sandPct: '', siltPct: '', clayPct: '', notes: '' });
     },
     onError: (err) => toast({ title: 'Validation failed', description: err instanceof ApiRequestError ? err.message : 'check values', variant: 'destructive' }),

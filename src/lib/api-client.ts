@@ -77,12 +77,12 @@ export interface FarmSummary {
   _count: { soilTests: number; scenarios: number; trendAnalyses: number };
 }
 
-export interface FarmDetail extends FarmSummary {
+export interface FarmDetail extends Omit<FarmSummary, '_count'> {
   boundaryGeoJson: string | null;
   cropHistory: string | null;
   notes: string | null;
   soilTests: SoilTest[];
-  _count: { scenarios: number; trendAnalyses: number; observations: number };
+  _count: { soilTests: number; scenarios: number; trendAnalyses: number; observations: number };
 }
 
 export interface SoilTest {

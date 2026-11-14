@@ -5,12 +5,14 @@ import { motion, type Variants } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useMutation } from '@tanstack/react-query';
 import { api, type ReportResponse } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadJson, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, CoordReadout } from '@/components/ui-mc/kit';
 import { EmptyState, FaultPanel } from '@/components/system/query-state';
 import { SweepLoader } from '@/components/system/skeletons';
-import { FileText, Printer, AlertTriangle } from 'lucide-react';
+import { FileText, Printer, AlertTriangle, Braces } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -36,9 +38,39 @@ export function ReportsView() {
     onSuccess: (data) => {
       setReport(data);
       toast({ title: 'Report compiled', description: `${data.trendAnalyses.length} trend analyses · ${data.rotationScenarios.length} scenarios · ${data.provenance.length} provenance records.` });
+      logEvent({
+        severity: 'success',
+        category: 'REPORT',
+        title: 'Field report compiled',
+        detail: `“${data.farm.name}” — ${data.environmentalRecord.observationCount.toLocaleString()} stored observations, ${data.trendAnalyses.length} trend analyses, ${data.rotationScenarios.length} rotation scenarios, ${data.provenance.length} provenance records. Compiled from stored real data only.`,
+        view: 'reports',
+      });
     },
-    onError: () => toast({ title: 'Report failed', variant: 'destructive' }),
+    onError: () => {
+      toast({ title: 'Report failed', variant: 'destructive' });
+      logEvent({
+        severity: 'crit',
+        category: 'REPORT',
+        title: 'Field report compilation failed',
+        detail: 'The compiler reads only stored evidence; a failed build produces no partial document.',
+        view: 'reports',
+      });
+    },
   });
+
+  const exportReportJson = () => {
+    if (!report) return;
+    const slug = report.farm.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'farm';
+    downloadJson(`terrafield-field-report-${slug}-${timestampSlug()}`, report);
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Field report exported as JSON',
+      detail: `Full compiled document for “${report.farm.name}” — environmental record, trend statistics, soil information, rotation scenarios, provenance and methodology.`,
+      view: 'reports',
+    });
+    toast({ title: 'Report exported', description: 'Complete compiled document written to JSON.' });
+  };
 
   if (!activeFarmId) {
     return (
@@ -75,9 +107,19 @@ export function ReportsView() {
                 )}
               </Button>
               {report && (
-                <Button variant="outline" onClick={() => window.print()} className={cn('uppercase', MONO_BTN)}>
-                  <Printer className="h-3.5 w-3.5" aria-hidden /> Print / save as PDF
-                </Button>
+                <>
+                  <Button variant="outline" onClick={() => window.print()} className={cn('uppercase', MONO_BTN)}>
+                    <Printer className="h-3.5 w-3.5" aria-hidden /> Print / save as PDF
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={exportReportJson}
+                    className={cn('uppercase', MONO_BTN)}
+                    aria-label="Export the compiled report as JSON"
+                  >
+                    <Braces className="h-3.5 w-3.5" aria-hidden /> JSON
+                  </Button>
+                </>
               )}
             </div>
           }
@@ -276,6 +318,12 @@ export function ReportsView() {
                   This report describes observed environmental associations and evidence-based compatibility only; it does not
                   predict yields or profit.
                 </footer>
+
+                {/* Print-only provenance stamp — appears on paper, hidden on screen */}
+                <p className="print-only mt-2 border-t border-neutral-300 pt-2 font-mono text-[9px] uppercase tracking-wide text-neutral-600">
+                  Printed from the TerraField Atlas mission console · {new Date(report.generatedAt).toUTCString()} · every figure
+                  traceable to source + retrieval time · missing data reported as missing, never fabricated.
+                </p>
               </div>
             </div>
           </article>

@@ -6,13 +6,15 @@ import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { api, ApiRequestError, type ObservationsResponse } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { downloadCsv, timestampSlug } from '@/lib/export';
 import type { ObservationPoint, TrendResult } from '@/lib/types';
 import { MonthlySeriesChart, ClimatologyChart, AnomalyChart } from '@/components/charts/scientific-charts';
 import { Button } from '@/components/ui/button';
 import { SectionHeader, StatusPill, HudPanel } from '@/components/ui-mc/kit';
 import { FaultPanel, EmptyState } from '@/components/system/query-state';
 import { SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
-import { Loader2, TrendingUp, TrendingDown, Minus, Sigma, Info } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown, Minus, Sigma, Info, FileDown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -58,6 +60,16 @@ export function AnalysisView() {
 
   const trends = useMutation({
     mutationFn: () => api.trends(activeFarmId ? { farmId: activeFarmId } : { lat: location.lat, lon: location.lon }),
+    onSuccess: (res) => {
+      const significant = res.results.filter((r) => r.significant);
+      logEvent({
+        severity: 'success',
+        category: 'ANALYSIS',
+        title: `Trend analysis complete — ${res.results.length} variables`,
+        detail: `${res.observationCount.toLocaleString()} stored observations, ${res.results[0]?.observationPeriodYears ?? '—'}-year window. ${significant.length} variable${significant.length === 1 ? '' : 's'} significant at 0.05 after seasonal Mann-Kendall + Benjamini-Hochberg FDR${significant.length ? ` (${significant.map((r) => `${r.label}: ${r.direction}`).join('; ')})` : ''}. Theil-Sen slopes carry 95% CI; null results are reported as “no trend”, never as weak signals.`,
+        view: 'analysis',
+      });
+    },
     onError: (err) => {
       toast({
         title: 'Cannot analyse yet',
@@ -69,8 +81,53 @@ export function AnalysisView() {
               : 'Unexpected error.',
         variant: 'destructive',
       });
+      logEvent({
+        severity: 'warn',
+        category: 'ANALYSIS',
+        title: 'Trend analysis not run',
+        detail:
+          err instanceof ApiRequestError
+            ? `${err.code} — ${err.message}`
+            : 'Unexpected error; no statistics produced.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'analysis',
+      });
     },
   });
+
+  const exportTrendStats = () => {
+    const d = trends.data;
+    if (!d) return;
+    const rows = d.results.map((r) => [
+      r.variable,
+      r.label,
+      r.unit,
+      r.direction,
+      r.slopePerYear ?? 'n/a',
+      r.ciLower ?? 'n/a',
+      r.ciUpper ?? 'n/a',
+      r.zValue ?? 'n/a',
+      r.pValue ?? 'n/a',
+      r.multipleTestingAdjustedP ?? 'n/a',
+      r.significant ? 'yes' : 'no',
+      r.sampleCount,
+      r.missingCount,
+      r.autocorrelationAdjusted ? 'Hamed-Rao' : 'none',
+    ]);
+    downloadCsv(
+      `terrafield-trend-statistics-${timestampSlug()}`,
+      ['variable', 'label', 'unit', 'direction', 'slopePerYear', 'ci95Lower', 'ci95Upper', 'zValue', 'pValue', 'fdrAdjustedP', 'significantAt05', 'sampleCount', 'missingCount', 'autocorrelationAdjusted'],
+      rows,
+    );
+    logEvent({
+      severity: 'info',
+      category: 'EXPORT',
+      title: 'Trend statistics exported as CSV',
+      detail: `${rows.length} variable rows — slope, 95% CI, raw and FDR-adjusted p-values, sample and missing counts. “No trend” is reported as-is.`,
+      view: 'analysis',
+    });
+    toast({ title: 'Statistics exported', description: `${rows.length} variable rows written to CSV.` });
+  };
 
   const observations = useQuery({
     queryKey: ['obs-all', activeFarmId, location.lat, location.lon, trends.isSuccess],
@@ -107,14 +164,26 @@ export function AnalysisView() {
         />
       </Reveal>
 
-      {/* Run provenance strip */}
+      {/* Run provenance strip + statistics export */}
       {trends.data && (
         <Reveal i={1}>
-          <p className="telemetry px-1 text-[11px] text-faint">
-            {trends.data.observationCount.toLocaleString()} observations · {trends.data.period.start} → {trends.data.period.end} ·{' '}
-            {trends.data.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
-            {trends.data.datasetVersions[0]}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1">
+            <p className="telemetry text-[11px] text-faint">
+              {trends.data.observationCount.toLocaleString()} observations · {trends.data.period.start} → {trends.data.period.end} ·{' '}
+              {trends.data.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
+              {trends.data.datasetVersions[0]}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportTrendStats}
+              className="ml-auto h-7 gap-1.5 border-edge bg-transparent font-mono text-[10px] uppercase tracking-wide-mc text-dim hover:border-aqua/50 hover:text-aqua"
+              aria-label="Export the trend statistics as CSV"
+              title="Export slope, CI, p-values and sample counts for every variable"
+            >
+              <FileDown className="h-3 w-3" aria-hidden /> Export statistics
+            </Button>
+          </div>
         </Reveal>
       )}
 
