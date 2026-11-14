@@ -95,7 +95,7 @@ const server = createServer((req, res) => {
     // ---- Scheme 2: legacy body-only MAC (kept for first-gen receivers) ----
     const legacyHeader = typeof req.headers['x-terrafield-signature-sha256'] === 'string'
       ? req.headers['x-terrafield-signature-sha256'] : null;
-    const legacyMac = legacyHeader && /^sha256=([0-9a-f]{64})$/i.exec(legacyHeader)?.[1]?.toLowerCase() ?? null;
+    const legacyMac = (legacyHeader && (/^sha256=([0-9a-f]{64})$/i.exec(legacyHeader)?.[1]?.toLowerCase())) ?? null;
     let legacy = { present: Boolean(legacyHeader), verified: false, matchedSecretIndex: null };
     if (legacyMac) {
       const idx = SECRETS.findIndex((s) => safeEq(mac(s, raw), legacyMac));

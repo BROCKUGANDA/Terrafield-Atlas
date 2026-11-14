@@ -1,0 +1,6 @@
+file '/home/z/my-project/scripts/demo-video/clips-60/00-60-title.mp4'
+file '/home/z/my-project/scripts/demo-video/clips-60/01-60-fire-signs.mp4'
+file '/home/z/my-project/scripts/demo-video/clips-60/02-60-watchlists.mp4'
+file '/home/z/my-project/scripts/demo-video/clips-60/03-60-digest-exits.mp4'
+file '/home/z/my-project/scripts/demo-video/clips-60/04-60-system-health.mp4'
+file '/home/z/my-project/scripts/demo-video/clips-60/05-60-closing.mp4'

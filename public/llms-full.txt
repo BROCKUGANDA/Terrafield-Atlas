@@ -1,0 +1,55 @@
+# TerraField Atlas
+
+> Mission console for agricultural resilience and live fire intelligence, built on real NASA Earth observations for the NASA Space Apps Challenge 2026 — Field Shift. Every number is traceable to its retrieval; missing data is reported as missing, never imputed; push-delivered digests exit the console over Server-Sent Events, a signed webhook (HMAC-SHA256, OWASP-aligned) and SMTP email.
+
+## What it is
+
+TerraField Atlas is a single Next.js mission console (one Node process, one HTTP port, SQLite via Prisma) that serves:
+
+1. **Earth Intelligence** — 12+ years of daily NASA POWER (MERRA-2) precipitation, temperature, humidity, radiation and root-zone wetness for any coordinate; seasonal Mann-Kendall trend detection with Theil-Sen slopes, confidence intervals, autocorrelation correction and FDR control; SMAP L4 root-zone moisture and MODIS/VIIRS GIBS layers on a live globe.
+2. **Crop rotation planning** — deterministic multi-criteria weighted scoring (family sequence, legume N, water feasibility vs POWER climatology, thermal feasibility, nutrient balance, diversity, soil pH/texture, staple presence) over a FAO-cited crop catalogue; every score explainable; missing inputs reduce confidence, never zero.
+3. **Fire Intelligence** — the VIIRS 375 m thermal-anomaly stream (the detections NASA FIRMS distributes) decoded from NASA GIBS vector tiles; a queryable detection ledger with a fire calendar, confidence classes and radiative power; NASA EONET live wildfire events; live source-health signs for every upstream.
+4. **Fire watchlists** — regional watchlists (geography + threshold rule) evaluated by an atomic scheduler on real cadences (e.g. every 6 h); manual, backtest and scheduled runs recorded in an append-only ledger; cadence-aware digests.
+5. **Push delivery** — one SSE channel for open consoles, plus env-gated exits: an HMAC-signed webhook (timestamped v1 signature, ±300 s replay window, constant-time verification, secret rotation, SSRF guard with explicit allowlist) and SMTP email for scheduler facts. Every attempt gets a provenance row; every outcome an audit row.
+6. **A/B experiments** — deterministic SHA-256 assignment of anonymous visitor units; exposure and outcome rows in the same audit ledger; live metrics on the status surface.
+
+## Data sources (all real, all attributed)
+
+| Provider | What | Auth |
+| --- | --- | --- |
+| NASA POWER | MERRA-2 daily meteorology + SMAP-aligned wetness | none |
+| NASA GIBS | MODIS/VIIRS WMTS rasters + vector tiles (fire detections, NDVI) | none |
+| NASA FIRMS | VIIRS 375 m NRT detection stream (via GIBS); direct CSV API optional with MAP_KEY | optional |
+| NASA EONET | v3 natural-event tracker (open wildfire events) | none |
+| ISRIC SoilGrids | soil pH/texture/context | none |
+| NASA Earthdata (planned adapters) | MOD13Q1/SMAP science files with QA flags | Earthdata credentials (explicit not-configured state) |
+
+## Open API (v1)
+
+- `GET /api/v1/health` — liveness + per-source states.
+- `GET /api/v1/readyz` — readiness (DB, scheduler, upstreams).
+- `GET /api/v1/system/status` — engines, database counts, cache, circuit breakers, scheduler watchdog, digest channel + delivery exits, A/B experiments, provider probes, methodology notes.
+- `GET /api/v1/sources` — live source registry with probe-backed states.
+- `GET /api/v1/regions` — 19 curated real agricultural regions (demo presets, not administrative boundaries).
+- `GET /api/v1/observations?lat=&lon=&variable=&start=&end=` — stored POWER observations.
+- `GET /api/v1/analysis/trend?lat=&lon=` — seasonal Mann-Kendall + Theil-Sen results with provenance IDs.
+- `GET /api/v1/rotation/scenarios` · `POST /api/v1/rotation/compare` — evidence-supported rotation options and comparison.
+- `GET /api/v1/fires/detections?bbox=&since=` — decoded VIIRS detections.
+- `GET/POST /api/v1/fires/watchlists` — regional watchlists; `/[id]/runs` (history), `/[id]/digest` (cadence-aware), `/[id]/evaluate` (manual/backtest/scheduled), `/digest-stream` (SSE).
+- `GET/POST /api/v1/experiments` — A/B assignment (`?exp=&unit=`) and outcome recording.
+- `GET /api/v1/provenance` — the evidence ledger (per-request status, latency, correlation).
+
+## Honesty contract
+
+1. **No fabrication.** Missing telemetry renders as no-data with the reason (archive gap, source unreachable, not configured). A gap is never rendered as zero.
+2. **No silent degradation.** Source-health chips probe live (60 s cache); failures are flagged on the surface that would have shown the data.
+3. **Provenance for every claim.** Each upstream request is persisted with provider, URL, status, latency and a correlation ID that threads through runs, digests, pushes and deliveries.
+4. **Exits never lie.** An unarmed exit reports not-configured and attempts zero sends; a failed delivery keeps its failed row; retry is transient-only (network/timeout/429/5xx) with jittered backoff, max 3 attempts.
+
+## Statistical methodology (full)
+
+Monthly aggregation of complete months (≥20 valid days); Seasonal Mann-Kendall (Hirsch-Slack 1984) with tie-corrected variance; Theil-Sen seasonal slope with Sen-rank 95% CI; Hamed-Rao (1998) lag-1 variance inflation when deseasonalized autocorrelation exceeds ±2/√n; Benjamini-Hochberg FDR across variables; ≥8 full years required before any significance claim. Rotation scoring is deterministic multi-criteria weighted scoring (weights = farmer priorities, normalized); criteria: family sequence, legume N, water (FAO I&D 33 ranges vs POWER climatology), thermal feasibility, nutrient balance, diversity, soil pH/texture, staple presence; economics deliberately not assessed.
+
+## Delivery reliability
+
+Scheduler: 60 s tick, atomic per-watchlist claim (no double-run across ticks), next slot scheduled at +interval after each run; consecutive-failure watchdog surfaced in status. Digest channel: SSE hub with a max-client cap (excess gets 503 + Retry-After), digest window derived from the cadence itself. Webhook exit: `x-terrafield-signature: t=<unix-sec>,v1=hex(HMAC-SHA256(secret, "<t>.<exact body>"))`, ±300 s replay window, constant-time compare, rotation via `DIGEST_WEBHOOK_SECRET_PREVIOUS`, SSRF guard (loopback/RFC1918/link-local/CGNAT/metadata refused; `DIGEST_WEBHOOK_ALLOWLIST` explicit opt-in for internal relays). Email exit: nodemailer SMTP, scheduler facts only, honest not-configured state without credentials.

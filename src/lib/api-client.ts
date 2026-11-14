@@ -650,6 +650,14 @@ export interface SystemStatus {
     note: string;
   };
   digestChannel: DigestChannelStatus;
+  experiments?: {
+    key: string;
+    hypothesis: string;
+    surface: string;
+    active: boolean;
+    variants: { variant: string; exposures: number; outcomes: number }[];
+    note: string;
+  }[];
   providers: Record<string, { status: string; latencyMs?: number | null; note?: string }>;
   sourceSigns?: { checkedAt: string; probeMs: number; summary: { live: number; degraded: number; unreachable: number } };
   reliability: Record<string, string>;

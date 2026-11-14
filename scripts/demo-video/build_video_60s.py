@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""
+TerraField Atlas — 60-second cut assembly (ffmpeg).
+
+Same clip contract as build_video.py (composed 1280×720 PNG → subtle Ken
+Burns zoom → H.264 clip with the scene's TTS narration, 300 ms lead-in /
+700 ms tail → codec-identical concat), driven by scenes-60.json and the
+audio-60/ narration.
+
+Output: download/hackathon/terrafield-atlas-demo-60s.mp4 (+ clips-60/).
+"""
+import json
+import pathlib
+import subprocess
+
+ROOT = pathlib.Path(__file__).resolve().parent
+AUDIO = ROOT / "audio-60"
+CLIPS = ROOT / "clips-60"
+CLIPS.mkdir(exist_ok=True)
+OUTDIR = pathlib.Path("/home/z/my-project/download/hackathon")
+OUTDIR.mkdir(parents=True, exist_ok=True)
+FINAL = OUTDIR / "terrafield-atlas-demo-60s.mp4"
+
+FPS = 30
+LEAD_S = 0.25
+TAIL_S = 0.55
+
+scenes = json.loads((ROOT / "scenes-60.json").read_text())
+
+
+def run(cmd: list[str]) -> None:
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"cmd failed ({res.returncode}):\n{' '.join(cmd[:6])}…\n{res.stderr[-1200:]}")
+
+
+def media_duration(path: pathlib.Path) -> float:
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(res.stdout.strip())
+
+
+def build_clip(i: int, scene: dict) -> pathlib.Path:
+    frame = pathlib.Path(scene["frame_composed"])
+    wav = AUDIO / f"{i:02d}-{scene['id']}.wav"
+    dur = media_duration(wav) + LEAD_S + TAIL_S
+    frames = round(dur * FPS)
+    clip = CLIPS / f"{i:02d}-{scene['id']}.mp4"
+    if clip.exists() and abs(media_duration(clip) - dur) < 0.2:
+        return clip  # already encoded — skip (rerun-safe)
+    zoom_expr = "min(1.0+0.00035*on,1.09)"
+    fc = (
+        f"[0:v]zoompan=z='{zoom_expr}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1280x720:fps={FPS},"
+        f"format=yuv420p[v];"
+        f"[1:a]aresample=48000,adelay={int(LEAD_S*1000)}|{int(LEAD_S*1000)},apad=pad_dur={TAIL_S+0.5}[a]"
+    )
+    run([
+        "ffmpeg", "-y",
+        "-i", str(frame),
+        "-i", str(wav),
+        "-filter_complex", fc,
+        "-map", "[v]", "-map", "[a]",
+        "-t", f"{dur:.3f}",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+        "-movflags", "+faststart",
+        str(clip),
+    ])
+    return clip
+
+
+def main() -> None:
+    clips = []
+    total = 0.0
+    for i, s in enumerate(scenes):
+        c = build_clip(i, s)
+        d = media_duration(c)
+        total += d
+        print(f"clip {c.name} ({d:.1f}s)")
+        clips.append(c)
+
+    concat_list = CLIPS / "list.txt"
+    concat_list.write_text("".join(f"file '{c.resolve()}'\n" for c in clips))
+    run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-c", "copy", "-movflags", "+faststart", str(FINAL),
+    ])
+    final_dur = media_duration(FINAL)
+    size_mb = FINAL.stat().st_size / 1e6
+    print(f"FINAL: {FINAL} — {final_dur:.1f}s (target ≈60 s), {size_mb:.1f} MB, clips-sum {total:.1f}s")
+
+
+if __name__ == "__main__":
+    main()

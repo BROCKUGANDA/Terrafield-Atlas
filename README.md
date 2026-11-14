@@ -69,6 +69,7 @@ bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the schedule
 | `WATCH_SCHEDULER_OFF` | no | `=1` disables the in-process watchlist re-evaluation scheduler (on-demand evaluation remains). |
 | `DIGEST_PUSH_OFF` | no | `=1` disables the SSE digest push channel (digests remain available on demand from `GET …/digest`). |
 | `DIGEST_WEBHOOK_URL` | no | arms the **webhook digest exit**: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to this http(s) URL as the identical digest payload. `DIGEST_WEBHOOK_SECRET` signs every POST per OWASP webhook guidance: `X-Terrafield-Signature: t=<unix-sec>,v1=hex(HMAC-SHA256(secret, "<t>.<exact body>"))` — timestamp-bound with a ±300 s replay window, constant-time verification (`verifyWebhookSignature`, exported for receivers), zero-downtime rotation via `DIGEST_WEBHOOK_SECRET_PREVIOUS`, and an SSRF guard that refuses loopback/RFC1918/link-local/metadata targets before any request. `DIGEST_WEBHOOK_OFF=1` disables. Transient-only retry (max 3 attempts), one provenance row per attempt, one audit row per outcome. |
+| `DIGEST_WEBHOOK_ALLOWLIST` | no | comma-separated `host` / `host:port` entries that EXPLICITLY allow a webhook target inside a refused range (loopback/RFC1918/…) — the OWASP "default deny + explicit allow" pattern for an ops relay that deliberately lives inside the private network. Exact host or host:port match; garbage entries are dropped, never broadened; the http(s)-only scheme rule and unparseable URLs can never be allowlisted. Allowlisted targets are surfaced as `ALLOWLISTED private target (operator opt-in)` in System Health. |
 | `DIGEST_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TO` | no | arms the **email digest exit** (nodemailer/SMTP): completed scheduled re-evaluations and failed scheduled runs are emailed to the `_TO` list; manual and backtest evaluations are console-feedback-only by design. Without the credentials the exit reports `credentials-not-configured` and attempts zero sends — the same honest state as FIRMS without a MAP_KEY. `DIGEST_EMAIL_OFF=1` disables. |
 
 ## Live source signs & critical infrastructure (hardening round 2)
@@ -83,12 +84,31 @@ bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the schedule
 - **Transport hardening (client):** 20 s request budget, gateway HTML-502 detection (`GATEWAY_HTML` — raw HTML never leaks into a reason line), one automatic retry for idempotent GETs only (mutations never auto-retry).
 - **Error/loading UX:** themed SSR `loading.tsx` / `error.tsx` / `global-error.tsx` / `not-found.tsx`, per-module error boundaries with fault digests + copyable diagnostics, unified QueryState skeletons/fault/empty panels.
 
+## A/B experiments (deterministic, ledger-backed)
+
+- **Assignment:** pure SHA-256 bucketing of `(experiment key, anonymous unit id)` into [0, 1000) mapped by cumulative variant weights — stable across restarts and processes, no flicker, no sticky sessions (`src/lib/experiments.ts`).
+- **Ledger:** exposures (distinct per unit — refreshes never inflate the split) and outcomes are AuditEvent rows under actor `system:experiment`, the same durable ledger the rest of the console audits into.
+- **Live experiment:** `landing-hero-v1` — full mission brief (control) vs fire-intelligence-first brief (treatment); the variant swaps the hero intro AND the primary CTA label; the outcome is the console-entry CTA (`experiment.cta_enter_console`), recorded at most once per unit per session.
+- **Surfaces:** `GET /api/v1/experiments?exp=&unit=` (assign + record exposure; unknown/paused experiments refuse with 404/409 — never a fabricated assignment), `POST /api/v1/experiments` (outcome), `experiments` section of `/api/v1/system/status` + the "A/B experiments" card in System Health (exposures, conversions, conversion rate per variant).
+- **Privacy:** the unit id is a client-generated UUID in localStorage — a random label with no identity, location or fingerprint attached.
+
+## Branding, SEO / GEO / AEO
+
+- **Identity:** the mission badge (flame over a perspective field grid with a satellite pass arc) is generated programmatically — `scripts/make-brand-assets.py` (Pillow) renders the favicon.ico (16/32/48), PNG icons (16→512), `apple-touch-icon.png`, `maskable-512.png` and the 1200×630 Open Graph card; `public/logo.svg` is the hand-authored vector twin. No stock art, no placeholders.
+- **PWA:** `public/manifest.webmanifest` (standalone, theme #050914, full icon set incl. maskable), wired through the metadata API with `appleWebApp` support.
+- **SEO:** full Next.js metadata — title template, canonical, keywords, OpenGraph + Twitter `summary_large_image` (og-image), robots directives with `max-image-preview: large`, structured icon set.
+- **GEO:** `geo.region ZM-02`, `geo.placename` (demo operations area), `geo.position`/`ICBM` — matching the seeded Zambia demo watchlist.
+- **AEO:** `public/robots.txt` explicitly welcomes search AND AI crawlers (GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Google-Extended, Applebot…); `public/llms.txt` + `public/llms-full.txt` (llmstxt.org) give LLMs a curated brief of capabilities, sources, API and the honesty contract; `src/app/sitemap.ts` serves `/sitemap.xml`; JSON-LD `@graph` (Organization, WebSite, SoftwareApplication, FAQPage with the six mission questions) ships in the document head.
+
 ## Hackathon submission package
 
 - `download/hackathon/terrafield-atlas-demo.mp4` — 2:44 end-to-end demo with voice narration (agent-browser captures → Pillow compositing → z-ai TTS → ffmpeg).
-- `download/hackathon/narration-script.md` — the 10-scene narration script.
+- `download/hackathon/terrafield-atlas-demo-60s.mp4` — **55.8 s cut for the submission form** (6 scenes, condensed `jam` narration at speed 1.25, same pipeline; `NN/06` scene counters).
+- `download/hackathon/narration-script.md` — the 10-scene narration script; `download/hackathon/narration-script-60.md` — the 60 s cut script.
 - `download/hackathon/SUBMISSION.md` — the submission write-up (pitch, feature map, architecture, judging mapping).
-- `scripts/demo-video/` — the reproducible pipeline (frames, compositor, TTS generator, ffmpeg assembly).
+- `download/hackathon/exits/` — durable signed-delivery proof: `webhook-deliveries.jsonl` (per-POST HMAC scheme verdicts from the verification receiver) + `smtp-deliveries.jsonl` (per-message SMTP transcripts from the verification sink).
+- `scripts/demo-video/` — the reproducible pipeline (frames, compositor, TTS generator, ffmpeg assembly; `*-60s` variants for the cut).
+- `scripts/arm-digest-exits.sh` + `scripts/exercise-digest-exits.sh` — arm both signed exits live and exercise them end-to-end through the real scheduler.
 
 ## Documentation
 

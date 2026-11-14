@@ -307,6 +307,41 @@ export function SettingsView() {
               </motion.section>
             )}
 
+            {/* A/B experiments — live ledger metrics */}
+            {(s.experiments ?? []).length > 0 && (
+              <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="A/B experiments">
+                <HudPanel>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">A/B experiments</h3>
+                    <span className="telemetry text-[10px] uppercase tracking-wide-mc text-faint">deterministic assignment · audit ledger</span>
+                  </div>
+                  <div className="mt-3 grid gap-3">
+                    {s.experiments!.map((e) => (
+                      <div key={e.key} className="rounded-sm border border-edge bg-panel-2/40 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-mono text-xs font-semibold text-ink">{e.key}</span>
+                          <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{e.active ? 'active' : 'paused'}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-relaxed text-dim">{e.hypothesis}</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {e.variants.map((v) => (
+                            <div key={v.variant} className="flex items-center justify-between rounded-sm border border-edge bg-panel/40 px-2.5 py-1.5">
+                              <span className="font-mono text-[10px] uppercase tracking-wide-mc text-aqua">{v.variant}</span>
+                              <span className="font-mono text-[10px] text-dim">
+                                {v.exposures} exposed · {v.outcomes} converted
+                                {v.exposures > 0 && <span className="text-faint"> · {((v.outcomes / v.exposures) * 100).toFixed(1)}%</span>}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.experiments![0]?.note}</p>
+                </HudPanel>
+              </motion.section>
+            )}
+
             {/* Provider availability */}
             <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Provider availability">
               <HudPanel>

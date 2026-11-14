@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -93,6 +93,26 @@ const fadeUp = {
   viewport: { once: true, margin: '-80px' },
 } as const;
 
+// ---------------------------------------------------------------------------
+// A/B: landing-hero-v1 — deterministic variant assignment, real exposure and
+// outcome ledger (src/lib/experiments.ts). The unit id is a client-generated
+// UUID in localStorage — a random label with no identity attached.
+// ---------------------------------------------------------------------------
+const EXPERIMENT_KEY = 'landing-hero-v1';
+const EXPERIMENT_OUTCOME = 'experiment.cta_enter_console';
+
+function visitorUnitId(): string {
+  try {
+    const existing = localStorage.getItem('tf_ab_unit');
+    if (existing) return existing;
+    const fresh = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `u-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('tf_ab_unit', fresh);
+    return fresh;
+  } catch {
+    return `anon-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
+  }
+}
+
 export function LandingView() {
   const operator = useSession((s) => s.operator);
   const login = useSession((s) => s.login);
@@ -106,6 +126,45 @@ export function LandingView() {
   const [callsign, setCallsign] = useState('');
   const [hoveredStation, setHoveredStation] = useState<GlobeStation | null>(null);
 
+  // A/B assignment — one fetch on mount; the server records the exposure
+  // (distinct-unit ledger). Copy falls back to the control text until the
+  // assignment lands; the page never blocks on it.
+  const unitIdRef = useRef('');
+  const [heroCopy, setHeroCopy] = useState<{ intro: string; cta: string } | null>(null);
+  useEffect(() => {
+    const unit = visitorUnitId();
+    unitIdRef.current = unit;
+    let cancelled = false;
+    fetch(`/api/v1/experiments?exp=${EXPERIMENT_KEY}&unit=${encodeURIComponent(unit)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { copy?: { intro: string; cta: string } } | null) => {
+        if (!cancelled && d?.copy) setHeroCopy(d.copy);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const heroIntro = heroCopy?.intro ?? HERO_INTRO;
+  const heroCta = heroCopy?.cta ?? 'Enter console';
+
+  /** Outcome ledger — at most ONE conversion recorded per unit per session. */
+  const recordEnterOutcome = () => {
+    const unit = unitIdRef.current;
+    if (!unit) return;
+    try {
+      if (sessionStorage.getItem('tf_ab_outcome_done') === '1') return;
+      sessionStorage.setItem('tf_ab_outcome_done', '1');
+    } catch {
+      /* storage unavailable — still record; the ledger tolerates repeats */
+    }
+    fetch('/api/v1/experiments', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ exp: EXPERIMENT_KEY, unit, outcome: EXPERIMENT_OUTCOME }),
+    }).catch(() => {});
+  };
+
   // Lazy-mount the 3D layer after first paint to keep the hero instant.
   const [globeReady, setGlobeReady] = useState(false);
   useEffect(() => {
@@ -118,6 +177,7 @@ export function LandingView() {
   const providersOk = dataSources?.filter((d) => d.status === 'operational').length ?? null;
 
   const enterConsole = () => {
+    recordEnterOutcome();
     if (operator) setView('dashboard');
     else login(callsign.trim() || 'GUEST');
   };
@@ -157,7 +217,7 @@ export function LandingView() {
               transition={{ duration: 0.45, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
               className="max-w-xl text-sm leading-relaxed text-dim sm:text-base"
             >
-              {HERO_INTRO}
+              {heroIntro}
             </motion.p>
 
             {/* Demo access card */}
@@ -193,6 +253,7 @@ export function LandingView() {
                   className="flex flex-col gap-4"
                   onSubmit={(e) => {
                     e.preventDefault();
+                    recordEnterOutcome();
                     login(callsign.trim() || 'GUEST');
                   }}
                 >
@@ -214,10 +275,10 @@ export function LandingView() {
                       aria-describedby="access-note"
                     />
                     <Button type="submit" className="h-10 bg-nasa text-white hover:bg-nasa/90">
-                      Enter console <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
+                      {heroCta} <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
                     </Button>
                   </div>
-                  <Button type="button" variant="ghost" onClick={() => login('GUEST')} className="h-9 w-fit text-dim hover:text-ink">
+                  <Button type="button" variant="ghost" onClick={() => { recordEnterOutcome(); login('GUEST'); }} className="h-9 w-fit text-dim hover:text-ink">
                     Continue as guest
                   </Button>
                   <p id="access-note" className="font-mono text-[10px] leading-relaxed tracking-wide text-faint">

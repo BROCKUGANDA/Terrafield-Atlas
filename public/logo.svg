@@ -1,29 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
-<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
-	 viewBox="0 0 30 30" style="enable-background:new 0 0 30 30;" xml:space="preserve">
-<defs>
-  <style type="text/css">
-    .st194{fill:#2D2D2D;stroke:#FFFFFF;stroke-width:0.6317;stroke-miterlimit:10;}
-    .st23{fill:#FFFFFF;}
+<!-- TerraField Atlas mission badge — flame over a field grid, satellite arc.
+     Master vector twin of scripts/make-brand-assets.py (Pillow raster set). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="TerraField Atlas">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#091126"/>
+      <stop offset="1" stop-color="#040814"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff7a1a"/>
+      <stop offset="1" stop-color="#ffa62b"/>
+    </linearGradient>
+  </defs>
 
-    .z-breathe {
-      animation: breathe 2.5s ease-in-out infinite;
-    }
+  <rect x="0" y="0" width="512" height="512" rx="113" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="112" fill="none" stroke="#46608c" stroke-width="3"/>
 
-    @keyframes breathe {
-      0%, 100% { opacity: 0.7; }
-      50% { opacity: 1; }
-    }
-  </style>
-</defs>
+  <!-- satellite pass arc + spacecraft -->
+  <path d="M 72 118 A 200 132 0 0 1 440 118" fill="none" stroke="#9bb4d8" stroke-width="5" opacity="0.8"/>
+  <circle cx="256" cy="40" r="11" fill="#e9f0fc"/>
 
-<g>
-  <path class="st194" d="M24.51,28.51H5.49c-2.21,0-4-1.79-4-4V5.49c0-2.21,1.79-4,4-4h19.03c2.21,0,4,1.79,4,4v19.03
-    C28.51,26.72,26.72,28.51,24.51,28.51z"/>
-  <g class="z-breathe">
-    <path class="st23" d="M15.47,7.1l-1.3,1.85c-0.2,0.29-0.54,0.47-0.9,0.47h-7.1V7.09C6.16,7.1,15.47,7.1,15.47,7.1z"/>
-    <polygon class="st23" points="24.3,7.1 13.14,22.91 5.7,22.91 16.86,7.1"/>
-    <path class="st23" d="M14.53,22.91l1.31-1.86c0.2-0.29,0.54-0.47,0.9-0.47h7.09v2.33H14.53z"/>
+  <!-- field grid (perspective rows + converging furrows) -->
+  <g stroke="#35e0c8" stroke-width="4" opacity="0.82">
+    <line x1="234" y1="358" x2="174" y2="478" opacity="0.55"/>
+    <line x1="245" y1="358" x2="215" y2="478" opacity="0.62"/>
+    <line x1="256" y1="358" x2="256" y2="478" opacity="0.66"/>
+    <line x1="267" y1="358" x2="297" y2="478" opacity="0.62"/>
+    <line x1="278" y1="358" x2="338" y2="478" opacity="0.55"/>
   </g>
-</g>
+  <g stroke="#35e0c8" stroke-linecap="round">
+    <line x1="215" y1="366" x2="297" y2="366" stroke-width="4" opacity="0.5"/>
+    <line x1="196" y1="394" x2="316" y2="394" stroke-width="5" opacity="0.68"/>
+    <line x1="172" y1="426" x2="340" y2="426" stroke-width="6" opacity="0.85"/>
+    <line x1="143" y1="466" x2="369" y2="466" stroke-width="7" opacity="1"/>
+  </g>
+
+  <!-- flame: outer, mid, core -->
+  <path fill="url(#flame)"
+        d="M 256 106
+           C 300 168, 338 218, 338 282
+           C 338 330, 302 356, 256 356
+           C 210 356, 174 330, 174 282
+           C 174 218, 212 168, 256 106 Z"/>
+  <path fill="#ffa62b" opacity="0.95"
+        d="M 256 176
+           C 284 216, 306 250, 306 292
+           C 306 322, 284 340, 256 340
+           C 228 340, 206 322, 206 292
+           C 206 250, 228 216, 256 176 Z"/>
+  <path fill="#ffe9a8"
+        d="M 256 234
+           C 270 258, 282 278, 282 302
+           C 282 322, 270 334, 256 334
+           C 242 334, 230 322, 230 302
+           C 230 278, 242 258, 256 234 Z"/>
 </svg>

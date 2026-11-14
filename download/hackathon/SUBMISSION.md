@@ -35,9 +35,13 @@ Fire Intelligence adds regional fire watchlists with 6/12/24-hour re-evaluation 
 
 ## Demo
 
-- **Video (2:44, 1280×720, voice narration):** `hackathon/terrafield-atlas-demo.mp4` — end-to-end platform tour: guided tour → honest trends → live FIRMS/EONET signs → detection ledger → watchlist + scheduled run → pushed digest → System Health probes → provenance ledger. Pipeline: agent-browser captures → Pillow compositing → z-ai TTS narration → ffmpeg assembly (scripts in `scripts/demo-video/`).
-- **Narration script:** `hackathon/narration-script.md` (10 scenes).
-- **Live walkthrough:** open the console → DEMO ACCESS → follow the guided tour; Fire Intelligence shows live source signs, the Zambia demo watchlist (6 h cadence) with Runs + Digest panels.
+- **Video — 60-second cut (55.8 s, 1280×720, voice narration):** `hackathon/terrafield-atlas-demo-60s.mp4` — the form-length cut: fire signs → watchlist cadence → push digest + signed exits → system health → closing. Same pipeline (Pillow compositing → z-ai TTS `jam` @ 1.25 → ffmpeg); `NN/06` HUD counters; `hackathon/narration-script-60.md` is its script.
+- **Video (2:44, 1280×720, voice narration):** `hackathon/terrafield-atlas-demo.mp4` — full end-to-end platform tour: guided tour → honest trends → live FIRMS/EONET signs → detection ledger → watchlist + scheduled run → pushed digest → System Health probes → provenance ledger. Pipeline: agent-browser captures → Pillow compositing → z-ai TTS narration → ffmpeg assembly (scripts in `scripts/demo-video/`).
+- **Narration scripts:** `hackathon/narration-script.md` (10 scenes) · `hackathon/narration-script-60.md` (6 scenes).
+- **Live delivery proof:** `hackathon/exits/webhook-deliveries.jsonl` — every signed POST the digest webhook exit delivered during scheduled runs, with the receiver's per-scheme HMAC verdict (`schemeVerified: v1`, timestamp age, replay window) and correlation ID; `hackathon/exits/smtp-deliveries.jsonl` — the matching SMTP transcripts (envelope, headers, body preview) accepted by the verification sink. Exits are armed via `DIGEST_WEBHOOK_URL`/`DIGEST_WEBHOOK_SECRET` + `DIGEST_WEBHOOK_ALLOWLIST` and `DIGEST_SMTP_*`; re-exercise with `bash scripts/exercise-digest-exits.sh`.
+- **Live walkthrough:** open the console → DEMO ACCESS → follow the guided tour; Fire Intelligence shows live source signs, the Zambia demo watchlist (6 h cadence) with Runs + Digest panels, and 19 curated regional presets.
+- **A/B test:** `landing-hero-v1` runs for real — deterministic SHA-256 assignment of the anonymous visitor unit, exposure + outcome rows in the audit ledger, live per-variant metrics in System Health and `/api/v1/system/status`.
+- **SEO/AEO/branding:** mission badge + favicon set + PWA manifest generated programmatically (`scripts/make-brand-assets.py`), Open Graph card, sitemap, `llms.txt` + `llms-full.txt`, JSON-LD (Organization / WebSite / SoftwareApplication / FAQPage), GEO meta for the demo operations area.
 
 ## Run it
 
@@ -45,22 +49,22 @@ Fire Intelligence adds regional fire watchlists with 6/12/24-hour re-evaluation 
 bun install
 bun run db:push && bun run db:generate
 bun run dev            # http://localhost:3000
-bun test tests/        # 151 unit tests (fixtures only — no network)
+bun test tests/        # 169 unit tests (fixtures only — no network)
 # production: bun run build && bun run start
 ```
 
 Environment (all optional, surfaced honestly in System Health):
-`FIRMS_MAP_KEY` (arms the direct FIRMS CSV API) · `DIGEST_WEBHOOK_URL` + `DIGEST_WEBHOOK_SECRET` (≥32 B) + `DIGEST_WEBHOOK_SECRET_PREVIOUS` (rotation) · `DIGEST_SMTP_*` (email exit) · `WATCH_SCHEDULER_OFF=1` / `DIGEST_PUSH_OFF=1` (disables).
+`FIRMS_MAP_KEY` (arms the direct FIRMS CSV API) · `DIGEST_WEBHOOK_URL` + `DIGEST_WEBHOOK_SECRET` (≥32 B) + `DIGEST_WEBHOOK_SECRET_PREVIOUS` (rotation) + `DIGEST_WEBHOOK_ALLOWLIST` (explicit opt-in for private relay targets) · `DIGEST_SMTP_*` (email exit) · `WATCH_SCHEDULER_OFF=1` / `DIGEST_PUSH_OFF=1` (disables).
 
 ## API surface (v1)
 
-`/api/v1/health` (deep) · `/healthz` (liveness) · `/readyz` (readiness) · `/regions` · `/farms` (+ soil tests, SoilGrids fetch) · `/crops` · `/observations` (+ ingest, sources) · `/analysis/trends` · `/rotation/compare` · `/fires` (GET/POST) · `/fires/watchlists` (+ `[id]/evaluate|runs|digest`, `/digest-stream` SSE) · `/system/status` · `/system/sources` (live signs) · `/provenance` · `/reports`. Every route: correlation ID, Zod validation, rate limiting, JSON error contract.
+`/api/v1/health` (deep) · `/healthz` (liveness) · `/readyz` (readiness) · `/regions` (19 curated presets) · `/farms` (+ soil tests, SoilGrids fetch) · `/crops` · `/observations` (+ ingest, sources) · `/analysis/trends` · `/rotation/compare` · `/fires` (GET/POST) · `/fires/watchlists` (+ `[id]/evaluate|runs|digest`, `/digest-stream` SSE) · `/experiments` (A/B assign + outcome) · `/system/status` · `/system/sources` (live signs) · `/provenance` · `/reports`. Every route: correlation ID, Zod validation, rate limiting, JSON error contract.
 
 ## Judging criteria mapping
 
 - **Impact:** actionable fire-alert surveillance + rotation planning for smallholder contexts; push delivery means alerts arrive, they are not hunted for.
 - **Creativity:** mission-console metaphor with honest telemetry aesthetics; cadence-derived digest windows; FIRMS-detection-stream-over-GIBS fallback that keeps real data flowing when the FIRMS host is blocked.
-- **Validity:** every value traceable to a logged retrieval; significance only after ≥8 years; gaps reported as gaps; 151 unit tests pin the engine semantics.
+- **Validity:** every value traceable to a logged retrieval; significance only after ≥8 years; gaps reported as gaps; 169 unit tests pin the engine semantics.
 - **Relevance:** built on NASA POWER, GIBS, EONET, and the FIRMS detection stream — the exact data the challenge celebrates.
 
 ## What we built with NASA data (mandatory question)

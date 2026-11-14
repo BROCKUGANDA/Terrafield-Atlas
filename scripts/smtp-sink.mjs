@@ -35,32 +35,59 @@ function decodeHeader(v) {
     try { return Buffer.from(b, 'base64').toString('utf8'); } catch { return _; }
   });
   out = out.replace(/=\?UTF-8\?Q\?([^?]*)\?=/gi, (_, q) => {
-    try { return q.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))); } catch { return _; }
+    try {
+      const qp = q.replace(/_/g, ' ');
+      const bytes = [];
+      for (let i = 0; i < qp.length; i++) {
+        if (qp[i] === '=' && /^[0-9A-F]{2}$/i.test(qp.substr(i + 1, 2))) {
+          bytes.push(parseInt(qp.substr(i + 1, 2), 16));
+          i += 2;
+        } else {
+          bytes.push(qp.charCodeAt(i) & 0xff);
+        }
+      }
+      return Buffer.from(bytes).toString('utf8'); // byte-accurate → no latin-1 mojibake
+    } catch { return _; }
   });
   return out;
 }
 
 /** Parse DATA payload: headers block, then body. */
 function parseMessage(data) {
-  const sep = data.indexOf('\r\n\r\n');
-  const sep2 = sep === -1 ? data.indexOf('\n\n') : sep;
-  const headEnd = sep2 === -1 ? data.length : sep2;
-  const headRaw = data.slice(0, headEnd);
-  const body = sep2 === -1 ? '' : data.slice(headEnd + (sep === -1 ? 2 : 4));
+  const text = data.toString('utf8'); // decode ONCE from the full buffer — no chunk-boundary mojibake
+  const sep = text.indexOf('\r\n\r\n');
+  const sep2 = sep === -1 ? text.indexOf('\n\n') : sep;
+  const headEnd = sep2 === -1 ? text.length : sep2;
+  const headRaw = text.slice(0, headEnd);
+  const body = sep2 === -1 ? '' : text.slice(headEnd + (sep === -1 ? 2 : 4));
   const headers = {};
   for (const line of headRaw.split(/\r?\n/)) {
     const m = /^([A-Za-z0-9-]+):\s*(.*)$/.exec(line);
     if (m) headers[m[1].toLowerCase()] = decodeHeader(m[2]);
   }
+  const cte = (headers['content-transfer-encoding'] ?? '').toLowerCase();
+  const previewBody = cte === 'quoted-printable' ? decodeQP(body) : body;
   return {
     messageId: headers['message-id'] ?? null,
     from: headers['from'] ?? null,
     to: headers['to'] ?? null,
     subject: headers['subject'] ?? null,
     date: headers['date'] ?? null,
-    bodyPreview: body.slice(0, 400),
+    contentTransferEncoding: cte || null,
+    bodyPreview: previewBody.slice(0, 400),
     bodyBytes: body.length,
   };
+}
+
+/** Decode a quoted-printable body (soft breaks + =XX) for readable previews. */
+function decodeQP(s) {
+  return s
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    // re-decode the latin-1 charcodes back to UTF-8 text where possible
+    .replace(/[\u0080-\u00FF]+/g, (seg) => {
+      try { return Buffer.from(seg.split('').map((c) => c.charCodeAt(0))).toString('utf8'); } catch { return seg; }
+    });
 }
 
 /** Extract the address from "FROM:<a@b>" / "TO:<a@b>" (angle brackets optional). */
@@ -72,16 +99,16 @@ function addrOf(arg) {
 let lastTraffic = Date.now();
 const server = createServer((socket) => {
   lastTraffic = Date.now();
-  const state = { helo: null, from: null, to: [], inData: false, dataBuf: '' };
-  let buf = '';
+  const state = { helo: null, from: null, to: [], inData: false, dataBuf: Buffer.alloc(0) };
+  let buf = Buffer.alloc(0);
 
   const write = (s) => socket.write(s);
   write(`220 ${HOSTNAME} ESMTP ready (verification sink; no TLS, no AUTH)\r\n`);
 
   const finishMessage = () => {
-    // Undo SMTP dot-stuffing (leading ".." → ".")
-    const payload = state.dataBuf.replace(/(^|\r\n)\.\./g, '$1.');
-    const parsed = parseMessage(payload);
+    // Undo SMTP dot-stuffing (leading ".." → ".") on raw bytes
+    const payload = state.dataBuf.toString('utf8').replace(/(^|\r\n)\.\./g, '$1.');
+    const parsed = parseMessage(Buffer.from(payload, 'utf8'));
     const entry = {
       receivedAt: new Date().toISOString(),
       smtp: {
@@ -107,19 +134,19 @@ const server = createServer((socket) => {
     state.from = null;
     state.to = [];
     state.inData = false;
-    state.dataBuf = '';
+    state.dataBuf = Buffer.alloc(0);
     write('250 2.0.0 OK: queued as delivery-proof\r\n');
   };
 
   socket.on('data', (chunk) => {
     lastTraffic = Date.now();
-    buf += chunk.toString('utf8');
+    buf = Buffer.concat([buf, chunk]);
     if (state.inData) {
       // DATA mode: scan for the CRLF.CRLF terminator across chunk boundaries.
-      const termIdx = buf.indexOf('\r\n.\r\n');
+      const termIdx = buf.indexOf(Buffer.from('\r\n.\r\n', 'utf8'));
       if (termIdx !== -1) {
-        state.dataBuf += buf.slice(0, termIdx + 2); // include trailing CRLF
-        buf = buf.slice(termIdx + 5); // keep what follows the terminator
+        state.dataBuf = Buffer.concat([state.dataBuf, buf.subarray(0, termIdx + 2)]); // include trailing CRLF
+        buf = buf.subarray(termIdx + 5); // keep what follows the terminator
         finishMessage();
         // fall through: anything buffered is new commands (pipelining)
         drainCommands();
@@ -131,9 +158,9 @@ const server = createServer((socket) => {
 
   const drainCommands = () => {
     let idx;
-    while ((idx = buf.indexOf('\r\n')) !== -1) {
-      const line = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
+    while ((idx = buf.indexOf(Buffer.from('\r\n', 'utf8'))) !== -1) {
+      const line = buf.subarray(0, idx).toString('utf8');
+      buf = buf.subarray(idx + 2);
       if (!line) continue;
       handleCommand(line);
       if (socket.destroyed) return;
@@ -167,7 +194,7 @@ const server = createServer((socket) => {
       case 'DATA': {
         if (state.from === null || state.to.length === 0) { write('503 need MAIL and RCPT first\r\n'); break; }
         state.inData = true;
-        state.dataBuf = '';
+        state.dataBuf = Buffer.alloc(0);
         write('354 End data with <CR><LF>.<CR><LF>\r\n');
         break;
       }
@@ -175,7 +202,7 @@ const server = createServer((socket) => {
         state.from = null;
         state.to = [];
         state.inData = false;
-        state.dataBuf = '';
+        state.dataBuf = Buffer.alloc(0);
         write('250 2.0.0 OK\r\n');
         break;
       case 'NOOP':

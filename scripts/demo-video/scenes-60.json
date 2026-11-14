@@ -1,0 +1,50 @@
+[
+ {
+  "id": "60-title",
+  "kind": "title",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/00-60-title.png",
+  "label": "TERRAFIELD ATLAS",
+  "narration": "TerraField Atlas \u2014 NASA Earth intelligence for agricultural resilience, built for the NASA Space Apps Challenge.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/00-60-title.wav"
+ },
+ {
+  "id": "60-fire-signs",
+  "kind": "shot",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/01-60-fire-signs.png",
+  "label": "FIRE INTELLIGENCE \u00b7 LIVE SOURCE SIGNS",
+  "narration": "Fire Intelligence decodes the live VIIRS fire stream \u2014 with honest source signs: live is live, blocked is flagged.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/01-60-fire-signs.wav"
+ },
+ {
+  "id": "60-watchlists",
+  "kind": "shot",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/02-60-watchlists.png",
+  "label": "FIRE WATCHLISTS \u00b7 SCHEDULED RUN",
+  "narration": "Regional watchlists run on real cadences \u2014 the scheduler claims each list atomically and evaluates the live NASA stream.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/02-60-watchlists.wav"
+ },
+ {
+  "id": "60-digest-exits",
+  "kind": "shot",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/03-60-digest-exits.png",
+  "label": "PUSH DIGEST \u00b7 SIGNED EXITS",
+  "narration": "Every run pushes a cadence-aware digest over Server-Sent Events \u2014 and exits through a signed webhook and email.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/03-60-digest-exits.wav"
+ },
+ {
+  "id": "60-system-health",
+  "kind": "shot",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/04-60-system-health.png",
+  "label": "SYSTEM HEALTH \u00b7 OPERATIONAL TRUTH",
+  "narration": "System Health is the operational truth: live probes, a scheduler watchdog, circuit breakers \u2014 every request logged.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/04-60-system-health.wav"
+ },
+ {
+  "id": "60-closing",
+  "kind": "closing",
+  "frame_composed": "/home/z/my-project/scripts/demo-video/composed-60/05-60-closing.png",
+  "label": "REAL DATA \u00b7 HONEST GAPS \u00b7 PUSH-DELIVERED INTELLIGENCE",
+  "narration": "Real data. Honest gaps. Push-delivered intelligence. TerraField Atlas.",
+  "audio": "/home/z/my-project/scripts/demo-video/audio-60/05-60-closing.wav"
+ }
+]

@@ -1,0 +1,27 @@
+# TerraField Atlas
+
+> Mission console for agricultural resilience and live fire intelligence, built on real NASA Earth observations (POWER, GIBS MODIS/VIIRS, SMAP, EONET, FIRMS) for the NASA Space Apps Challenge 2026 — Field Shift. Every number is traceable to its retrieval; missing data is reported as missing, never imputed; push-delivered digests exit the console over Server-Sent Events, a signed webhook (HMAC-SHA256, OWASP-aligned) and SMTP email.
+
+TerraField Atlas is a Next.js mission console that answers six operator questions — observed conditions, how they changed, whether the changes are statistically meaningful, which crop rotations fit the evidence, how alternatives compare, and what the limits are — plus a full fire-intelligence module: VIIRS 375 m thermal-anomaly detections, regional watchlists on real scheduler cadences, cadence-aware digests, and signed push delivery.
+
+## Key facts
+
+- [Open API root](/api/v1/system/status): live system status — engines, providers, scheduler, digest channel, delivery exits, A/B experiments.
+- [Health probe](/api/v1/health): liveness with per-source operational states.
+- [Readiness probe](/api/v1/readyz): dependency checks.
+- [Fire watchlists](/api/v1/fires/watchlists): regional watchlists, runs history, cadence-aware digests.
+- [Curated demo regions](/api/v1/regions): 19 real agricultural regions with real coordinates (curated presets, not administrative boundaries).
+- [Experiments API](/api/v1/experiments): deterministic A/B assignment + outcome ledger (no PII).
+- [Sitemap](/sitemap.xml): crawlable URL list.
+
+## Principles
+
+1. Real data only: every displayed observation is a stored, source-attributed NASA record.
+2. Honest gaps: archive gaps render as no-data with a stated reason — never zero-filled, never imputed.
+3. Statistical rigor: Seasonal Mann-Kendall + Theil-Sen with autocorrelation correction and FDR control; ≥8 full years before any significance claim.
+4. Provenance: every upstream request is logged (provider, URL, status, latency, correlation ID) and auditable.
+5. Push-delivered: scheduled evaluations publish to SSE, a signed webhook and email — each delivery audited.
+
+## Statistical methodology (summary)
+
+Monthly aggregation of complete months (≥20 valid days); Seasonal Mann-Kendall (Hirsch-Slack) with tie-corrected variance; Theil-Sen seasonal slope with Sen-rank 95% CI; Hamed-Rao lag-1 variance inflation when deseasonalized autocorrelation exceeds ±2/√n; Benjamini-Hochberg FDR across variables; ≥8 full years required before any significance claim.

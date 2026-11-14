@@ -8,6 +8,7 @@ import { RULE_VERSION } from '@/lib/crops/rotation-engine';
 import { schedulerStatus, startScheduler } from '@/lib/scheduler';
 import { digestChannelStatus } from '@/lib/fires/digest-channel';
 import { sourceSigns } from '@/lib/source-health';
+import { experimentMetrics } from '@/lib/experiments';
 
 /**
  * GET  /api/v1/system/status — settings & diagnostics
@@ -58,6 +59,7 @@ export async function GET() {
     circuitBreakers: circuitStatus(),
     scheduler,
     digestChannel: digestChannelStatus(),
+    experiments: await experimentMetrics(),
     providers: {
       NASA_POWER: {
         status: signs.signs.find((s) => s.key === 'NASA_POWER')?.state === 'live' ? 'live' : 'unreachable',

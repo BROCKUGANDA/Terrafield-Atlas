@@ -1,3 +1,7 @@
+# TerraField Atlas — robots.txt
+# Console + open API. Public pages are crawlable; the mission console is a
+# client-side app that renders fine for crawlers, and the JSON API is open.
+
 User-agent: Googlebot
 Allow: /
 
@@ -10,5 +14,41 @@ Allow: /
 User-agent: facebookexternalhit
 Allow: /
 
+User-agent: Slackbot
+Allow: /
+
+# ---- AI / answer engines are explicitly welcome (AEO) ----
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
 User-agent: *
 Allow: /
+
+# Machine-readable briefs for LLMs and answer engines
+# https://llmstxt.org — see /llms.txt and /llms-full.txt
+
+Sitemap: /sitemap.xml
