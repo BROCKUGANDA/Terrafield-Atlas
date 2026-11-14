@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput, type SchedulerRunEntry } from '@/lib/api-client';
+import { usePushChannel } from '@/components/state/push-store';
 import { minBacktestEndIso, windowFor, yesterdayIso } from '@/lib/fires/watchlist-engine';
 import { REEVALUATE_LABELS, type ReevaluateIntervalMin } from '@/lib/schedule-core';
 import { logEvent } from '@/components/state/log-store';
@@ -144,6 +145,13 @@ export function FireWatchlistsSection() {
     refetchInterval: 120_000,
     retry: 1,
   });
+
+  // Push channel state — the console-wide EventSource (app shell) writes it;
+  // the chip proves digests arrive without this view ever asking for them.
+  const pushState = usePushChannel((s) => s.channelState);
+  const pushEvents = usePushChannel((s) => s.eventsReceived);
+  const pushLastAt = usePushChannel((s) => s.lastEventAt);
+  const pushReconnects = usePushChannel((s) => s.reconnects);
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<WatchlistInput>(() => ({
@@ -305,10 +313,35 @@ export function FireWatchlistsSection() {
               lookback window is checked against the real GIBS VIIRS 375 m stream, then reports clear / watch / alert from
               stored detections only. Days the archive simply does not have are reported as no-data — never zero-filled.
               <span className="text-ink"> Backtest</span> replays the same rule against any historical window via the date
-              picker; watchlists with a cadence set are re-evaluated automatically by the in-process scheduler.
+              picker; watchlists with a cadence set are re-evaluated automatically by the in-process scheduler, and every
+              completed evaluation or scheduler failure is <span className="text-ink">pushed live</span> to the console as a
+              cadence-aware digest over the digest-stream channel.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
+            <span
+              className={cn(
+                'telemetry inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-[10px] uppercase tracking-wide-mc',
+                pushState === 'open'
+                  ? 'border-signal/40 bg-signal/5 text-signal'
+                  : pushState === 'disabled'
+                    ? 'border-edge text-faint'
+                    : 'border-caution/40 text-caution',
+              )}
+              title={
+                pushState === 'open'
+                  ? `Digest push channel live — ${pushEvents} digest(s) pushed to this console${pushLastAt ? `; last at ${utcMin(pushLastAt)}Z` : ''}${pushReconnects > 0 ? `; ${pushReconnects} reconnect(s)` : ''}`
+                  : pushState === 'disabled'
+                    ? 'Digest push channel disabled by DIGEST_PUSH_OFF=1 — digests remain available on demand'
+                    : pushState === 'reconnecting'
+                      ? 'Channel connection lost — the browser is auto-reconnecting; missed digests remain available on demand'
+                      : 'Opening the digest push channel'
+              }
+              data-tour="push-channel-chip"
+            >
+              <RadioTower className={cn('h-3 w-3', pushState === 'open' && 'anim-pulse-soft')} aria-hidden />
+              push {pushState === 'open' ? `live · ${pushEvents}` : pushState === 'reconnecting' ? 'reconnecting' : pushState === 'disabled' ? 'off' : 'connecting'}
+            </span>
             {summary && rows.length > 0 && (
               <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
                 {summary.total} list · {summary.alerting} alert · {summary.watch} watch · {summary.clear} clear · {summary.unverified} unverified
@@ -572,7 +605,8 @@ export function FireWatchlistsSection() {
           pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler's live state is reported
           in System Health, and each card's <span className="text-dim">Runs</span> panel reads the scheduler's audit ledger
           (successes joined to their evaluation event, failures listed with their errors) while
-          <span className="text-dim"> Digest</span> summarizes the latest cadence window against the previous one.
+          <span className="text-dim"> Digest</span> summarizes the latest cadence window against the previous one — pulled
+          on demand here, and pushed live over the digest stream whenever a new evaluation or scheduled failure lands.
         </p>
       </HudPanel>
     </motion.section>
@@ -642,9 +676,12 @@ function WatchlistCard({
   }, [runsOpen, runs.data, w.name]);
 
   // Cadence-aware alert digest: window derives from the watchlist cadence
-  // (null → API default 24 h); overridable from the popover chips.
+  // (null → API default 24 h); overridable from the popover chips. The data
+  // also arrives PUSHED — the console-wide stream writes the same cache key
+  // the moment an evaluation or scheduler failure lands.
   const [digestOpen, setDigestOpen] = useState(false);
   const [digestHours, setDigestHours] = useState<number | null>(null);
+  const lastPush = usePushChannel((s) => s.lastDigests[w.id]);
   const digest = useQuery({
     queryKey: ['watchlist-digest', w.id, digestHours ?? 'cadence'],
     queryFn: () => api.watchlistDigest(w.id, digestHours ?? undefined),
@@ -973,7 +1010,8 @@ function WatchlistCard({
                 <p className="mt-1 text-[10px] leading-relaxed text-dim">
                   Cadence-aware summary of this watchlist's alert activity: the window derives from its re-evaluation
                   cadence and is compared with the equal-length window before it — status path, peak detections, alert
-                  entries/exits, failed runs, archive gaps. Recorded evaluations only; nothing interpolated.
+                  entries/exits, failed runs, archive gaps. Recorded evaluations only; nothing interpolated. On demand
+                  here — and pushed live over the digest stream the moment a new fact lands.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Digest window length">
@@ -1016,6 +1054,23 @@ function WatchlistCard({
                         ? ' (no cadence set)'
                         : ''}
                   </p>
+                  {lastPush && (
+                    <p
+                      className="telemetry text-[9px] uppercase tracking-wide-mc text-signal"
+                      title={`Pushed over the digest stream at ${utcMin(lastPush.pushedAt)}Z${lastPush.status ? ` — last status ${lastPush.status}` : ' — the window carries the failure that pushed it'}`}
+                    >
+                      pushed {utcMin(lastPush.pushedAt)}Z ·{' '}
+                      {lastPush.reason === 'scheduled-failure'
+                        ? 'scheduled failure'
+                        : lastPush.trigger === 'scheduled'
+                          ? 'scheduled run'
+                          : lastPush.trigger === 'backtest'
+                            ? 'backtest'
+                            : lastPush.trigger === 'manual'
+                              ? 'manual evaluation'
+                              : 'evaluation'}
+                    </p>
+                  )}
                   <div className="flex flex-col gap-1.5 rounded-sm border border-edge bg-void/40 p-2.5">
                     {digest.data.digest.map((line, i) => (
                       <p key={i} className="text-[10.5px] leading-relaxed text-dim">{line}</p>

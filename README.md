@@ -30,7 +30,7 @@ The demo needs **no signup**:
 5. **Environmental Analysis** — run the trend pipeline (seasonal Mann-Kendall, Theil-Sen, FDR).
 6. **Farm Workspace** — create a farm, enter a soil test (or fetch the supplementary SoilGrids profile).
 7. **Rotation Planner** — build scenarios, set priorities, compare alternatives with full factor-level explanations.
-8. **Fire Intelligence** — ingest real VIIRS 375 m detections (e.g. the Zambia preset, Jul–Oct), view the fire calendar, and set up **regional fire watchlists**: pick a geography, radius, confidence floor and threshold; *Evaluate now* checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only (a red header chip surfaces alerts from anywhere in the console).
+8. **Fire Intelligence** — ingest real VIIRS 375 m detections (e.g. the Zambia preset, Jul–Oct), view the fire calendar, and set up **regional fire watchlists**: pick a geography, radius, confidence floor and threshold; *Evaluate now* checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only (a red header chip surfaces alerts from anywhere in the console). Every completed evaluation and every scheduler failure is **pushed live** to the console as a cadence-aware digest over the Server-Sent-Events channel (the `push live` chip in the watchlists header shows the connection).
 9. **Reports** — compile and print the farm assessment (browser print → PDF).
 10. **Evidence & Provenance / System Health** — inspect the request ledger, source register and diagnostics.
 
@@ -55,7 +55,7 @@ The demo needs **no signup**:
 bun run dev            # dev server (auto-run in this sandbox)
 bun run lint           # ESLint
 bun run db:push        # apply the Prisma schema
-bun test tests/        # 69 unit tests (fixtures only — no network)
+bun test tests/        # 115 unit tests (fixtures only — no network)
 bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/ISRIC endpoints
 ```
 
@@ -65,6 +65,8 @@ bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/IS
 | --- | --- | --- |
 | `DATABASE_URL` | yes | SQLite file path (set by the sandbox) |
 | `FIRMS_MAP_KEY` | no | enables the FIRMS CSV adapter (free NASA registration). Without it the adapter reports `credentials-not-configured` and fire features are served from the GIBS VIIRS stream (same detections). The key is server-side only and never exposed to the client. |
+| `WATCH_SCHEDULER_OFF` | no | `=1` disables the in-process watchlist re-evaluation scheduler (on-demand evaluation remains). |
+| `DIGEST_PUSH_OFF` | no | `=1` disables the SSE digest push channel (digests remain available on demand from `GET …/digest`). |
 
 ## Documentation
 

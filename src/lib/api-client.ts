@@ -400,6 +400,56 @@ export interface WatchDigestResponse {
   note: string;
 }
 
+// ---- push-style digest delivery (SSE channel) ----
+
+/** Server-Sent Events endpoint the console's EventSource stays subscribed to. */
+export const DIGEST_STREAM_PATH = '/api/v1/fires/watchlists/digest-stream';
+
+/** The digest body shared by the REST response and every pushed payload. */
+export type DigestBody = Omit<WatchDigestResponse, 'watchlist' | 'note' | 'correlationId'>;
+
+/** `watchlist.digest` event on the stream — one whole cadence-aware digest. */
+export interface DigestPushPayload {
+  type: 'digest';
+  /** What pushed it: an evaluation event landed, or a scheduled run FAILED. */
+  reason: 'evaluation' | 'scheduled-failure';
+  /** Trigger of the newest evaluation in the digest — null for scheduled failures. */
+  trigger: 'manual' | 'backtest' | 'scheduled' | null;
+  correlationId: string | null;
+  /** When the triggering fact landed (ISO). */
+  triggeredAt: string;
+  /** When the channel recomputed and published the digest (ISO). */
+  pushedAt: string;
+  watchlistId: string;
+  watchlistName: string;
+  watchlist: Watchlist;
+  digest: DigestBody;
+}
+
+/** `channel.hello` event — subscription confirmation with channel facts. */
+export interface DigestHelloPayload {
+  type: 'hello';
+  connectionId: string;
+  connectedAt: string;
+  subscribers: number;
+  maxClients: number;
+  schedulerEnabled: boolean;
+  schedulerTickEverySec: number | null;
+  note: string;
+}
+
+export interface DigestChannelStatus {
+  kind: 'sse';
+  enabled: boolean;
+  disabledByEnv: boolean;
+  maxClients: number;
+  subscribers: number;
+  connectionsOpened: number;
+  eventsDelivered: number;
+  lastEventAt: string | null;
+  note: string;
+}
+
 export interface DataSourceRow {
   id: string;
   provider: string;
@@ -472,6 +522,7 @@ export interface SystemStatus {
     dueNow: { id: string; name: string }[];
     note: string;
   };
+  digestChannel: DigestChannelStatus;
   providers: Record<string, { status: string; note?: string }>;
   reliability: Record<string, string>;
   methodology: { trend: string; rotation: string };

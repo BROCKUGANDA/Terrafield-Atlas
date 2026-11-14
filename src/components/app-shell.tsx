@@ -9,6 +9,7 @@ import {
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
 import { useConsoleHotkeys } from '@/hooks/use-console-hotkeys';
+import { useDigestStream } from '@/hooks/use-digest-stream';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -86,7 +87,8 @@ function LinkCheck({ dataUpdatedAt, isFetching }: { dataUpdatedAt: number; isFet
   );
 }
 
-/** Console-wide fire-watchlist alert chip (database-only poll, no provider traffic). */
+/** Console-wide fire-watchlist alert chip (DB-only poll, no provider traffic;
+ *  pushed digests invalidate the rows instantly — the 120 s poll is fallback). */
 function FireWatchAlerts() {
   const setView = useSession((s) => s.setView);
   const { data } = useQuery({
@@ -118,6 +120,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { view, setView, location, activeFarmId, setActiveFarmId, operator, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
   useConsoleHotkeys(!!operator);
+  // Console-wide push channel: one EventSource keeps this console subscribed
+  // to pushed watchlist digests for as long as the shell lives (reconnects
+  // handled by the browser; nothing here re-renders the shell).
+  useDigestStream();
 
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 120_000, retry: 1 });
   const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1 });

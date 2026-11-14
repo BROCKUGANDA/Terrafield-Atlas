@@ -135,7 +135,7 @@ export const TOUR_STEPS: TourStep[] = [
     body: [
       'Standing regional alerts: pick a geography and radius, set a confidence floor, lookback window and detection threshold.',
       '“Evaluate now” checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only. “Backtest” replays the exact rule against any historical window via the date picker, and watchlists with a cadence set are re-evaluated automatically by the in-process scheduler. While any watchlist alerts, a red chip in the header shows it from anywhere in the console.',
-      'Each card also carries a Runs panel — the scheduler’s audit-ledger history for that list, failures included — and a cadence-aware Digest that sums up the latest cadence window against the one before it.',
+      'Each card also carries a Runs panel — the scheduler’s audit-ledger history for that list, failures included — and a cadence-aware Digest that sums up the latest cadence window against the one before it. Digests are also PUSHED: every completed evaluation and every scheduler failure is delivered live over the digest-stream channel (the “push live” chip in this header shows the connection).',
     ],
   },
   {

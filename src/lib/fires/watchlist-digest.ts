@@ -18,8 +18,11 @@ import type { ParsedSchedulerRun } from '@/lib/fires/watchlist-runs';
  * equals the current window's start), so no evaluation is ever counted twice.
  *
  * Like everything in this console the digest reports only what is recorded —
- * it never interpolates, extrapolates or zero-fills. Delivery is on demand
- * (this topology has no push channel); the API response IS the digest.
+ * it never interpolates, extrapolates or zero-fills. Delivery is BOTH
+ * on-demand (GET …/digest) and push-style: the digest-stream channel
+ * (lib/fires/digest-push.ts + digest-channel.ts) recomputes this exact
+ * digest and writes it onto every open console the moment an evaluation
+ * event lands or a scheduled run fails.
  */
 
 export const DEFAULT_DIGEST_HOURS = 24;

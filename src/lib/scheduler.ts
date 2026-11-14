@@ -6,6 +6,7 @@ import {
   type TickResult,
 } from '@/lib/schedule-core';
 import { runWatchlistEvaluation } from '@/lib/fires/watchlist-evaluate';
+import { publishDigestForWatchlist } from '@/lib/fires/digest-channel';
 
 /**
  * In-process background scheduler for watchlist re-evaluation.
@@ -118,6 +119,17 @@ async function recordOutcome(
       ),
     },
   });
+  // Push-style digest delivery: successful runs publish through the shared
+  // evaluation core (it records the event itself); FAILED runs write no
+  // evaluation event, so THIS is the only place a failure becomes a digest
+  // push. Fire-and-forget — the ledger row above is already the durable
+  // record, and with zero open consoles this costs nothing.
+  if (!outcome.ok) {
+    void publishDigestForWatchlist(w.id, 'scheduled-failure', {
+      correlationId: outcome.correlationId,
+      triggeredAt: new Date(),
+    });
+  }
 }
 
 // --- lifecycle ---
@@ -151,6 +163,16 @@ async function tickOnce(): Promise<void> {
   } finally {
     rt.running = false;
   }
+}
+
+/** Lightweight live state for the SSE digest stream's hello payload (no DB read). */
+export function schedulerEnabled(): boolean {
+  return runtime().enabled;
+}
+
+/** Tick period in seconds (fixed by this module). */
+export function schedulerStatusTickSec(): number {
+  return TICK_MS / 1_000;
 }
 
 /** Start the interval timer (idempotent; no-op when WATCH_SCHEDULER_OFF=1). */

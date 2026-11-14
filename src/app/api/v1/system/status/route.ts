@@ -6,6 +6,7 @@ import { firmsConfigured } from '@/lib/adapters/firms';
 import { CROP_CATALOGUE_VERSION, CROP_CATALOGUE } from '@/lib/crops/catalogue';
 import { RULE_VERSION } from '@/lib/crops/rotation-engine';
 import { schedulerStatus, startScheduler } from '@/lib/scheduler';
+import { digestChannelStatus } from '@/lib/fires/digest-channel';
 
 /**
  * GET  /api/v1/system/status — settings & diagnostics
@@ -52,6 +53,7 @@ export async function GET() {
     cache: cacheStats(),
     circuitBreakers: circuitStatus(),
     scheduler,
+    digestChannel: digestChannelStatus(),
     providers: {
       NASA_POWER: { status: 'operational (public, no auth)' },
       GIBS: { status: 'operational (public, no auth)' },

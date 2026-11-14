@@ -10,6 +10,7 @@ import {
 } from '@/lib/fires/watchlist-engine';
 import { ensureCoverageForDate, storedDetections, type EnsuredDay } from '@/lib/fires/coverage';
 import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
+import { publishDigestForWatchlist } from '@/lib/fires/digest-channel';
 
 /**
  * Shared LIVE watchlist evaluation — ONE code path for every trigger:
@@ -29,7 +30,10 @@ import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serial
  *
  * No detection is ever synthesized; a provider error marks the job failed and
  * writes nothing. HTTP mapping lives in the route module; the scheduler maps
- * failures onto its audit ledger.
+ * failures onto its audit ledger. Every COMPLETED evaluation additionally
+ * pushes a fresh cadence-aware digest onto the SSE digest-stream channel
+ * (fire-and-forget — delivery can never fail the evaluation, and with zero
+ * open consoles it does no database work).
  */
 
 export type WatchEvalTrigger = 'manual' | 'backtest' | 'scheduled';
@@ -191,6 +195,15 @@ export async function runWatchlistEvaluation(
       where: { watchlistId: w.id },
       orderBy: { evaluatedAt: 'desc' },
       take: 10,
+    });
+
+    // Push-style digest delivery: the event row above IS the new digest
+    // fact. Recompute the cadence-aware digest and write it onto every open
+    // console's stream. Fire-and-forget by contract — never throws, never
+    // gates this evaluation; a watchlist deleted mid-push is skipped inside.
+    void publishDigestForWatchlist(w.id, 'evaluation', {
+      correlationId,
+      triggeredAt: new Date(),
     });
 
     return {

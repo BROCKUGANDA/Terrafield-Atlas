@@ -11,7 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
-import { Settings, Activity, Clock, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass } from 'lucide-react';
+import { Settings, Activity, Clock, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass, RadioTower } from 'lucide-react';
 import { useTourStore } from '@/components/state/tour-store';
 import { cn } from '@/lib/utils';
 
@@ -237,6 +237,43 @@ export function SettingsView() {
                     <Row k="Health" v={`${s.scheduler.ticksFired} tick(s) fired · ${s.scheduler.ticksSkippedBusy} skipped busy · ${s.scheduler.consecutiveFailedRuns} consecutive failed run(s)`} mono />
                   </div>
                   <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.scheduler.note}</p>
+                </HudPanel>
+              </motion.section>
+            )}
+
+            {/* Digest push channel (SSE) — push-style digest delivery */}
+            {s.digestChannel && (
+              <motion.section variants={RISE} custom={2.75} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Digest push channel">
+                <HudPanel>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <RadioTower className="h-4 w-4 text-signal" aria-hidden />
+                    <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Digest push channel</h3>
+                    <span className={cn(
+                      'telemetry rounded-sm border px-2 py-0.5 text-[10px] uppercase tracking-wide-mc',
+                      s.digestChannel.enabled
+                        ? s.digestChannel.subscribers > 0
+                          ? 'border-signal/40 text-signal'
+                          : 'border-edge text-dim'
+                        : 'border-caution/50 text-caution',
+                    )}>
+                      {s.digestChannel.enabled
+                        ? s.digestChannel.subscribers > 0
+                          ? `live · ${s.digestChannel.subscribers} open console(s)`
+                          : 'enabled · no open consoles'
+                        : 'disabled by DIGEST_PUSH_OFF'}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-1.5">
+                    <Row k="Topology" v="Server-Sent Events on the single HTTP port · no broker, no extra port" />
+                    <Row k="Delivered" v={`${s.digestChannel.eventsDelivered} digest frame(s) to ${s.digestChannel.connectionsOpened} connection(s) since boot`} mono />
+                    <Row
+                      k="Last event"
+                      v={s.digestChannel.lastEventAt ? new Date(s.digestChannel.lastEventAt).toISOString().slice(0, 16).replace('T', ' ') + 'Z' : '— (no digest pushed yet; every evaluation and scheduler failure publishes one)'}
+                      mono
+                    />
+                    <Row k="Capacity" v={`${s.digestChannel.maxClients} concurrent stream connection(s); excess gets 503 + Retry-After`} mono />
+                  </div>
+                  <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.digestChannel.note}</p>
                 </HudPanel>
               </motion.section>
             )}
