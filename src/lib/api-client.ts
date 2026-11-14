@@ -548,7 +548,9 @@ export interface DigestChannelStatus {
       secretBytes?: number;
       secretAdequate?: boolean;
       rotationSecretPresent?: boolean;
+      allowlistCount?: number;
       targetSafe?: boolean | null;
+      targetAllowlisted?: boolean | null;
       targetUnsafeReason?: string | null;
       signingScheme?: string;
       attempts: number;

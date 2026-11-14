@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import {
   parseWebhookConfig,
+  parseWebhookAllowlist,
   buildWebhookHeaders,
   verifyWebhookSignature,
   signWebhookV1,
@@ -209,6 +210,75 @@ describe('webhook SSRF guard', () => {
     expect(weak.secretBytes).toBe(5);
     const rotating = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'https://hooks.example.org/x', DIGEST_WEBHOOK_SECRET: 'k'.repeat(32), DIGEST_WEBHOOK_SECRET_PREVIOUS: 'old' });
     expect(rotating.rotationSecretPresent).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Webhook exit — SSRF allowlist (explicit operator opt-in for private relays)
+// ---------------------------------------------------------------------------
+
+describe('webhook SSRF allowlist (DIGEST_WEBHOOK_ALLOWLIST)', () => {
+  test('parser: host and host:port entries, brackets, garbage dropped', () => {
+    expect(parseWebhookAllowlist(' 127.0.0.1:4317, ops-relay.internal ')).toEqual([
+      { host: '127.0.0.1', port: 4317 },
+      { host: 'ops-relay.internal', port: null },
+    ]);
+    expect(parseWebhookAllowlist('[::1]:2525')).toEqual([{ host: '::1', port: 2525 }]);
+    // garbage is dropped, never broadened: CIDRs, URLs, bad ports
+    expect(parseWebhookAllowlist('10.0.0.0/8, http://x/y, 1.2.3.4:99999, ,,')).toEqual([]);
+    expect(parseWebhookAllowlist(undefined)).toEqual([]);
+    expect(parseWebhookAllowlist('')).toEqual([]);
+  });
+
+  test('an exact host:port entry rescues that target ONLY (deny-by-default otherwise)', () => {
+    const list = '127.0.0.1:4317';
+    const ok = assertWebhookTargetSafe('http://127.0.0.1:4317/digest', list);
+    expect(ok.ok).toBe(true);
+    expect(ok.allowlisted).toBe(true); // passed ONLY via the allowlist
+    // same host, DIFFERENT port → still refused
+    expect(assertWebhookTargetSafe('http://127.0.0.1:9999/digest', list).ok).toBe(false);
+    // different private host → still refused
+    expect(assertWebhookTargetSafe('http://10.9.9.9/digest', list).ok).toBe(false);
+    expect(assertWebhookTargetSafe('http://localhost:4317/digest', list).ok).toBe(false);
+  });
+
+  test('a host-only entry matches ANY port on that host', () => {
+    expect(assertWebhookTargetSafe('http://10.1.2.3:80/digest', '10.1.2.3').ok).toBe(true);
+    expect(assertWebhookTargetSafe('http://10.1.2.3:8443/digest', '10.1.2.3').ok).toBe(true);
+    expect(assertWebhookTargetSafe('http://10.1.2.4/digest', '10.1.2.3').ok).toBe(false);
+  });
+
+  test('allowlist can NEVER rescue scheme or unparseable refusals', () => {
+    expect(assertWebhookTargetSafe('file:///etc/passwd', '127.0.0.1:4317').ok).toBe(false);
+    expect(assertWebhookTargetSafe('gopher://127.0.0.1:4317', '127.0.0.1:4317').ok).toBe(false);
+    expect(assertWebhookTargetSafe('not a url', '127.0.0.1').ok).toBe(false);
+    // the cloud metadata address stays refused unless the operator names it
+    expect(assertWebhookTargetSafe('http://169.254.169.254/x', '127.0.0.1:4317').ok).toBe(false);
+    expect(assertWebhookTargetSafe('http://169.254.169.254/x', '169.254.169.254').ok).toBe(true);
+  });
+
+  test('configuration surfaces allowlist facts alongside the guard verdict', () => {
+    const armed = parseWebhookConfig({
+      DIGEST_WEBHOOK_URL: 'http://127.0.0.1:4317/digest',
+      DIGEST_WEBHOOK_ALLOWLIST: '127.0.0.1:4317',
+      DIGEST_WEBHOOK_SECRET: 'k'.repeat(32),
+    });
+    expect(armed.enabled).toBe(true);
+    expect(armed.state).toBe('configured');
+    expect(armed.allowlistCount).toBe(1);
+    expect(armed.targetSafe).toBe(true);
+    expect(armed.targetAllowlisted).toBe(true);
+    expect(armed.targetUnsafeReason).toBeNull();
+    // no allowlist → the same URL stays refused
+    const refused = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'http://127.0.0.1:4317/digest' });
+    expect(refused.targetSafe).toBe(false);
+    expect(refused.targetAllowlisted).toBe(false);
+    expect(refused.allowlistCount).toBe(0);
+    // absent URL → allowlist counted but verdict null
+    const noUrl = parseWebhookConfig({ DIGEST_WEBHOOK_ALLOWLIST: 'a.local,b.local' });
+    expect(noUrl.allowlistCount).toBe(2);
+    expect(noUrl.targetSafe).toBeNull();
+    expect(noUrl.targetAllowlisted).toBeNull();
   });
 });
 

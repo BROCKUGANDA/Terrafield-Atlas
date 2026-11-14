@@ -24,6 +24,13 @@ import type { DigestPushPayload } from '@/lib/fires/digest-push';
  *   DIGEST_WEBHOOK_SECRET_PREVIOUS — optional; the PREVIOUS secret, still
  *                            accepted by `verifyWebhookSignature` during
  *                            zero-downtime rotation on the RECEIVER side
+ *   DIGEST_WEBHOOK_ALLOWLIST — optional; comma-separated "host" / "host:port"
+ *                            entries that EXPLICITLY allow a target inside a
+ *                            refused range (loopback/RFC1918/…). OWASP SSRF
+ *                            posture: deny by default, allow by explicit
+ *                            operator opt-in — for deployments whose ops
+ *                            relay deliberately runs inside the private
+ *                            network. Never widens the http(s)-scheme rule.
  *   DIGEST_WEBHOOK_OFF=1   — hard disable, surfaced in /api/v1/system/status
  *
  * SIGNATURE SCHEME (OWASP-aligned, Stripe-compatible shape):
@@ -76,21 +83,82 @@ export interface WebhookConfig {
   secretAdequate: boolean;
   /** True when a previous (rotation) secret is present for receivers. */
   rotationSecretPresent: boolean;
+  /** Number of parsed DIGEST_WEBHOOK_ALLOWLIST entries (0 when absent). */
+  allowlistCount: number;
   /** Null when the URL is absent/invalid, else the SSRF-guard verdict. */
   targetSafe: boolean | null;
+  /** True when the target passed ONLY via an explicit allowlist entry. */
+  targetAllowlisted: boolean | null;
   targetUnsafeReason: string | null;
+}
+
+/** One parsed allowlist entry: exact host (lowercase) + optional port. */
+export interface WebhookAllowlistEntry {
+  host: string;
+  port: number | null;
+}
+
+/**
+ * Parse DIGEST_WEBHOOK_ALLOWLIST — comma-separated "host" or "host:port"
+ * entries (bracketed IPv6 allowed). Pure. Garbage entries are dropped, never
+ * silently broadened: an entry containing "/" or an out-of-range port is
+ * ignored, because a mis-parsed entry that matched too much would defeat the
+ * guard it exists to narrow.
+ */
+export function parseWebhookAllowlist(raw: string | undefined | null): WebhookAllowlistEntry[] {
+  if (!raw || !raw.trim()) return [];
+  const entries: WebhookAllowlistEntry[] = [];
+  for (const piece of raw.split(',')) {
+    const entry = piece.trim().toLowerCase();
+    if (!entry || entry.includes('/')) continue; // no CIDRs, no URLs, no paths
+    let host = entry.replace(/^\[/, '');
+    let port: number | null = null;
+    const m = /^(.+):(\d{1,5})$/.exec(host);
+    if (m) {
+      host = m[1].replace(/\]$/, '');
+      const p = Number(m[2]);
+      if (!Number.isInteger(p) || p < 1 || p > 65_535) continue;
+      port = p;
+    } else {
+      host = host.replace(/\]$/, '');
+    }
+    if (!host) continue;
+    entries.push({ host, port });
+  }
+  return entries;
+}
+
+/** Does this URL match an allowlist entry? Pure. Exact host; port when pinned. */
+export function webhookTargetAllowlisted(
+  url: URL,
+  allowlist: WebhookAllowlistEntry[],
+): boolean {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const port = url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port);
+  return allowlist.some((e) => e.host === host && (e.port === null || e.port === port));
 }
 
 /** Parse + validate the webhook exit configuration. Pure. */
 export function parseWebhookConfig(env: Record<string, string | undefined>): WebhookConfig {
   const url = env.DIGEST_WEBHOOK_URL?.trim() || null;
   const secrets = secretFacts(env);
-  const common = { secretPresent: secrets.present, secretBytes: secrets.bytes, secretAdequate: secrets.adequate, rotationSecretPresent: secrets.rotationPresent };
+  const allowlist = parseWebhookAllowlist(env.DIGEST_WEBHOOK_ALLOWLIST);
+  const common = {
+    secretPresent: secrets.present,
+    secretBytes: secrets.bytes,
+    secretAdequate: secrets.adequate,
+    rotationSecretPresent: secrets.rotationPresent,
+    allowlistCount: allowlist.length,
+  };
+  const verdict = (u: string) => {
+    const guard = assertWebhookTargetSafe(u, allowlist);
+    return { targetSafe: guard.ok, targetAllowlisted: guard.ok && guard.allowlisted === true, targetUnsafeReason: guard.ok ? null : guard.reason ?? null };
+  };
   if (env.DIGEST_WEBHOOK_OFF === '1') {
-    return { enabled: false, state: 'disabled', url, host: hostOf(url), ...common, targetSafe: url ? assertWebhookTargetSafe(url).ok : null, targetUnsafeReason: url ? assertWebhookTargetSafe(url).reason ?? null : null };
+    return { enabled: false, state: 'disabled', url, host: hostOf(url), ...common, ...(url ? verdict(url) : { targetSafe: null, targetAllowlisted: null, targetUnsafeReason: null }) };
   }
   if (!url) {
-    return { enabled: false, state: 'not-configured', url: null, host: null, ...common, targetSafe: null, targetUnsafeReason: null };
+    return { enabled: false, state: 'not-configured', url: null, host: null, ...common, targetSafe: null, targetAllowlisted: null, targetUnsafeReason: null };
   }
   let parsed: URL;
   try {
@@ -98,13 +166,12 @@ export function parseWebhookConfig(env: Record<string, string | undefined>): Web
   } catch {
     // An invalid URL would fail every delivery — treat as not configured and
     // say so through the status surface (never silently POST to a bad target).
-    return { enabled: false, state: 'not-configured', url, host: null, ...common, targetSafe: null, targetUnsafeReason: null };
+    return { enabled: false, state: 'not-configured', url, host: null, ...common, targetSafe: null, targetAllowlisted: null, targetUnsafeReason: null };
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { enabled: false, state: 'not-configured', url, host: null, ...common, targetSafe: null, targetUnsafeReason: null };
+    return { enabled: false, state: 'not-configured', url, host: null, ...common, targetSafe: null, targetAllowlisted: null, targetUnsafeReason: null };
   }
-  const guard = assertWebhookTargetSafe(url);
-  return { enabled: true, state: 'configured', url, host: parsed.host, ...common, targetSafe: guard.ok, targetUnsafeReason: guard.ok ? null : guard.reason ?? null };
+  return { enabled: true, state: 'configured', url, host: parsed.host, ...common, ...verdict(url) };
 }
 
 function secretFacts(env: Record<string, string | undefined>) {
@@ -221,18 +288,35 @@ export function verifyWebhookSignature(input: WebhookVerifyInput): WebhookVerify
  * SSRF guard for outbound webhook targets. Pure (hostname-literal checks; a
  * deployment that needs DNS-level defense should run the guard in an egress
  * proxy — documented in the README's hardening section).
+ *
+ * `allowlist` (entries or a raw DIGEST_WEBHOOK_ALLOWLIST string) can rescue a
+ * target from the PRIVATE-RANGE refusals ONLY, and only on an exact host (or
+ * host:port) match — the OWASP "default deny + explicit allow" pattern for
+ * deployments whose ops relay deliberately lives inside the private network.
+ * The http(s)-only scheme rule and unparseable-URL refusals are absolute and
+ * can never be allowlisted.
  */
-export function assertWebhookTargetSafe(rawUrl: string): { ok: boolean; reason?: string } {
+export function assertWebhookTargetSafe(
+  rawUrl: string,
+  allowlist?: string | (string | WebhookAllowlistEntry)[] | null,
+): { ok: boolean; reason?: string; allowlisted?: boolean } {
+  const entries: WebhookAllowlistEntry[] = !allowlist
+    ? []
+    : typeof allowlist === 'string'
+      ? parseWebhookAllowlist(allowlist)
+      : allowlist.map((a) => (typeof a === 'string' ? parseWebhookAllowlist(a)[0] : a)).filter((e): e is WebhookAllowlistEntry => Boolean(e));
+  const rescued = (): { ok: boolean; allowlisted: boolean } => ({ ok: true, allowlisted: true });
   let u: URL;
   try {
     u = new URL(rawUrl);
   } catch {
-    return { ok: false, reason: 'unparseable URL' };
+    return { ok: false, reason: 'unparseable URL' }; // never allowlistable
   }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, reason: `scheme ${u.protocol} refused (http/https only)` };
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, reason: `scheme ${u.protocol} refused (http/https only)` }; // never allowlistable
   const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (!host) return { ok: false, reason: 'empty hostname' };
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    if (webhookTargetAllowlisted(u, entries)) return rescued();
     return { ok: false, reason: `hostname ${host} is loopback/internal-only` };
   }
   // IPv4 (incl. IPv4-mapped IPv6) private ranges
@@ -254,11 +338,13 @@ export function assertWebhookTargetSafe(rawUrl: string): { ok: boolean; reason?:
     ];
     for (const r of privateRanges) {
       if (a === r.a && (r.fullA || (b >= r.bMin && b <= r.bMax))) {
+        if (webhookTargetAllowlisted(u, entries)) return rescued();
         return { ok: false, reason: `target falls in ${r.label} — refused (SSRF guard)` };
       }
     }
   }
   if (/^::1$/.test(host) || /^(f[cd])[0-9a-f]{2}:/i.test(host) || /^fe[89ab][0-9a-f]:/i.test(host)) {
+    if (webhookTargetAllowlisted(u, entries)) return rescued();
     return { ok: false, reason: 'IPv6 loopback/ULA/link-local target refused (SSRF guard)' };
   }
   return { ok: true };
@@ -282,7 +368,10 @@ export interface WebhookExitStatus {
   secretBytes: number;
   secretAdequate: boolean;
   rotationSecretPresent: boolean;
+  allowlistCount: number;
   targetSafe: boolean | null;
+  /** True when the target passed the SSRF guard ONLY via an allowlist entry. */
+  targetAllowlisted: boolean | null;
   targetUnsafeReason: string | null;
   signingScheme: string;
   attempts: number;
@@ -326,7 +415,9 @@ export function webhookExitStatus(): WebhookExitStatus {
     secretBytes: cfg.secretBytes,
     secretAdequate: cfg.secretAdequate,
     rotationSecretPresent: cfg.rotationSecretPresent,
+    allowlistCount: cfg.allowlistCount,
     targetSafe: cfg.targetSafe,
+    targetAllowlisted: cfg.targetAllowlisted,
     targetUnsafeReason: cfg.targetUnsafeReason,
     signingScheme,
     attempts: rt.attempts,
@@ -337,7 +428,7 @@ export function webhookExitStatus(): WebhookExitStatus {
     lastError: rt.lastError,
     note:
       cfg.state === 'configured'
-        ? `Webhook digest exit ARMED: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to the configured URL as the same DigestPushPayload JSON the SSE channel carries — signed (${cfg.secretAdequate ? 'secret ≥32 bytes' : `secret ${cfg.secretBytes} bytes; rotate to ≥32 bytes`}) with timestamped HMAC v1, guarded against SSRF targets, transient-only retry (max 3 attempts) and one provenance row per attempt.${cfg.targetSafe === false ? ' CURRENT TARGET IS REFUSED BY THE SSRF GUARD — delivery will not be attempted.' : ''}`
+        ? `Webhook digest exit ARMED: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to the configured URL as the same DigestPushPayload JSON the SSE channel carries — signed (${cfg.secretAdequate ? 'secret ≥32 bytes' : `secret ${cfg.secretBytes} bytes; rotate to ≥32 bytes`}) with timestamped HMAC v1, guarded against SSRF targets, transient-only retry (max 3 attempts) and one provenance row per attempt.${cfg.targetAllowlisted ? ` Private target explicitly allowed via DIGEST_WEBHOOK_ALLOWLIST (${cfg.allowlistCount} ${cfg.allowlistCount === 1 ? 'entry' : 'entries'}) — operator opt-in for an internal relay.` : ''}${cfg.targetSafe === false ? ' CURRENT TARGET IS REFUSED BY THE SSRF GUARD — delivery will not be attempted.' : ''}`
         : cfg.state === 'disabled'
           ? 'Webhook digest exit disabled by DIGEST_WEBHOOK_OFF=1 — the SSE channel and on-demand digests remain available.'
           : 'Webhook digest exit NOT configured (set DIGEST_WEBHOOK_URL to arm it). Zero outbound work is attempted; the SSE channel remains the push surface.',
@@ -365,9 +456,10 @@ export async function deliverDigestWebhook(
     return { delivered: false, attempts: 0, status: 0, error: 'exit not configured' };
   }
   // SSRF guard BEFORE any outbound work: a loopback/RFC1918/metadata target
-  // is refused outright (the status surface names the reason). No request,
-  // no signature, no attempt budget burned.
-  const guard = assertWebhookTargetSafe(cfg.url);
+  // is refused outright unless the operator explicitly allowlisted it
+  // (DIGEST_WEBHOOK_ALLOWLIST) — the status surface names the reason either
+  // way. No request, no signature, no attempt budget burned on a refusal.
+  const guard = assertWebhookTargetSafe(cfg.url, process.env.DIGEST_WEBHOOK_ALLOWLIST);
   if (!guard.ok) {
     const rt = runtime();
     rt.failed += 1;

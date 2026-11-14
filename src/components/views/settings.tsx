@@ -278,7 +278,7 @@ export function SettingsView() {
                           k="Webhook exit"
                           v={
                             s.digestChannel.exits.webhook.state === 'configured'
-                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ` · HMAC signed${s.digestChannel.exits.webhook.secretAdequate === false ? ' (secret <32 bytes — rotate)' : ' (v1, timestamped)'}` : ' · UNSIGNED'}${s.digestChannel.exits.webhook.targetSafe === false ? ' · SSRF GUARD REFUSED TARGET' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
+                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ` · HMAC signed${s.digestChannel.exits.webhook.secretAdequate === false ? ' (secret <32 bytes — rotate)' : ' (v1, timestamped)'}` : ' · UNSIGNED'}${s.digestChannel.exits.webhook.targetAllowlisted ? ' · ALLOWLISTED private target (operator opt-in)' : ''}${s.digestChannel.exits.webhook.targetSafe === false ? ' · SSRF GUARD REFUSED TARGET' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
                               : s.digestChannel.exits.webhook.state === 'disabled'
                                 ? 'disabled by DIGEST_WEBHOOK_OFF=1'
                                 : 'not configured (set DIGEST_WEBHOOK_URL to arm — zero outbound work while unset)'
