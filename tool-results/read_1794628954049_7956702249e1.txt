@@ -1,0 +1,552 @@
+     1→'use client';
+     2→
+     3→import { useState } from 'react';
+     4→import { motion, type Variants } from 'framer-motion';
+     5→import { useSession } from '@/components/state/store';
+     6→import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+     7→import { api, ApiRequestError, type SoilTest } from '@/lib/api-client';
+     8→import { Button } from '@/components/ui/button';
+     9→import { Input } from '@/components/ui/input';
+    10→import { Label } from '@/components/ui/label';
+    11→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+    12→import { useToast } from '@/hooks/use-toast';
+    13→import { Kicker, SectionHeader, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
+    14→import { QueryState, EmptyState, FaultPanel } from '@/components/system/query-state';
+    15→import { SkeletonPanel } from '@/components/system/skeletons';
+    16→import { MapPin, FlaskConical, Sprout, Mountain, Save, Plus, Beaker, AlertTriangle } from 'lucide-react';
+    17→import { cn } from '@/lib/utils';
+    18→
+    19→/** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
+    20→const RISE: Variants = {
+    21→  hidden: { opacity: 0, y: 12 },
+    22→  show: (i: number = 0) => ({
+    23→    opacity: 1,
+    24→    y: 0,
+    25→    transition: { duration: 0.35, delay: Math.min(i, 6) * 0.06, ease: [0.22, 1, 0.36, 1] },
+    26→  }),
+    27→};
+    28→
+    29→const MONO_BTN = 'font-mono text-[11px] uppercase tracking-wide-mc';
+    30→
+    31→/** Farm Workspace: profile, boundary, soil tests, crop history. */
+    32→export function FarmWorkspaceView() {
+    33→  const { activeFarmId, setActiveFarmId, location, farmBoundary, setFarmBoundary, setView } = useSession();
+    34→  const { toast } = useToast();
+    35→  const queryClient = useQueryClient();
+    36→
+    37→  const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms });
+    38→  const farm = useQuery({ queryKey: ['farm', activeFarmId], queryFn: () => api.farm(activeFarmId!), enabled: !!activeFarmId });
+    39→
+    40→  const [newFarm, setNewFarm] = useState({ name: '', country: '', region: '' });
+    41→
+    42→  const createFarm = useMutation({
+    43→    mutationFn: async () => {
+    44→      const boundaryGeoJson = farmBoundary && farmBoundary.length >= 3
+    45→        ? JSON.stringify({ type: 'Polygon', coordinates: [[...farmBoundary, farmBoundary[0]]] })
+    46→        : undefined;
+    47→      return api.createFarm({
+    48→        name: newFarm.name || 'My Farm',
+    49→        centroidLat: location.lat,
+    50→        centroidLon: location.lon,
+    51→        country: newFarm.country || undefined,
+    52→        region: newFarm.region || undefined,
+    53→        boundaryGeoJson,
+    54→      });
+    55→    },
+    56→    onSuccess: (res) => {
+    57→      setActiveFarmId(res.farm.id);
+    58→      setFarmBoundary(null);
+    59→      queryClient.invalidateQueries({ queryKey: ['farms'] });
+    60→      queryClient.invalidateQueries({ queryKey: ['farm'] });
+    61→      toast({ title: 'Farm created', description: `${res.farm.name} at ${res.farm.centroidLat.toFixed(3)}, ${res.farm.centroidLon.toFixed(3)}.` });
+    62→    },
+    63→    onError: (err) => {
+    64→      toast({ title: 'Farm creation failed', description: err instanceof ApiRequestError ? err.message : 'error', variant: 'destructive' });
+    65→    },
+    66→  });
+    67→
+    68→  const saveBoundary = useMutation({
+    69→    mutationFn: (farmId: string) => {
+    70→      if (!farmBoundary || farmBoundary.length < 3) throw new Error('Draw a boundary with ≥ 3 vertices on the map first');
+    71→      const ring = [...farmBoundary, farmBoundary[0]];
+    72→      return api.updateFarm(farmId, { boundaryGeoJson: JSON.stringify({ type: 'Polygon', coordinates: [ring] }) });
+    73→    },
+    74→    onSuccess: () => {
+    75→      setFarmBoundary(null);
+    76→      queryClient.invalidateQueries({ queryKey: ['farm'] });
+    77→      toast({ title: 'Boundary saved', description: 'Validated GeoJSON polygon stored with the farm profile.' });
+    78→    },
+    79→    onError: (err) => {
+    80→      toast({ title: 'Boundary not saved', description: err instanceof Error ? err.message : 'error', variant: 'destructive' });
+    81→    },
+    82→  });
+    83→
+    84→  const soilGrids = useMutation({
+    85→    mutationFn: (farmId: string) => api.fetchSoilGrids(farmId),
+    86→    onSuccess: (res) => {
+    87→      queryClient.invalidateQueries({ queryKey: ['farm'] });
+    88→      toast({
+    89→        title: 'SoilGrids profile stored',
+    90→        description: `Modeled values: ${res.retrieved.map((r) => `${r.property} ${r.value.toFixed(1)} ${r.unit}`).join(', ')}. Clearly labeled as model estimates.`,
+    91→      });
+    92→    },
+    93→    onError: (err) => {
+    94→      toast({
+    95→        title: 'SoilGrids unavailable',
+    96→        description: err instanceof ApiRequestError ? err.message : 'Provider unreachable — no values fabricated.',
+    97→        variant: 'destructive',
+    98→      });
+    99→    },
+   100→  });
+   101→
+   102→  return (
+   103→    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+   104→      <motion.div variants={RISE} custom={0} initial="hidden" whileInView="show" viewport={{ once: true }}>
+   105→        <SectionHeader
+   106→          kicker="Field Planning // Farm Registry"
+   107→          title="Farm Workspace"
+   108→          description="Farm profile, drawn boundary, soil tests and crop history. Every record keeps its source label — measured entries are never blended with modeled supplementary profiles."
+   109→          actions={<HudPanel calm className="flex items-center gap-2 !p-2.5"><MapPin className="h-3.5 w-3.5 text-nasa" aria-hidden /><CoordReadout lat={location.lat} lon={location.lon} /></HudPanel>}
+   110→        />
+   111→      </motion.div>
+   112→
+   113→      {/* Farm list + creation */}
+   114→      <motion.div variants={RISE} custom={1} initial="hidden" whileInView="show" viewport={{ once: true }} className="grid gap-4 lg:grid-cols-2">
+   115→        <HudPanel>
+   116→          <div className="flex items-center gap-2">
+   117→            <MapPin className="h-4 w-4 text-signal" aria-hidden />
+   118→            <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Your farms</h3>
+   119→          </div>
+   120→          <QueryState
+   121→            isLoading={farms.isLoading}
+   122→            isError={farms.isError}
+   123→            error={farms.error}
+   124→            onRetry={() => farms.refetch()}
+   125→            label="Farm registry"
+   126→            skeleton={<SkeletonPanel label="Reading farm registry" rows={4} />}
+   127→            isEmpty={!!farms.data && farms.data.farms.length === 0}
+   128→            empty={<EmptyState label="Farm registry" hint="No farms yet — create one on the right. The public demo needs no signup." />}
+   129→          >
+   130→            <div className="mt-3 flex max-h-96 flex-col gap-2 overflow-y-auto pr-1">
+   131→              {(farms.data?.farms ?? []).map((f) => {
+   132→                const active = activeFarmId === f.id;
+   133→                return (
+   134→                  <button
+   135→                    key={f.id}
+   136→                    onClick={() => setActiveFarmId(f.id)}
+   137→                    className={cn(
+   138→                      'rounded-sm border p-3 text-left transition-colors outline-none focus-visible:outline-2 focus-visible:outline-offset-2',
+   139→                      active
+   140→                        ? 'border-nasa/50 bg-nasa/10'
+   141→                        : 'border-edge bg-panel-2/50 hover:border-iris/40 hover:bg-panel-2',
+   142→                    )}
+   143→                    style={{ outlineColor: 'var(--nasa)' }}
+   144→                    aria-pressed={active}
+   145→                  >
+   146→                    <div className="flex items-center justify-between gap-2">
+   147→                      <span className={cn('font-display text-sm font-semibold uppercase tracking-wide-mc', active ? 'text-ink' : 'text-dim')}>
+   148→                        {f.name}
+   149→                      </span>
+   150→                      {active && <span className="anim-blink h-1.5 w-1.5 rounded-full bg-nasa" aria-label="Active farm" />}
+   151→                    </div>
+   152→                    <div className="telemetry mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-faint">
+   153→                      <span>{f.centroidLat.toFixed(3)}, {f.centroidLon.toFixed(3)}</span>
+   154→                      {f.country && <span>{f.country}</span>}
+   155→                      <span>{f._count.soilTests} soil tests</span>
+   156→                      <span>{f._count.scenarios} scenarios</span>
+   157→                    </div>
+   158→                  </button>
+   159→                );
+   160→              })}
+   161→            </div>
+   162→          </QueryState>
+   163→        </HudPanel>
+   164→
+   165→        <HudPanel>
+   166→          <Kicker>New registration</Kicker>
+   167→          <h3 className="mt-2 font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Create a farm at the selected location</h3>
+   168→          <p className="mt-2 text-[11px] leading-relaxed text-faint">
+   169→            Location comes from the header selector / Explorer map. If you drew a boundary there
+   170→            ({farmBoundary?.length ?? 0} vertices in session}), it will be validated and stored with the farm.
+   171→          </p>
+   172→          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+   173→            <div className="flex flex-col gap-1">
+   174→              <Label htmlFor="farm-name" className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">Name</Label>
+   175→              <Input id="farm-name" value={newFarm.name} onChange={(e) => setNewFarm({ ...newFarm, name: e.target.value })} placeholder="e.g. Kilimo Bora Block 3" className="h-9 border-edge bg-panel text-xs text-ink" />
+   176→            </div>
+   177→            <div className="flex flex-col gap-1">
+   178→              <Label htmlFor="farm-country" className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">Country</Label>
+   179→              <Input id="farm-country" value={newFarm.country} onChange={(e) => setNewFarm({ ...newFarm, country: e.target.value })} placeholder="Kenya" className="h-9 border-edge bg-panel text-xs text-ink" />
+   180→            </div>
+   181→            <div className="flex flex-col gap-1">
+   182→              <Label htmlFor="farm-region" className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">Region</Label>
+   183→              <Input id="farm-region" value={newFarm.region} onChange={(e) => setNewFarm({ ...newFarm, region: e.target.value })} placeholder="Rift Valley" className="h-9 border-edge bg-panel text-xs text-ink" />
+   184→            </div>
+   185→          </div>
+   186→          <div className="telemetry mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-dim">
+   187→            <CoordReadout lat={location.lat} lon={location.lon} />
+   188→            <span className="text-faint">— {location.label}</span>
+   189→          </div>
+   190→          <Button onClick={() => createFarm.mutate()} disabled={createFarm.isPending} className={cn('mt-3 w-fit uppercase', MONO_BTN)}>
+   191→            {createFarm.isPending ? (
+   192→              <>
+   193→                <span className="anim-blink h-1.5 w-1.5 rounded-full bg-primary-foreground" aria-hidden /> Creating farm…
+   194→              </>
+   195→            ) : (
+   196→              <>
+   197→                <Plus className="h-3.5 w-3.5" aria-hidden /> Create farm
+   198→              </>
+   199→            )}
+   200→          </Button>
+   201→        </HudPanel>
+   202→      </motion.div>
+   203→
+   204→      {/* Active farm profile */}
+   205→      {activeFarmId && farm.isLoading && (
+   206→        <motion.div variants={RISE} custom={2} initial="hidden" whileInView="show" viewport={{ once: true }} role="status" aria-live="polite">
+   207→          <SkeletonPanel label="Reading farm profile" rows={6} />
+   208→        </motion.div>
+   209→      )}
+   210→      {activeFarmId && farm.isError && (
+   211→        <motion.div variants={RISE} custom={2} initial="hidden" whileInView="show" viewport={{ once: true }}>
+   212→          <FaultPanel error={farm.error} onRetry={() => farm.refetch()} label="Farm profile" />
+   213→        </motion.div>
+   214→      )}
+   215→      {activeFarmId && farm.data && (
+   216→        <>
+   217→          <motion.section variants={RISE} custom={2} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Farm profile">
+   218→            <HudPanel>
+   219→              <div className="flex flex-wrap items-baseline justify-between gap-3">
+   220→                <div>
+   221→                  <Kicker>Farm profile</Kicker>
+   222→                  <h3 className="mt-2 font-display text-lg font-bold uppercase tracking-wide-mc text-ink">{farm.data.farm.name}</h3>
+   223→                </div>
+   224→                {farm.data.farm.areaHa && (
+   225→                  <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2 py-0.5 text-[10px] uppercase tracking-wide-mc text-dim">
+   226→                    {farm.data.farm.areaHa.toFixed(1)} ha (computed)
+   227→                  </span>
+   228→                )}
+   229→              </div>
+   230→
+   231→              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+   232→                <TelemetryStat label="Stored observations" value={farm.data.farm._count.observations.toLocaleString()} hint="NASA POWER rows" />
+   233→                <TelemetryStat label="Soil tests on file" value={farm.data.farm.soilTests.length} hint="measured + modeled" />
+   234→                <TelemetryStat label="Scenarios stored" value={farm.data.farm._count.scenarios} hint="rotation comparisons" />
+   235→                <TelemetryStat label="Area" value={farm.data.farm.areaHa?.toFixed(1) ?? null} unit="ha" hint="computed polygon" />
+   236→              </div>
+   237→
+   238→              <div className="telemetry mt-4 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-dim">
+   239→                <span>Centroid: <span className="text-ink">{farm.data.farm.centroidLat.toFixed(4)}, {farm.data.farm.centroidLon.toFixed(4)}</span></span>
+   240→                <span>Boundary: {farm.data.farm.boundaryGeoJson ? <span className="text-signal">stored (validated polygon)</span> : <span className="text-faint">none</span>}</span>
+   241→              </div>
+   242→
+   243→              {farmBoundary && (
+   244→                <div className="mt-3 flex items-start gap-2.5 rounded-sm border border-caution/35 bg-caution/5 p-3" role="status">
+   245→                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-caution" aria-hidden />
+   246→                  <p className="text-[11px] leading-relaxed text-dim">
+   247→                    <span className="font-mono uppercase tracking-wide-mc text-caution">Boundary in session</span> — {farmBoundary.length} vertices
+   248→                    drawn in the Geospatial Explorer, not yet committed to this farm.
+   249→                  </p>
+   250→                </div>
+   251→              )}
+   252→
+   253→              <div className="mt-4 flex flex-wrap gap-2">
+   254→                <Button variant="outline" size="sm" className={cn('h-8 uppercase', MONO_BTN)} onClick={() => setView('explorer')}>
+   255→                  <MapPin className="h-3.5 w-3.5" aria-hidden /> Draw boundary on map
+   256→                </Button>
+   257→                <Button
+   258→                  variant="outline" size="sm" className={cn('h-8 uppercase', MONO_BTN)}
+   259→                  disabled={!farmBoundary || farmBoundary.length < 3 || saveBoundary.isPending}
+   260→                  onClick={() => saveBoundary.mutate(activeFarmId)}
+   261→                >
+   262→                  {saveBoundary.isPending ? (
+   263→                    <>
+   264→                      <span className="anim-blink h-1.5 w-1.5 rounded-full bg-caution" aria-hidden /> Saving…
+   265→                    </>
+   266→                  ) : (
+   267→                    <>
+   268→                      <Save className="h-3.5 w-3.5" aria-hidden /> Save drawn boundary ({farmBoundary?.length ?? 0})
+   269→                    </>
+   270→                  )}
+   271→                </Button>
+   272→              </div>
+   273→
+   274→              <CropHistoryEditor farmId={activeFarmId} current={farm.data.farm.cropHistory} />
+   275→            </HudPanel>
+   276→          </motion.section>
+   277→
+   278→          <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Soil properties">
+   279→            <SoilSection farmId={activeFarmId} tests={farm.data.farm.soilTests} onSoilGrids={() => soilGrids.mutate(activeFarmId)} soilGridsPending={soilGrids.isPending} />
+   280→          </motion.section>
+   281→        </>
+   282→      )}
+   283→
+   284→      {!activeFarmId && (
+   285→        <motion.div variants={RISE} custom={2} initial="hidden" whileInView="show" viewport={{ once: true }}>
+   286→          <EmptyState
+   287→            label="Farm workspace"
+   288→            hint="Select or create a farm above to manage its profile, soil tests and crop history."
+   289→            action={
+   290→              <Button variant="outline" size="sm" className={cn('mt-2 uppercase', MONO_BTN)} onClick={() => setView('explorer')}>
+   291→                <MapPin className="h-3.5 w-3.5" aria-hidden /> Open explorer to place a farm
+   292→              </Button>
+   293→            }
+   294→          />
+   295→        </motion.div>
+   296→      )}
+   297→    </div>
+   298→  );
+   299→}
+   300→
+   301→function CropHistoryEditor({ farmId, current }: { farmId: string; current: string | null }) {
+   302→  const { toast } = useToast();
+   303→  const queryClient = useQueryClient();
+   304→  const [entries, setEntries] = useState<{ season: string; crop: string; family?: string }[]>(
+   305→    current ? JSON.parse(current) : [],
+   306→  );
+   307→  const update = useMutation({
+   308→    mutationFn: () => api.updateFarm(farmId, { cropHistory: entries }),
+   309→    onSuccess: () => {
+   310→      queryClient.invalidateQueries({ queryKey: ['farm'] });
+   311→      toast({ title: 'Crop history saved' });
+   312→    },
+   313→  });
+   314→  return (
+   315→    <div className="mt-4 rounded-sm border border-edge bg-panel-2/40 p-3">
+   316→      <div className="flex items-center gap-1.5 text-xs font-medium text-dim">
+   317→        <Sprout className="h-3.5 w-3.5 text-signal" aria-hidden /> Previous crop sequence (farmer-supplied)
+   318→      </div>
+   319→      <div className="mt-2 flex flex-col gap-2">
+   320→        {entries.map((e, i) => (
+   321→          <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+   322→            <Input value={e.season} onChange={(ev) => setEntries(entries.map((x, j) => j === i ? { ...x, season: ev.target.value } : x))} placeholder="Season (e.g. 2025 long rains)" className="h-8 w-44 border-edge bg-panel text-xs text-ink" aria-label={`Season ${i + 1}`} />
+   323→            <Input value={e.crop} onChange={(ev) => setEntries(entries.map((x, j) => j === i ? { ...x, crop: ev.target.value } : x))} placeholder="Crop" className="h-8 w-36 border-edge bg-panel text-xs text-ink" aria-label={`Crop ${i + 1}`} />
+   324→            <Button variant="ghost" size="sm" className="h-8 px-2 text-faint hover:text-crit" onClick={() => setEntries(entries.filter((_, j) => j !== i))} aria-label={`Remove entry ${i + 1}`}>Remove</Button>
+   325→          </div>
+   326→        ))}
+   327→        <div className="flex gap-2">
+   328→          <Button variant="outline" size="sm" className={cn('h-8 uppercase', MONO_BTN)} onClick={() => setEntries([...entries, { season: '', crop: '' }])}>Add season</Button>
+   329→          <Button size="sm" className={cn('h-8 uppercase', MONO_BTN)} disabled={update.isPending} onClick={() => update.mutate()}>
+   330→            {update.isPending ? (
+   331→              <>
+   332→                <span className="anim-blink h-1.5 w-1.5 rounded-full bg-primary-foreground" aria-hidden /> Saving history…
+   333→              </>
+   334→            ) : (
+   335→              'Save history'
+   336→            )}
+   337→          </Button>
+   338→        </div>
+   339→      </div>
+   340→    </div>
+   341→  );
+   342→}
+   343→
+   344→const SOURCE_PILLS: Record<SoilTest['source'], { label: string; cls: string }> = {
+   345→  laboratory: { label: 'lab · measured', cls: 'border-signal/40 bg-signal/10 text-signal' },
+   346→  farmer: { label: 'farmer · measured', cls: 'border-signal/40 bg-signal/5 text-signal' },
+   347→  soilgrids: { label: 'soilgrids · modeled', cls: 'border-caution/40 bg-caution/10 text-caution' },
+   348→};
+   349→
+   350→function SoilSection({ farmId, tests, onSoilGrids, soilGridsPending }: { farmId: string; tests: SoilTest[]; onSoilGrids: () => void; soilGridsPending: boolean }) {
+   351→  const { toast } = useToast();
+   352→  const queryClient = useQueryClient();
+   353→  const [form, setForm] = useState({
+   354→    source: 'farmer' as 'farmer' | 'laboratory',
+   355→    measuredAt: new Date().toISOString().slice(0, 10),
+   356→    ph: '', texture: '', organicCarbonPct: '', nitrogenMgKg: '', phosphorusMgKg: '', potassiumCmolKg: '',
+   357→    sandPct: '', siltPct: '', clayPct: '', depthCm: '', notes: '',
+   358→  });
+   359→  const [textureSelect, setTextureSelect] = useState('none');
+   360→
+   361→  const addTest = useMutation({
+   362→    mutationFn: () => {
+   363→      const num = (v: string) => (v.trim() === '' ? undefined : Number(v));
+   364→      return api.addSoilTest(farmId, {
+   365→        source: form.source,
+   366→        measuredAt: form.measuredAt,
+   367→        ph: num(form.ph),
+   368→        texture: textureSelect !== 'none' ? textureSelect : undefined,
+   369→        organicCarbonPct: num(form.organicCarbonPct),
+   370→        nitrogenMgKg: num(form.nitrogenMgKg),
+   371→        phosphorusMgKg: num(form.phosphorusMgKg),
+   372→        potassiumCmolKg: num(form.potassiumCmolKg),
+   373→        sandPct: num(form.sandPct),
+   374→        siltPct: num(form.siltPct),
+   375→        clayPct: num(form.clayPct),
+   376→        depthCm: num(form.depthCm),
+   377→        notes: form.notes.trim() || undefined,
+   378→      });
+   379→    },
+   380→    onSuccess: () => {
+   381→      queryClient.invalidateQueries({ queryKey: ['farm'] });
+   382→      toast({ title: 'Soil measurement stored', description: `Labeled as ${form.source} measurement — never mixed with modeled values.` });
+   383→      setForm({ ...form, ph: '', organicCarbonPct: '', nitrogenMgKg: '', phosphorusMgKg: '', potassiumCmolKg: '', sandPct: '', siltPct: '', clayPct: '', notes: '' });
+   384→    },
+   385→    onError: (err) => toast({ title: 'Validation failed', description: err instanceof ApiRequestError ? err.message : 'check values', variant: 'destructive' }),
+   386→  });
+   387→
+   388→  return (
+   389→    <HudPanel>
+   390→      <div className="flex items-center gap-2">
+   391→        <FlaskConical className="h-4 w-4 text-caution" aria-hidden />
+   392→        <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Soil properties</h3>
+   393→      </div>
+   394→
+   395→      {/* Source hierarchy note */}
+   396→      <div className="mt-3 flex items-start gap-2.5 rounded-sm border border-caution/35 bg-caution/5 p-3">
+   397→        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-caution" aria-hidden />
+   398→        <p className="text-[11px] leading-relaxed text-dim">
+   399→          <span className="font-mono uppercase tracking-wide-mc text-caution">Source hierarchy</span> — farmer / laboratory measurements
+   400→          always outrank the modeled SoilGrids supplementary profile. Modeled values are clearly labeled model
+   401→          estimates and are never mixed with measurements.
+   402→        </p>
+   403→      </div>
+   404→
+   405→      <QueryState
+   406→        isLoading={false}
+   407→        isError={false}
+   408→        isEmpty={tests.length === 0}
+   409→        empty={
+   410→          <EmptyState
+   411→            label="Soil information"
+   412→            hint="No soil information yet. Enter a farmer/lab test below, or fetch the supplementary SoilGrids modeled profile."
+   413→            action={
+   414→              <Button variant="outline" size="sm" className={cn('mt-2 border-caution/40 uppercase text-caution hover:bg-caution/10', MONO_BTN)} onClick={onSoilGrids} disabled={soilGridsPending}>
+   415→                {soilGridsPending ? (
+   416→                  <>
+   417→                    <span className="anim-blink h-1.5 w-1.5 rounded-full bg-caution" aria-hidden /> Retrieving…
+   418→                  </>
+   419→                ) : (
+   420→                  <>
+   421→                    <Mountain className="h-3.5 w-3.5" aria-hidden /> Fetch SoilGrids modeled profile (supplementary)
+   422→                  </>
+   423→                )}
+   424→              </Button>
+   425→            }
+   426→          />
+   427→        }
+   428→      >
+   429→        <div className="mt-3 max-h-96 overflow-x-auto overflow-y-auto rounded-sm border border-edge">
+   430→          <table className="mc-table w-full min-w-[42rem]">
+   431→            <thead className="sticky top-0 z-10 bg-panel">
+   432→              <tr className="border-b border-edge">
+   433→                <th className="px-3 py-2 text-left">Source</th>
+   434→                <th className="px-3 py-2 text-left">Date</th>
+   435→                <th className="px-3 py-2 text-left">pH</th>
+   436→                <th className="px-3 py-2 text-left">Texture</th>
+   437→                <th className="px-3 py-2 text-left">OC %</th>
+   438→                <th className="px-3 py-2 text-left">N mg/kg</th>
+   439→                <th className="px-3 py-2 text-left">Detail</th>
+   440→              </tr>
+   441→            </thead>
+   442→            <tbody>
+   443→              {tests.map((t) => {
+   444→                const modeled = t.source === 'soilgrids';
+   445→                return (
+   446→                  <tr key={t.id} className={cn('border-b border-edge/60 last:border-b-0', modeled ? 'bg-caution/5' : 'hover:bg-panel-2/50')}>
+   447→                    <td className="px-3 py-2">
+   448→                      <span className={cn('inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide-mc', SOURCE_PILLS[t.source].cls)}>
+   449→                        {SOURCE_PILLS[t.source].label}
+   450→                      </span>
+   451→                    </td>
+   452→                    <td className="telemetry px-3 py-2">{new Date(t.measuredAt).toISOString().slice(0, 10)}</td>
+   453→                    <td className={cn('telemetry px-3 py-2', !modeled && 'text-ink')}>{t.ph?.toFixed(1) ?? '—'}</td>
+   454→                    <td className="px-3 py-2">{t.texture ?? '—'}</td>
+   455→                    <td className={cn('telemetry px-3 py-2', !modeled && 'text-ink')}>{t.organicCarbonPct?.toFixed(1) ?? '—'}</td>
+   456→                    <td className={cn('telemetry px-3 py-2', !modeled && 'text-ink')}>{t.nitrogenMgKg ?? '—'}</td>
+   457→                    <td className="max-w-[18rem] truncate px-3 py-2 text-faint" title={t.sourceDetail ?? t.notes ?? ''}>{t.sourceDetail ?? t.notes ?? ''}</td>
+   458→                  </tr>
+   459→                );
+   460→              })}
+   461→            </tbody>
+   462→          </table>
+   463→        </div>
+   464→      </QueryState>
+   465→
+   466→      <div className="mt-4 flex flex-wrap gap-2">
+   467→        <Button variant="outline" size="sm" className={cn('border-caution/40 text-caution hover:bg-caution/10 uppercase', MONO_BTN)} onClick={onSoilGrids} disabled={soilGridsPending}>
+   468→          {soilGridsPending ? (
+   469→            <>
+   470→              <span className="anim-blink h-1.5 w-1.5 rounded-full bg-caution" aria-hidden /> Retrieving…
+   471→            </>
+   472→          ) : (
+   473→            <>
+   474→              <Mountain className="h-3.5 w-3.5" aria-hidden /> Fetch SoilGrids modeled profile (supplementary)
+   475→            </>
+   476→          )}
+   477→        </Button>
+   478→      </div>
+   479→
+   480→      {/* Manual entry */}
+   481→      <div className="mt-4 rounded-sm border border-edge bg-panel-2/40 p-3">
+   482→        <div className="flex items-center gap-1.5 text-xs font-medium text-dim">
+   483→          <Beaker className="h-3.5 w-3.5 text-signal" aria-hidden /> Enter a soil measurement (farmer or laboratory)
+   484→        </div>
+   485→        <div className="mt-2 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+   486→          <Field label="Source">
+   487→            <Select value={form.source} onValueChange={(v) => setForm({ ...form, source: v as 'farmer' | 'laboratory' })}>
+   488→              <SelectTrigger className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Measurement source"><SelectValue /></SelectTrigger>
+   489→              <SelectContent>
+   490→                <SelectItem value="farmer" className="text-xs">Farmer measurement</SelectItem>
+   491→                <SelectItem value="laboratory" className="text-xs">Laboratory report</SelectItem>
+   492→              </SelectContent>
+   493→            </Select>
+   494→          </Field>
+   495→          <Field label="Measured at">
+   496→            <Input type="date" value={form.measuredAt} onChange={(e) => setForm({ ...form, measuredAt: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" />
+   497→          </Field>
+   498→          <Field label="pH (0–14)">
+   499→            <Input type="number" step="0.1" value={form.ph} onChange={(e) => setForm({ ...form, ph: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="pH value" />
+   500→          </Field>
+   501→          <Field label="Texture class">
+   502→            <Select value={textureSelect} onValueChange={setTextureSelect}>
+   503→              <SelectTrigger className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Texture class"><SelectValue /></SelectTrigger>
+   504→              <SelectContent>
+   505→                {['none', 'sand', 'sandy loam', 'loam', 'silt loam', 'clay loam', 'clay'].map((t) => (
+   506→                  <SelectItem key={t} value={t} className="text-xs">{t === 'none' ? '— select —' : t}</SelectItem>
+   507→                ))}
+   508→              </SelectContent>
+   509→            </Select>
+   510→          </Field>
+   511→          <Field label="Depth (cm)">
+   512→            <Input type="number" value={form.depthCm} onChange={(e) => setForm({ ...form, depthCm: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Sampling depth in cm" />
+   513→          </Field>
+   514→          <Field label="Organic C (%)">
+   515→            <Input type="number" step="0.01" value={form.organicCarbonPct} onChange={(e) => setForm({ ...form, organicCarbonPct: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Organic carbon percent" />
+   516→          </Field>
+   517→          <Field label="Total N (mg/kg)">
+   518→            <Input type="number" value={form.nitrogenMgKg} onChange={(e) => setForm({ ...form, nitrogenMgKg: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Total nitrogen mg per kg" />
+   519→          </Field>
+   520→          <Field label="P (mg/kg)">
+   521→            <Input type="number" value={form.phosphorusMgKg} onChange={(e) => setForm({ ...form, phosphorusMgKg: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Phosphorus mg per kg" />
+   522→          </Field>
+   523→          <Field label="K (cmol/kg)">
+   524→            <Input type="number" value={form.potassiumCmolKg} onChange={(e) => setForm({ ...form, potassiumCmolKg: e.target.value })} className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Potassium cmol per kg" />
+   525→          </Field>
+   526→          <Field label="Notes">
+   527→            <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="lab / method" className="h-9 border-edge bg-panel text-xs text-ink" aria-label="Notes" />
+   528→          </Field>
+   529→        </div>
+   530→        <Button size="sm" className={cn('mt-3 h-8 uppercase', MONO_BTN)} disabled={addTest.isPending} onClick={() => addTest.mutate()}>
+   531→          {addTest.isPending ? (
+   532→            <>
+   533→              <span className="anim-blink h-1.5 w-1.5 rounded-full bg-primary-foreground" aria-hidden /> Storing measurement…
+   534→            </>
+   535→          ) : (
+   536→            'Store measurement'
+   537→          )}
+   538→        </Button>
+   539→      </div>
+   540→    </HudPanel>
+   541→  );
+   542→}
+   543→
+   544→function Field({ label, children }: { label: string; children: React.ReactNode }) {
+   545→  return (
+   546→    <label className="flex flex-col gap-1">
+   547→      <span className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">{label}</span>
+   548→      {children}
+   549→    </label>
+   550→  );
+   551→}
+   552→

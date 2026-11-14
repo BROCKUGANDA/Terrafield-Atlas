@@ -2,10 +2,41 @@
 
 import { useMemo } from 'react';
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ReferenceLine, ComposedChart, Area, Bar,
 } from 'recharts';
 import type { ObservationPoint, TrendResult } from '@/lib/types';
+
+/**
+ * Mission-console chart tokens — hex mirrors of the CSS vars in globals.css
+ * (--chart-1..5 map to signal/aqua/caution/iris/coral). SVG stroke/fill
+ * attributes cannot carry var(), so the palette is pinned here.
+ */
+const SIGNAL = '#45e39a'; // --chart-1
+const AQUA = '#4cc3ff'; // --chart-2
+const CAUTION = '#ffb224'; // --chart-3
+const IRIS = '#8da2ff'; // --chart-4
+const CORAL = '#ff7e6b'; // --chart-5
+const CRIT = '#ff5d5d'; // --crit
+const FAINT = '#627392'; // --faint
+const DIM = '#9aaacd'; // --dim
+const INK = '#eaf0fb'; // --ink
+const PANEL = '#0b1322'; // --panel (chart background beneath masks)
+const GRID_STROKE = 'rgba(151, 174, 224, 0.14)';
+const AXIS_STROKE = 'rgba(151, 174, 224, 0.22)';
+
+/** Shared recharts tick styling: mono 10px faint. */
+const TICK = { fill: FAINT, fontSize: 10, fontFamily: 'var(--font-plex-mono), monospace' };
+const TOOLTIP_STYLE = {
+  background: '#0d1729',
+  border: `1px solid ${AXIS_STROKE}`,
+  borderRadius: 6,
+  fontSize: 12,
+  color: INK,
+  padding: '6px 10px',
+};
+const TOOLTIP_LABEL = { color: DIM, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 10 };
+const LEGEND_STYLE = { fontSize: 10, color: FAINT, fontFamily: 'var(--font-plex-mono), monospace' };
 
 /** Client-side daily → monthly aggregation (mirrors the server rule). */
 export function toMonthly(
@@ -47,7 +78,7 @@ interface SeriesChartProps {
 }
 
 /** Monthly time series with Theil-Sen trend line + CI band. */
-export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, color = '#38bdf8', trend, height = 260 }: SeriesChartProps) {
+export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, color = AQUA, trend, height = 260 }: SeriesChartProps) {
   const data = useMemo(() => toMonthly(points, aggregation), [points, aggregation]);
 
   const withTrend = useMemo(() => {
@@ -67,24 +98,29 @@ export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, c
   }, [data, trend]);
 
   if (data.length === 0) {
-    return <div className="flex items-center justify-center h-[240px] text-sm text-slate-500 border border-dashed border-slate-800 rounded-lg">No observations stored for this variable yet.</div>;
+    return (
+      <div className="hud hud-calm flex h-[240px] items-center justify-center px-4 text-center text-xs text-faint">
+        No observations stored for this variable yet.
+      </div>
+    );
   }
 
   return (
     <div style={{ height }} className="w-full" role="img" aria-label={`Monthly ${variableLabel} chart with trend`}>
       <ResponsiveContainer>
         <ComposedChart data={withTrend} margin={{ top: 8, right: 12, bottom: 0, left: -10 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
           <XAxis
             dataKey="label"
-            tick={{ fill: '#64748b', fontSize: 10 }}
+            tick={TICK}
             tickFormatter={(v: string) => v.slice(2, 7)}
-            stroke="#334155"
+            stroke={AXIS_STROKE}
           />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: unit, angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
+          <YAxis tick={TICK} stroke={AXIS_STROKE} label={{ value: unit, angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
           <Tooltip
-            contentStyle={{ background: '#0a101c', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
-            labelStyle={{ color: '#94a3b8' }}
+            contentStyle={TOOLTIP_STYLE}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }}
             formatter={(value: number | string, name: string) => [Number(value).toFixed(2), name === 'value' ? `${variableLabel} (${aggregation === 'sum' ? 'monthly total' : 'monthly mean'})` : name]}
           />
           {trend?.significant !== undefined && withTrend.length > 0 && 'lo' in withTrend[0] && (
@@ -95,7 +131,7 @@ export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, c
             <Line
               type="linear"
               dataKey="trend"
-              stroke="#f59e0b"
+              stroke={CAUTION}
               strokeWidth={1.2}
               strokeDasharray="6 3"
               dot={false}
@@ -103,7 +139,7 @@ export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, c
               name="Theil-Sen trend"
             />
           )}
-          <Legend wrapperStyle={{ fontSize: 10, color: '#64748b' }} />
+          <Legend wrapperStyle={LEGEND_STYLE} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -111,7 +147,7 @@ export function MonthlySeriesChart({ points, aggregation, variableLabel, unit, c
 }
 
 /** 12-month climatology with ±1σ band. */
-export function ClimatologyChart({ climatology, unit, height = 220, color = '#34d399' }: { climatology: { month: number; mean: number; std: number; n: number }[]; unit: string; height?: number; color?: string }) {
+export function ClimatologyChart({ climatology, unit, height = 220, color = SIGNAL }: { climatology: { month: number; mean: number; std: number; n: number }[]; unit: string; height?: number; color?: string }) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const data = climatology.map((c) => ({
     month: months[c.month - 1],
@@ -125,14 +161,14 @@ export function ClimatologyChart({ climatology, unit, height = 220, color = '#34
     <div style={{ height }} className="w-full" role="img" aria-label="Monthly climatology chart">
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -10 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-          <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: unit, angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-          <Tooltip contentStyle={{ background: '#0a101c', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis dataKey="month" tick={TICK} stroke={AXIS_STROKE} />
+          <YAxis tick={TICK} stroke={AXIS_STROKE} label={{ value: unit, angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }} />
           <Area type="monotone" dataKey="hi" stroke="none" fill={color} fillOpacity={0.12} isAnimationActive={false} name="mean ± 1σ" />
-          <Area type="monotone" dataKey="lo" stroke="none" fill="#0a101c" fillOpacity={1} isAnimationActive={false} name="" legendType="none" />
+          <Area type="monotone" dataKey="lo" stroke="none" fill={PANEL} fillOpacity={1} isAnimationActive={false} name="" legendType="none" />
           <Line type="monotone" dataKey="mean" stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} name="monthly mean" />
-          <Legend wrapperStyle={{ fontSize: 10, color: '#64748b' }} />
+          <Legend wrapperStyle={LEGEND_STYLE} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -143,22 +179,22 @@ export function ClimatologyChart({ climatology, unit, height = 220, color = '#34
 export function AnomalyChart({ anomalies, height = 200 }: { anomalies: { date: string; value: number; zScore: number }[]; height?: number }) {
   const data = anomalies.map((a) => ({ date: a.date, z: Number(a.zScore.toFixed(2)), value: Number(a.value.toFixed(2)) }));
   if (data.length === 0) {
-    return <div className="flex items-center justify-center h-[140px] text-xs text-slate-500">No months exceeded the ±2σ anomaly threshold in the final year.</div>;
+    return <div className="hud hud-calm flex h-[140px] items-center justify-center px-4 text-center text-xs text-faint">No months exceeded the ±2σ anomaly threshold in the final year.</div>;
   }
   return (
     <div style={{ height }} className="w-full" role="img" aria-label="Monthly anomaly z-score chart">
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 9 }} stroke="#334155" />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'σ', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-          <Tooltip contentStyle={{ background: '#0a101c', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
-          <ReferenceLine y={0} stroke="#475569" />
-          <ReferenceLine y={2} stroke="#f59e0b" strokeDasharray="4 4" />
-          <ReferenceLine y={-2} stroke="#f59e0b" strokeDasharray="4 4" />
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis dataKey="date" tick={{ ...TICK, fontSize: 9 }} stroke={AXIS_STROKE} />
+          <YAxis tick={TICK} stroke={AXIS_STROKE} label={{ value: 'σ', angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }} />
+          <ReferenceLine y={0} stroke="rgba(151, 174, 224, 0.30)" />
+          <ReferenceLine y={2} stroke={CAUTION} strokeDasharray="4 4" />
+          <ReferenceLine y={-2} stroke={CAUTION} strokeDasharray="4 4" />
           <Bar dataKey="z" isAnimationActive={false} name="z-score" shape={(props: { x?: number; y?: number; width?: number; height?: number; payload?: { z: number } }) => {
             const { x = 0, y = 0, width = 0, height = 0, payload } = props;
-            const fill = (payload?.z ?? 0) > 0 ? '#ef4444' : '#38bdf8';
+            const fill = (payload?.z ?? 0) > 0 ? CRIT : AQUA;
             return <rect x={x} y={y} width={width} height={Math.abs(height)} fill={fill} rx={2} />;
           }} />
         </ComposedChart>
@@ -170,17 +206,17 @@ export function AnomalyChart({ anomalies, height = 200 }: { anomalies: { date: s
 /** Fire calendar monthly counts. */
 export function FireCalendarChart({ counts, height = 220 }: { counts: { month: string; count: number }[]; height?: number }) {
   if (counts.length === 0) {
-    return <div className="flex items-center justify-center h-[140px] text-xs text-slate-500">No fire detections stored for this range yet — run the ingestion above.</div>;
+    return <div className="hud hud-calm flex h-[140px] items-center justify-center px-4 text-center text-xs text-faint">No fire detections stored for this range yet — run the ingestion above.</div>;
   }
   return (
     <div style={{ height }} className="w-full" role="img" aria-label="Fire detection counts by month">
       <ResponsiveContainer>
         <ComposedChart data={counts} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-          <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" allowDecimals={false} label={{ value: 'detections', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-          <Tooltip contentStyle={{ background: '#0a101c', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
-          <Bar dataKey="count" fill="#f59e0b" isAnimationActive={false} name="VIIRS detections" radius={[3, 3, 0, 0]} />
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis dataKey="month" tick={TICK} stroke={AXIS_STROKE} />
+          <YAxis tick={TICK} stroke={AXIS_STROKE} allowDecimals={false} label={{ value: 'detections', angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }} />
+          <Bar dataKey="count" fill={CAUTION} isAnimationActive={false} name="VIIRS detections" radius={[3, 3, 0, 0]} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -195,14 +231,14 @@ export function RainfallProfileChart({ p25, p50, p75, height = 200 }: { p25: num
     <div style={{ height }} className="w-full" role="img" aria-label="Monthly rainfall climatology">
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-          <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'mm', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-          <Tooltip contentStyle={{ background: '#0a101c', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
-          <Area type="monotone" dataKey="p75" stroke="none" fill="#38bdf8" fillOpacity={0.15} isAnimationActive={false} name="p75" />
-          <Area type="monotone" dataKey="p25" stroke="none" fill="#0a101c" fillOpacity={1} isAnimationActive={false} name="" legendType="none" />
-          <Line type="monotone" dataKey="p50" stroke="#38bdf8" strokeWidth={2} dot={false} isAnimationActive={false} name="median" />
-          <Legend wrapperStyle={{ fontSize: 10, color: '#64748b' }} />
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis dataKey="month" tick={TICK} stroke={AXIS_STROKE} />
+          <YAxis tick={TICK} stroke={AXIS_STROKE} label={{ value: 'mm', angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }} />
+          <Area type="monotone" dataKey="p75" stroke="none" fill={AQUA} fillOpacity={0.15} isAnimationActive={false} name="p75" />
+          <Area type="monotone" dataKey="p25" stroke="none" fill={PANEL} fillOpacity={1} isAnimationActive={false} name="" legendType="none" />
+          <Line type="monotone" dataKey="p50" stroke={AQUA} strokeWidth={2} dot={false} isAnimationActive={false} name="median" />
+          <Legend wrapperStyle={LEGEND_STYLE} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>

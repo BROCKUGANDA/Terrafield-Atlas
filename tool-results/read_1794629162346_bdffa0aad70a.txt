@@ -1,0 +1,559 @@
+     1→'use client';
+     2→
+     3→import { useEffect, useState } from 'react';
+     4→import { useQuery } from '@tanstack/react-query';
+     5→import { motion } from 'framer-motion';
+     6→import {
+     7→  Satellite, Droplets, Thermometer, Leaf, Flame, FileSearch, ArrowRight,
+     8→  AlertTriangle, Radio, LogOut, ShieldCheck,
+     9→} from 'lucide-react';
+    10→import { useSession } from '@/components/state/store';
+    11→import { api } from '@/lib/api-client';
+    12→import { Button } from '@/components/ui/button';
+    13→import { Input } from '@/components/ui/input';
+    14→import {
+    15→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    16→} from '@/components/ui/table';
+    17→import { Kicker, SectionHeader, StatusPill, TelemetryStat, CoordReadout } from '@/components/ui-mc/kit';
+    18→import { QueryState, FaultPanel } from '@/components/system/query-state';
+    19→import { StatSkeletonRow, SkeletonRows } from '@/components/system/skeletons';
+    20→import { EarthGlobe, type GlobeStation } from '@/components/three/earth-globe';
+    21→import { cn } from '@/lib/utils';
+    22→
+    23→/**
+    24→ * Mission brief + demo console access.
+    25→ * Landing view for operators without a session: hero with the procedural
+    26→ * telemetry globe, live mission telemetry (real rows only), the six mission
+    27→ * questions, capability cards, the live source registry and the honesty box.
+    28→ * Every number below is fetched live — nothing is fabricated.
+    29→ */
+    30→
+    31→const HERO_INTRO =
+    32→  'Earth-observation intelligence for agricultural resilience. See what NASA satellites observe about your land — rainfall, temperature, solar radiation, root-zone moisture, vegetation and fire history — understand whether changes are statistically meaningful, and compare evidence-supported crop-rotation options with every score explainable and every observation traceable to its source.';
+    33→
+    34→const QUESTIONS = [
+    35→  'What are the observed environmental conditions here?',
+    36→  'How have they changed over time?',
+    37→  'Are the changes statistically meaningful?',
+    38→  'Which crop rotations fit the evidence?',
+    39→  'How do alternatives compare?',
+    40→  'What are the limits and uncertainties?',
+    41→];
+    42→
+    43→const FEATURES: { icon: typeof Droplets; tone: 'signal' | 'aqua'; title: string; text: string }[] = [
+    44→  {
+    45→    icon: Droplets,
+    46→    tone: 'signal',
+    47→    title: 'Real meteorological record',
+    48→    text: '12+ years of daily NASA POWER (MERRA-2) precipitation, temperature, humidity, radiation and root-zone wetness for any coordinate — ingested, stored, versioned.',
+    49→  },
+    50→  {
+    51→    icon: Thermometer,
+    52→    tone: 'aqua',
+    53→    title: 'Honest trend detection',
+    54→    text: 'Seasonal Mann-Kendall + Theil-Sen with autocorrelation correction, confidence intervals and FDR control. Two different dates never become a "trend".',
+    55→  },
+    56→  {
+    57→    icon: Satellite,
+    58→    tone: 'signal',
+    59→    title: 'Satellite map layers',
+    60→    text: 'MODIS 250 m daily true color, MOD13Q1 NDVI 16-day composites and SMAP L4 9 km root-zone soil moisture, streamed live from NASA GIBS.',
+    61→  },
+    62→  {
+    63→    icon: Leaf,
+    64→    tone: 'aqua',
+    65→    title: 'Explainable rotation planning',
+    66→    text: 'A deterministic engine scores rotation scenarios against FAO-cited crop requirements and your measured soil. Missing data lowers confidence — never the truth.',
+    67→  },
+    68→  {
+    69→    icon: Flame,
+    70→    tone: 'signal',
+    71→    title: 'Fire history',
+    72→    text: 'Real VIIRS 375 m active-fire detections (2015 → present) with confidence and fire radiative power, decoded from NASA GIBS vector tiles.',
+    73→  },
+    74→  {
+    75→    icon: FileSearch,
+    76→    tone: 'aqua',
+    77→    title: 'Provenance for every number',
+    78→    text: 'Every external API request — success or failure — is logged with latency, status and retrieval time. Every analysis cites its method.',
+    79→  },
+    80→];
+    81→
+    82→const NOT_CLAIMS = [
+    83→  'Environmental correlations are never presented as proof of agricultural causation.',
+    84→  'Grid-cell reanalysis is not your farm\u2019s microclimate; 9 km SMAP pixels are not field-scale soil moisture.',
+    85→  'No yield, harvest or profit prediction exists anywhere in the engine.',
+    86→  'Missing measurements reduce confidence; they are never filled with invented values.',
+    87→];
+    88→
+    89→/* Motion contract: staggered fade-up, viewport-gated below the fold. */
+    90→const fadeUp = {
+    91→  initial: { opacity: 0, y: 14 },
+    92→  whileInView: { opacity: 1, y: 0 },
+    93→  viewport: { once: true, margin: '-80px' },
+    94→} as const;
+    95→
+    96→export function LandingView() {
+    97→  const operator = useSession((s) => s.operator);
+    98→  const login = useSession((s) => s.login);
+    99→  const logout = useSession((s) => s.logout);
+   100→  const setView = useSession((s) => s.setView);
+   101→
+   102→  const sources = useQuery({ queryKey: ['sources'], queryFn: api.sources });
+   103→  const status = useQuery({ queryKey: ['system-status'], queryFn: api.systemStatus });
+   104→  const health = useQuery({ queryKey: ['health'], queryFn: api.health });
+   105→
+   106→  const [callsign, setCallsign] = useState('');
+   107→  const [hoveredStation, setHoveredStation] = useState<GlobeStation | null>(null);
+   108→
+   109→  // Lazy-mount the 3D layer after first paint to keep the hero instant.
+   110→  const [globeReady, setGlobeReady] = useState(false);
+   111→  useEffect(() => {
+   112→    const raf = requestAnimationFrame(() => setGlobeReady(true));
+   113→    return () => cancelAnimationFrame(raf);
+   114→  }, []);
+   115→
+   116→  const db = status.data?.database;
+   117→  const dataSources = health.data?.dataSources;
+   118→  const providersOk = dataSources?.filter((d) => d.status === 'operational').length ?? null;
+   119→
+   120→  const enterConsole = () => {
+   121→    if (operator) setView('dashboard');
+   122→    else login(callsign.trim() || 'GUEST');
+   123→  };
+   124→
+   125→  return (
+   126→    <div className="mx-auto flex max-w-6xl flex-col gap-12 sm:gap-16">
+   127→      {/* ---------------------------------------------------------- */}
+   128→      {/* HERO                                                        */}
+   129→      {/* ---------------------------------------------------------- */}
+   130→      <section aria-labelledby="hero-heading" className="pt-2 sm:pt-4">
+   131→        <div className="grid items-start gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10">
+   132→          {/* Left column — title, value, console access */}
+   133→          <div className="flex flex-col items-start gap-5">
+   134→            <motion.div
+   135→              initial={{ opacity: 0, y: 14 }}
+   136→              animate={{ opacity: 1, y: 0 }}
+   137→              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+   138→            >
+   139→              <Kicker>NASA Space Apps 2026 · Field Shift</Kicker>
+   140→            </motion.div>
+   141→
+   142→            <motion.h1
+   143→              id="hero-heading"
+   144→              initial={{ opacity: 0, y: 14 }}
+   145→              animate={{ opacity: 1, y: 0 }}
+   146→              transition={{ duration: 0.45, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+   147→              className="font-display text-5xl font-bold uppercase leading-[0.94] tracking-tight text-ink sm:text-6xl lg:text-7xl"
+   148→            >
+   149→              TerraField
+   150→              <span className="block text-nasa glow-nasa">Atlas</span>
+   151→              <span className="sr-only"> — TerraField Atlas mission console</span>
+   152→            </motion.h1>
+   153→
+   154→            <motion.p
+   155→              initial={{ opacity: 0, y: 14 }}
+   156→              animate={{ opacity: 1, y: 0 }}
+   157→              transition={{ duration: 0.45, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
+   158→              className="max-w-xl text-sm leading-relaxed text-dim sm:text-base"
+   159→            >
+   160→              {HERO_INTRO}
+   161→            </motion.p>
+   162→
+   163→            {/* Demo access card */}
+   164→            <motion.div
+   165→              initial={{ opacity: 0, y: 14 }}
+   166→              animate={{ opacity: 1, y: 0 }}
+   167→              transition={{ duration: 0.45, delay: 0.18, ease: [0.22, 1, 0.36, 1] }}
+   168→              className="hud w-full max-w-xl p-4 sm:p-5"
+   169→            >
+   170→              {operator ? (
+   171→                <div className="flex flex-col gap-4">
+   172→                  <div className="flex flex-wrap items-center gap-3">
+   173→                    <StatusPill status="operational" />
+   174→                    <p className="telemetry text-xs uppercase tracking-wide-mc text-dim">
+   175→                      Access granted · <span className="text-signal glow-signal">{operator.callsign}</span>
+   176→                      <span className="text-faint"> / mission-observer</span>
+   177→                    </p>
+   178→                  </div>
+   179→                  <div className="flex flex-wrap gap-2.5">
+   180→                    <Button onClick={() => setView('dashboard')} className="bg-nasa text-white hover:bg-nasa/90">
+   181→                      Return to console <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
+   182→                    </Button>
+   183→                    <Button variant="ghost" onClick={logout} className="text-dim hover:text-crit">
+   184→                      <LogOut className="mr-1.5 h-4 w-4" aria-hidden /> Sign out
+   185→                    </Button>
+   186→                  </div>
+   187→                  <p className="font-mono text-[10px] leading-relaxed tracking-wide text-faint">
+   188→                    Session identifier stays on this device. No credentials, no password, nothing transmitted.
+   189→                  </p>
+   190→                </div>
+   191→              ) : (
+   192→                <form
+   193→                  className="flex flex-col gap-4"
+   194→                  onSubmit={(e) => {
+   195→                    e.preventDefault();
+   196→                    login(callsign.trim() || 'GUEST');
+   197→                  }}
+   198→                >
+   199→                  <p className="font-mono text-[10px] font-semibold uppercase tracking-mission text-aqua">
+   200→                    Console access — open demo
+   201→                  </p>
+   202→                  <div className="flex flex-col gap-2.5 sm:flex-row">
+   203→                    <label htmlFor="callsign-input" className="sr-only">
+   204→                      Operator callsign (optional)
+   205→                    </label>
+   206→                    <Input
+   207→                      id="callsign-input"
+   208→                      value={callsign}
+   209→                      onChange={(e) => setCallsign(e.target.value)}
+   210→                      placeholder="e.g. MKUL-7"
+   211→                      autoComplete="off"
+   212→                      spellCheck={false}
+   213→                      className="h-10 w-full border-edge bg-panel-2 font-mono text-sm tracking-wide text-ink sm:max-w-[16rem]"
+   214→                      aria-describedby="access-note"
+   215→                    />
+   216→                    <Button type="submit" className="h-10 bg-nasa text-white hover:bg-nasa/90">
+   217→                      Enter console <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
+   218→                    </Button>
+   219→                  </div>
+   220→                  <Button type="button" variant="ghost" onClick={() => login('GUEST')} className="h-9 w-fit text-dim hover:text-ink">
+   221→                    Continue as guest
+   222→                  </Button>
+   223→                  <p id="access-note" className="font-mono text-[10px] leading-relaxed tracking-wide text-faint">
+   224→                    Open demo — session identifier stays on this device. No credentials, no password, nothing transmitted.
+   225→                  </p>
+   226→                </form>
+   227→              )}
+   228→            </motion.div>
+   229→          </div>
+   230→
+   231→          {/* Right column — telemetry network globe viewport */}
+   232→          <motion.div
+   233→            initial={{ opacity: 0, y: 14 }}
+   234→            animate={{ opacity: 1, y: 0 }}
+   235→            transition={{ duration: 0.45, delay: 0.24, ease: [0.22, 1, 0.36, 1] }}
+   236→            className="flex flex-col gap-3"
+   237→          >
+   238→            <div className="hud scanlines relative h-[320px] overflow-hidden md:h-[min(420px,52vh)]">
+   239→              <p className="absolute left-3 top-2.5 z-10 font-mono text-[10px] font-semibold uppercase tracking-mission text-aqua">
+   240→                Live telemetry network
+   241→              </p>
+   242→              <p className="absolute right-3 top-2.5 z-10 font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   243→                stylized · not imagery
+   244→              </p>
+   245→
+   246→              {globeReady ? (
+   247→                <EarthGlobe className="absolute inset-0" onStationHover={setHoveredStation} />
+   248→              ) : (
+   249→                <div className="grid-bg absolute inset-0 flex flex-col items-center justify-center gap-2">
+   250→                  <span className="anim-blink h-2 w-2 rounded-full bg-aqua" aria-hidden />
+   251→                  <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   252→                    initializing telemetry renderer…
+   253→                  </p>
+   254→                </div>
+   255→              )}
+   256→
+   257→              {/* Station hover chip (parent-driven) */}
+   258→              {hoveredStation && (
+   259→                <div className="anim-fade-up hud hud-calm absolute bottom-2.5 right-2.5 z-10 max-w-[72%] px-3 py-2">
+   260→                  <p className="truncate font-mono text-[11px] uppercase tracking-wide-mc text-signal glow-signal">
+   261→                    {hoveredStation.label}
+   262→                  </p>
+   263→                  <p className="mt-0.5 flex items-center gap-2">
+   264→                    <CoordReadout lat={hoveredStation.lat} lon={hoveredStation.lon} />
+   265→                    <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">demo preset</span>
+   266→                  </p>
+   267→                </div>
+   268→              )}
+   269→
+   270→              <p className="pointer-events-none absolute bottom-2.5 left-3 z-10 font-mono text-[9px] uppercase leading-relaxed tracking-wide-mc text-faint">
+   271→                stylized telemetry network — not an imagery product
+   272→              </p>
+   273→            </div>
+   274→
+   275→            {/* Source status pills (live registry) */}
+   276→            <div className="min-h-[2.25rem]" aria-live="polite">
+   277→              {sources.isLoading ? (
+   278→                <div className="flex flex-wrap gap-2" role="status">
+   279→                  {['power', 'gibs', 'smap', 'firms', 'soilgrids'].map((k) => (
+   280→                    <span key={k} className="skeleton-mc h-6 w-28" aria-hidden />
+   281→                  ))}
+   282→                </div>
+   283→              ) : sources.isError ? (
+   284→                <FaultPanel
+   285→                  error={sources.error}
+   286→                  onRetry={() => sources.refetch()}
+   287→                  label="Source registry"
+   288→                  className="p-3 sm:p-3.5"
+   289→                />
+   290→              ) : (
+   291→                <div className="flex flex-wrap gap-x-4 gap-y-2">
+   292→                  {(sources.data?.sources ?? []).slice(0, 6).map((s) => (
+   293→                    <span key={s.id} className="inline-flex items-center gap-1.5">
+   294→                      <span className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   295→                        {s.provider.split('—')[0]}
+   296→                      </span>
+   297→                      <StatusPill status={s.status} pulse={false} />
+   298→                    </span>
+   299→                  ))}
+   300→                </div>
+   301→              )}
+   302→            </div>
+   303→          </motion.div>
+   304→        </div>
+   305→      </section>
+   306→
+   307→      {/* ---------------------------------------------------------- */}
+   308→      {/* LIVE MISSION TELEMETRY                                      */}
+   309→      {/* ---------------------------------------------------------- */}
+   310→      <section aria-labelledby="telemetry-heading">
+   311→        <span id="telemetry-heading" className="sr-only">Live console telemetry</span>
+   312→        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+   313→          <SectionHeader
+   314→            kicker="Mission telemetry"
+   315→            title="Live console telemetry"
+   316→            description="Read from the running system — real database rows and a live provider probe. If a value is missing, it is shown as missing."
+   317→          />
+   318→        </motion.div>
+   319→        <motion.div {...fadeUp} transition={{ duration: 0.5, delay: 0.08, ease: [0.22, 1, 0.36, 1] }} className="mt-4">
+   320→          {status.isLoading ? (
+   321→            <div role="status" aria-live="polite">
+   322→              <StatSkeletonRow count={4} />
+   323→            </div>
+   324→          ) : status.isError ? (
+   325→            <FaultPanel
+   326→              error={status.error}
+   327→              onRetry={() => status.refetch()}
+   328→              label="System status"
+   329→            />
+   330→          ) : (
+   331→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+   332→              <TelemetryStat
+   333→                label="Observations stored"
+   334→                value={db ? db.observations.toLocaleString('en-US') : null}
+   335→                unit="rows"
+   336→                hint="real rows · POWER ingests"
+   337→              />
+   338→              <TelemetryStat
+   339→                label="Fire detections"
+   340→                value={db ? db.fireDetections.toLocaleString('en-US') : null}
+   341→                unit="rows"
+   342→                hint="VIIRS 375 m · via GIBS"
+   343→              />
+   344→              <TelemetryStat
+   345→                label="Farms registered"
+   346→                value={db ? db.farms.toLocaleString('en-US') : null}
+   347→                unit="farms"
+   348→                hint="operator-registered"
+   349→              />
+   350→              <TelemetryStat
+   351→                label="Providers operational"
+   352→                value={providersOk !== null && dataSources ? `${providersOk} / ${dataSources.length}` : null}
+   353→                hint={health.isError ? 'health probe unreachable — shown as unknown' : 'live registry probe'}
+   354→              />
+   355→            </div>
+   356→          )}
+   357→        </motion.div>
+   358→      </section>
+   359→
+   360→      {/* ---------------------------------------------------------- */}
+   361→      {/* SIX MISSION QUESTIONS                                       */}
+   362→      {/* ---------------------------------------------------------- */}
+   363→      <section aria-labelledby="questions-heading">
+   364→        <span id="questions-heading" className="sr-only">Six questions, answered honestly</span>
+   365→        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+   366→          <SectionHeader
+   367→            kicker="The problem"
+   368→            title="Six questions, answered honestly"
+   369→            description="Farmers face shifting rainfall patterns, temperature extremes and fire exposure, yet most decision tools either hide their evidence, overstate their certainty, or require data that smallholders do not have. TerraField Atlas takes the opposite stance: it is built around six questions, and refuses to answer any of them beyond what the evidence supports."
+   370→          />
+   371→        </motion.div>
+   372→        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   373→          {QUESTIONS.map((q, i) => (
+   374→            <motion.article
+   375→              key={q}
+   376→              {...fadeUp}
+   377→              transition={{ duration: 0.45, delay: i * 0.05, ease: [0.22, 1, 0.36, 1] }}
+   378→              className="hud hud-calm flex items-start gap-4 p-4 sm:p-5"
+   379→            >
+   380→              <p className="telemetry shrink-0 text-3xl font-medium leading-none text-nasa" aria-hidden>
+   381→                {String(i + 1).padStart(2, '0')}
+   382→              </p>
+   383→              <p className="pt-0.5 text-sm leading-relaxed text-ink">{q}</p>
+   384→            </motion.article>
+   385→          ))}
+   386→        </div>
+   387→      </section>
+   388→
+   389→      {/* ---------------------------------------------------------- */}
+   390→      {/* CAPABILITIES                                                */}
+   391→      {/* ---------------------------------------------------------- */}
+   392→      <section aria-labelledby="features-heading">
+   393→        <span id="features-heading" className="sr-only">What the console actually does</span>
+   394→        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+   395→          <SectionHeader
+   396→            kicker="Mission systems"
+   397→            title="What the console actually does"
+   398→            description="Six subsystems, each built around a real NASA Earth-observation data source with a deterministic method behind it."
+   399→          />
+   400→        </motion.div>
+   401→        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   402→          {FEATURES.map((f, i) => (
+   403→            <motion.article
+   404→              key={f.title}
+   405→              {...fadeUp}
+   406→              transition={{ duration: 0.45, delay: i * 0.05, ease: [0.22, 1, 0.36, 1] }}
+   407→              className="hud hud-calm p-4 sm:p-5"
+   408→            >
+   409→              <span
+   410→                className={cn(
+   411→                  'flex h-9 w-9 items-center justify-center rounded-sm border',
+   412→                  f.tone === 'signal' ? 'border-signal/30 bg-signal/10' : 'border-aqua/30 bg-aqua/10',
+   413→                )}
+   414→                aria-hidden
+   415→              >
+   416→                <f.icon className={cn('h-4 w-4', f.tone === 'signal' ? 'text-signal' : 'text-aqua')} />
+   417→              </span>
+   418→              <h3 className="mt-3 font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">
+   419→                {f.title}
+   420→              </h3>
+   421→              <p className="mt-1.5 text-xs leading-relaxed text-dim">{f.text}</p>
+   422→            </motion.article>
+   423→          ))}
+   424→        </div>
+   425→      </section>
+   426→
+   427→      {/* ---------------------------------------------------------- */}
+   428→      {/* DATA-SOURCE TRANSPARENCY                                    */}
+   429→      {/* ---------------------------------------------------------- */}
+   430→      <section aria-labelledby="transparency-heading">
+   431→        <span id="transparency-heading" className="sr-only">Data-source transparency</span>
+   432→        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+   433→          <SectionHeader
+   434→            kicker="Source registry"
+   435→            title="Data-source transparency"
+   436→            description="Live source registry, refreshed from the running system. Unreachable or unconfigured sources are shown exactly as they are — never silently substituted with fabricated data."
+   437→            actions={<StatusPill status={sources.isError ? 'unavailable' : sources.isLoading ? 'degraded' : 'nominal'} />}
+   438→          />
+   439→        </motion.div>
+   440→        <motion.div {...fadeUp} transition={{ duration: 0.5, delay: 0.08, ease: [0.22, 1, 0.36, 1] }} className="mt-4">
+   441→          <div className="hud overflow-hidden p-0">
+   442→            <QueryState
+   443→              isLoading={sources.isLoading}
+   444→              isError={sources.isError}
+   445→              error={sources.error}
+   446→              onRetry={() => sources.refetch()}
+   447→              label="Source registry"
+   448→              isEmpty={!sources.isLoading && !sources.isError && (sources.data?.sources?.length ?? 0) === 0}
+   449→              skeleton={
+   450→                <div className="p-4 sm:p-5" aria-hidden>
+   451→                  <SkeletonRows rows={6} />
+   452→                </div>
+   453→              }
+   454→            >
+   455→              <div className="max-h-96 overflow-y-auto">
+   456→                <Table className="mc-table w-full min-w-[42rem]">
+   457→                  <TableHeader>
+   458→                    <TableRow className="border-edge hover:bg-transparent">
+   459→                      <TableHead className="px-3 py-2.5 text-left">Source</TableHead>
+   460→                      <TableHead className="px-3 py-2.5 text-left">Dataset</TableHead>
+   461→                      <TableHead className="px-3 py-2.5 text-left">Resolution</TableHead>
+   462→                      <TableHead className="px-3 py-2.5 text-left">Status</TableHead>
+   463→                    </TableRow>
+   464→                  </TableHeader>
+   465→                  <TableBody>
+   466→                    {(sources.data?.sources ?? []).map((s) => (
+   467→                      <TableRow key={s.id} className="border-edge/60 bg-transparent hover:bg-panel-2/50">
+   468→                        <TableCell className="max-w-[13rem] truncate px-3 py-2.5" title={s.provider}>
+   469→                          {s.provider.split('—')[0]}
+   470→                        </TableCell>
+   471→                        <TableCell className="max-w-[17rem] truncate px-3 py-2.5 text-ink/90" title={s.datasetName}>
+   472→                          {s.datasetName}
+   473→                        </TableCell>
+   474→                        <TableCell className="max-w-[11rem] truncate px-3 py-2.5 text-faint" title={s.spatialResolution}>
+   475→                          {s.spatialResolution}
+   476→                        </TableCell>
+   477→                        <TableCell className="px-3 py-2.5">
+   478→                          <StatusPill status={s.status} />
+   479→                        </TableCell>
+   480→                      </TableRow>
+   481→                    ))}
+   482→                  </TableBody>
+   483→                </Table>
+   484→              </div>
+   485→            </QueryState>
+   486→          </div>
+   487→        </motion.div>
+   488→      </section>
+   489→
+   490→      {/* ---------------------------------------------------------- */}
+   491→      {/* DELIBERATE HONESTY BOX                                      */}
+   492→      {/* ---------------------------------------------------------- */}
+   493→      <section aria-labelledby="honesty-heading">
+   494→        <motion.div
+   495→          {...fadeUp}
+   496→          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+   497→          className="hud hud-calm p-4 sm:p-5"
+   498→          style={{ borderColor: 'rgba(255, 178, 36, 0.35)' }}
+   499→        >
+   500→          <h2 id="honesty-heading" className="flex items-center gap-2 font-display text-sm font-semibold uppercase tracking-wide-mc text-caution">
+   501→            <AlertTriangle className="h-4 w-4" aria-hidden /> What this product deliberately does NOT claim
+   502→          </h2>
+   503→          <ul className="mt-3 grid gap-2 text-xs leading-relaxed text-dim sm:grid-cols-2">
+   504→            {NOT_CLAIMS.map((claim) => (
+   505→              <li key={claim} className="flex items-start gap-2">
+   506→                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-caution" aria-hidden />
+   507→                <span>{claim}</span>
+   508→              </li>
+   509→            ))}
+   510→          </ul>
+   511→        </motion.div>
+   512→      </section>
+   513→
+   514→      {/* ---------------------------------------------------------- */}
+   515→      {/* CLOSING CTA                                                 */}
+   516→      {/* ---------------------------------------------------------- */}
+   517→      <section aria-labelledby="cta-heading" className="pb-2">
+   518→        <motion.div
+   519→          {...fadeUp}
+   520→          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+   521→          className="hud grid-bg flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8"
+   522→        >
+   523→          <div className="min-w-0">
+   524→            <p className="font-mono text-[10px] font-semibold uppercase tracking-mission text-nasa">
+   525→              Join the mission
+   526→            </p>
+   527→            <h2 id="cta-heading" className="mt-2 font-display text-2xl font-bold uppercase tracking-wide-mc text-ink sm:text-3xl">
+   528→              Every recommendation backed by evidence.
+   529→            </h2>
+   530→            <p className="mt-2 max-w-md text-xs leading-relaxed text-dim">
+   531→              Open the console and inspect the same provenance trail every analysis uses: source, method,
+   532→              retrieval time and confidence.
+   533→            </p>
+   534→          </div>
+   535→          <div className="flex shrink-0 flex-col items-start gap-2.5 sm:items-end">
+   536→            <Button onClick={enterConsole} className="h-10 bg-nasa text-white hover:bg-nasa/90">
+   537→              {operator ? 'Return to the console' : 'Enter the console'}
+   538→              <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
+   539→            </Button>
+   540→            <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+   541→              {operator ? (
+   542→                <>
+   543→                  <ShieldCheck className="h-3.5 w-3.5 text-signal" aria-hidden />
+   544→                  session active · {operator.callsign}
+   545→                </>
+   546→              ) : (
+   547→                <>
+   548→                  <Radio className="h-3.5 w-3.5" aria-hidden />
+   549→                  demo access · no credentials
+   550→                </>
+   551→              )}
+   552→            </p>
+   553→          </div>
+   554→        </motion.div>
+   555→      </section>
+   556→    </div>
+   557→  );
+   558→}
+   559→

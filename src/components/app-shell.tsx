@@ -1,58 +1,89 @@
 'use client';
 
-import { useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Globe2, LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame,
-  FileText, Settings, ChevronRight, Satellite, Activity, Menu,
+  LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame,
+  FileText, Settings, ChevronRight, Activity, Menu, LogOut, Home,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MissionPatch } from '@/components/ui-mc/logo';
+import { DegradedBanner } from '@/components/system/degraded-banner';
+import { ErrorBoundary } from '@/components/system/error-boundary';
 import { cn } from '@/lib/utils';
 
-const NAV: { key: ViewKey; label: string; icon: React.ComponentType<{ className?: string }>; group: string }[] = [
-  { key: 'landing', label: 'Overview', icon: Globe2, group: 'Product' },
-  { key: 'dashboard', label: 'Earth Intelligence', icon: LayoutDashboard, group: 'Intelligence' },
-  { key: 'explorer', label: 'Geospatial Explorer', icon: Map, group: 'Intelligence' },
-  { key: 'analysis', label: 'Environmental Analysis', icon: LineChart, group: 'Intelligence' },
-  { key: 'fire', label: 'Fire Intelligence', icon: Flame, group: 'Intelligence' },
-  { key: 'farm', label: 'Farm Workspace', icon: Tractor, group: 'Planning' },
-  { key: 'rotation', label: 'Rotation Planner', icon: Sprout, group: 'Planning' },
-  { key: 'reports', label: 'Reports', icon: FileText, group: 'Planning' },
-  { key: 'provenance', label: 'Evidence & Provenance', icon: ScrollText, group: 'Trust' },
-  { key: 'settings', label: 'System Health', icon: Settings, group: 'Trust' },
+const NAV: { key: ViewKey; label: string; short: string; icon: React.ComponentType<{ className?: string }>; group: string }[] = [
+  { key: 'landing', label: 'Mission Overview', short: 'Overview', icon: Home, group: 'mission' },
+  { key: 'dashboard', label: 'Earth Intelligence', short: 'Earth', icon: LayoutDashboard, group: 'intelligence' },
+  { key: 'explorer', label: 'Geospatial Explorer', short: 'Explorer', icon: Map, group: 'intelligence' },
+  { key: 'analysis', label: 'Environmental Analysis', short: 'Analysis', icon: LineChart, group: 'intelligence' },
+  { key: 'fire', label: 'Fire Intelligence', short: 'Fire', icon: Flame, group: 'intelligence' },
+  { key: 'farm', label: 'Farm Workspace', short: 'Farms', icon: Tractor, group: 'planning' },
+  { key: 'rotation', label: 'Rotation Planner', short: 'Rotation', icon: Sprout, group: 'planning' },
+  { key: 'reports', label: 'Field Reports', short: 'Reports', icon: FileText, group: 'planning' },
+  { key: 'provenance', label: 'Evidence & Provenance', short: 'Provenance', icon: ScrollText, group: 'trust' },
+  { key: 'settings', label: 'System Health', short: 'Systems', icon: Settings, group: 'trust' },
 ];
 
+const GROUP_LABEL: Record<string, string> = {
+  mission: 'Mission',
+  intelligence: 'Earth Intelligence',
+  planning: 'Field Planning',
+  trust: 'Trust & Systems',
+};
+
+/** Ticking UTC mission clock (post-mount only to avoid hydration drift). */
+function MissionClock() {
+  const [now, setNow] = useState<string | null>(null);
+  useEffect(() => {
+    const fmt = () => {
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      setNow(`${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`);
+    };
+    fmt();
+    const t = setInterval(fmt, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="telemetry hidden text-[11px] text-dim md:inline" suppressHydrationWarning>
+      {now ?? '--:--:--Z'}
+    </span>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { view, setView, location, activeFarmId, setActiveFarmId } = useSession();
+  const { view, setView, location, activeFarmId, setActiveFarmId, operator, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const health = useQuery({
-    queryKey: ['health'],
-    queryFn: api.health,
-    refetchInterval: 120_000,
-  });
-  const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms });
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 120_000, retry: 1 });
+  const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1 });
 
-  const groups = [...new Set(NAV.map((n) => n.group))];
+  const groups = ['mission', 'intelligence', 'planning', 'trust'];
+  const currentLabel = NAV.find((n) => n.key === view)?.label ?? 'Console';
 
   const navContent = (
-    <nav aria-label="Main navigation" className="flex flex-col gap-5 px-3 py-4">
-      <div className="px-2 flex items-center gap-2">
-        <Satellite className="h-6 w-6 text-emerald-400" aria-hidden />
-        <div>
-          <div className="text-sm font-semibold tracking-wide text-slate-100">TerraField Atlas</div>
-          <div className="text-[10px] uppercase tracking-widest text-slate-500">NASA Earth Intelligence</div>
+    <nav aria-label="Console navigation" className="flex h-full flex-col gap-4 px-3 py-4">
+      {/* Mission identity */}
+      <div className="flex items-center gap-3 px-2 pt-1">
+        <MissionPatch className="h-9 w-9 shrink-0" />
+        <div className="min-w-0">
+          <p className="font-display text-[13px] font-bold uppercase tracking-wide-mc text-ink">TerraField Atlas</p>
+          <p className="font-mono text-[9px] uppercase tracking-mission text-nasa">Field Shift · 2026</p>
         </div>
       </div>
+
+      <div className="mx-2 h-px bg-gradient-to-r from-nasa/50 via-edge to-transparent" aria-hidden />
+
       {groups.map((g) => (
-        <div key={g} className="flex flex-col gap-0.5">
-          <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{g}</div>
+        <div key={g} className="flex flex-col gap-1">
+          <p className="px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-mission text-faint">
+            {GROUP_LABEL[g]}
+          </p>
           {NAV.filter((n) => n.group === g).map((item) => {
             const active = view === item.key;
             const Icon = item.icon;
@@ -65,80 +96,126 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 }}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-emerald-400',
+                  'group relative flex min-h-9 items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   active
-                    ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent',
+                    ? 'bg-nasa/10 text-ink'
+                    : 'text-dim hover:bg-panel-2/70 hover:text-ink',
                 )}
               >
-                <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                {active && (
+                  <span
+                    className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-nasa"
+                    aria-hidden
+                  />
+                )}
+                <Icon
+                  className={cn('h-4 w-4 shrink-0', active ? 'text-nasa' : 'text-faint group-hover:text-dim')}
+                  aria-hidden
+                />
                 <span className="truncate">{item.label}</span>
-                {active && <ChevronRight className="ml-auto h-3.5 w-3.5" aria-hidden />}
+                {active && <ChevronRight className="ml-auto h-3 w-3 text-nasa/70" aria-hidden />}
               </button>
             );
           })}
         </div>
       ))}
-      <div className="mt-auto px-2 py-3 text-[10px] leading-relaxed text-slate-600 border-t border-slate-800">
-        NASA POWER · GIBS MODIS/VIIRS · SMAP · SoilGrids<br />
-        Every number traceable to source + retrieval time.
+
+      {/* Operator + sources footer */}
+      <div className="mt-auto grid gap-2 border-t border-edge px-2 pt-3 pb-1">
+        {operator && (
+          <div className="flex items-center gap-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-signal anim-blink" aria-hidden />
+            <p className="telemetry truncate text-[11px] text-dim">
+              OPERATOR <span className="text-signal">{operator.callsign}</span>
+            </p>
+          </div>
+        )}
+        <p className="font-mono text-[9px] leading-relaxed tracking-wide text-faint">
+          POWER · GIBS · SMAP · FIRMS<br />
+          every number traceable to source + retrieval time
+        </p>
       </div>
     </nav>
   );
 
+  const systemsNominal = health.data?.status === 'ok';
+
   return (
-    <div className="min-h-screen flex flex-col bg-[#060b14] text-slate-200">
+    <div className="flex min-h-screen flex-col bg-void text-dim">
       <div className="flex flex-1 flex-col lg:flex-row">
-        {/* Desktop sidebar */}
-        <aside className="hidden lg:block w-60 shrink-0 border-r border-slate-800 bg-[#0a101c] sticky top-0 h-screen overflow-y-auto">
+        {/* Console rail (desktop) */}
+        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-y-auto border-r border-edge bg-sidebar lg:block">
           {navContent}
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Header */}
-          <header className="sticky top-0 z-30 border-b border-slate-800 bg-[#0a101c]/95 backdrop-blur supports-[backdrop-filter]:bg-[#0a101c]/80">
-            <div className="flex h-14 items-center gap-3 px-4">
+          {/* Command bar */}
+          <header className="sticky top-0 z-30 border-b border-edge bg-void/92 backdrop-blur supports-[backdrop-filter]:bg-void/85">
+            <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
               <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                 <SheetTrigger asChild>
-                  <Button variant="ghost" size="icon" className="lg:hidden text-slate-300" aria-label="Open navigation">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-dim hover:bg-panel-2 hover:text-ink lg:hidden"
+                    aria-label="Open console navigation"
+                  >
                     <Menu className="h-5 w-5" />
                   </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="w-64 bg-[#0a101c] border-slate-800 p-0">
-                  <SheetTitle className="sr-only">Navigation</SheetTitle>
+                <SheetContent side="left" className="w-72 border-edge bg-sidebar p-0" aria-label="Console navigation">
+                  <SheetTitle className="sr-only">Console navigation</SheetTitle>
                   {navContent}
                 </SheetContent>
               </Sheet>
 
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span className="hidden sm:inline text-slate-400">{NAV.find((n) => n.key === view)?.label}</span>
-                <ChevronRight className="hidden sm:inline h-3 w-3" aria-hidden />
-                <span className="font-mono text-slate-300 truncate max-w-[45vw]">
-                  {location.lat.toFixed(2)}°, {location.lon.toFixed(2)}°
-                </span>
-                <span className="hidden md:inline truncate text-slate-500 max-w-[20rem]">{location.label}</span>
+              <div className="hidden items-center gap-2 lg:flex">
+                <p className="font-mono text-[10px] uppercase tracking-mission text-nasa">{currentLabel}</p>
+                <ChevronRight className="h-3 w-3 text-faint" aria-hidden />
               </div>
 
-              <div className="ml-auto flex items-center gap-2">
-                <Link
-                  href="#system-health"
+              <div className="telemetry flex min-w-0 items-center gap-2 text-[11px]">
+                <span className="truncate text-dim">
+                  {Math.abs(location.lat).toFixed(2)}°{location.lat >= 0 ? 'N' : 'S'} ·{' '}
+                  {Math.abs(location.lon).toFixed(2)}°{location.lon >= 0 ? 'E' : 'W'}
+                </span>
+                <span className="hidden truncate text-faint xl:inline xl:max-w-[18rem]">{location.label}</span>
+              </div>
+
+              <div className="ml-auto flex items-center gap-3">
+                <MissionClock />
+
+                <button
+                  type="button"
                   onClick={() => setView('settings')}
-                  className="hidden sm:flex items-center gap-1.5"
-                  aria-label="System health"
+                  className="hidden items-center gap-1.5 rounded-sm px-1.5 py-1 transition-colors hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-offset-2 sm:flex"
+                  style={{ outlineColor: 'var(--nasa)' }}
+                  aria-label={`System health: ${systemsNominal ? 'nominal' : 'degraded'}`}
                 >
-                  <Activity className={cn('h-3.5 w-3.5', health.data?.status === 'ok' ? 'text-emerald-400' : 'text-amber-400')} aria-hidden />
-                  <span className="text-[10px] uppercase tracking-wider text-slate-500">
-                    {health.isFetching ? 'checking…' : health.data?.status === 'ok' ? 'systems nominal' : 'degraded'}
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full',
+                      health.isFetching
+                        ? 'bg-aqua anim-blink'
+                        : systemsNominal
+                          ? 'bg-signal anim-pulse-soft'
+                          : 'bg-caution anim-blink',
+                    )}
+                    aria-hidden
+                  />
+                  <span className="font-mono text-[10px] uppercase tracking-wide-mc text-dim">
+                    {health.isFetching ? 'chk' : systemsNominal ? 'sys nominal' : 'degraded'}
                   </span>
-                </Link>
-                <Select
-                  value={activeFarmId ?? 'none'}
-                  onValueChange={(v) => setActiveFarmId(v === 'none' ? null : v)}
-                >
-                  <SelectTrigger className="h-8 w-[9.5rem] sm:w-52 text-xs bg-slate-900 border-slate-700" aria-label="Active farm">
+                </button>
+
+                <Select value={activeFarmId ?? 'none'} onValueChange={(v) => setActiveFarmId(v === 'none' ? null : v)}>
+                  <SelectTrigger
+                    className="h-8 w-36 border-edge bg-panel text-xs text-dim sm:w-48"
+                    aria-label="Active farm"
+                  >
                     <SelectValue placeholder="No active farm" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-900 border-slate-700 max-h-72 overflow-y-auto">
+                  <SelectContent className="max-h-72 overflow-y-auto border-edge bg-popover text-dim">
                     <SelectItem value="none" className="text-xs">No active farm</SelectItem>
                     {(farms.data?.farms ?? []).map((f) => (
                       <SelectItem key={f.id} value={f.id} className="text-xs">
@@ -147,25 +224,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     ))}
                   </SelectContent>
                 </Select>
+
+                {operator && (
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className="flex h-8 items-center gap-1.5 rounded-sm border border-edge bg-panel px-2.5 text-[11px] uppercase tracking-wide-mc text-dim transition-colors hover:border-crit/50 hover:text-crit focus-visible:outline-2 focus-visible:outline-offset-2"
+                    style={{ outlineColor: 'var(--nasa)' }}
+                    aria-label={`Sign out operator ${operator.callsign}`}
+                    title={`Sign out ${operator.callsign}`}
+                  >
+                    <span className="telemetry hidden text-signal sm:inline">{operator.callsign}</span>
+                    <LogOut className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                )}
               </div>
             </div>
           </header>
 
-          <main id="main" className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
-            {children}
+          <DegradedBanner />
+
+          {/* Console viewport — each module is fault-isolated */}
+          <main id="main" className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+            <ErrorBoundary label={currentLabel}>{children}</ErrorBoundary>
           </main>
         </div>
       </div>
 
-      {/* Sticky footer */}
-      <footer className="mt-auto border-t border-slate-800 bg-[#0a101c]">
-        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8 flex flex-col gap-2 text-[11px] text-slate-500">
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            <span>Data: NASA POWER (LaRC) · NASA GIBS EOSDIS · ISRIC SoilGrids 2.0 (CC BY 4.0)</span>
-            <span>VIIRS/MODIS active-fire detections via GIBS (FIRMS detection stream)</span>
+      {/* Sticky mission footer */}
+      <footer className="mt-auto border-t border-edge bg-sidebar">
+        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-4 text-[11px] leading-relaxed text-faint sm:px-6 lg:px-8">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono tracking-wide">
+            <span>DATA — NASA POWER (LaRC) · NASA GIBS EOSDIS · ISRIC SoilGrids 2.0 (CC BY 4.0)</span>
+            <span>VIIRS/MODIS ACTIVE-FIRE DETECTIONS VIA GIBS (FIRMS DETECTION STREAM)</span>
           </div>
-          <div className="text-slate-600">
-            TerraField Atlas · NASA Space Apps Challenge 2026 · Environmental associations are not evidence of agricultural causation; no yield or profit predictions.
+          <div className="text-dim/80">
+            TerraField Atlas · NASA Space Apps Challenge 2026 · Environmental associations are not evidence of
+            agricultural causation; no yield or profit predictions.
           </div>
         </div>
       </footer>

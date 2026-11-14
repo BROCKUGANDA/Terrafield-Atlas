@@ -1,33 +1,59 @@
 'use client';
 
+import React from 'react';
+import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { api, ApiRequestError } from '@/lib/api-client';
-import type { ObservationPoint } from '@/lib/types';
+import type { UseQueryResult } from '@tanstack/react-query';
+import { api, ApiRequestError, type ObservationsResponse } from '@/lib/api-client';
+import type { ObservationPoint, TrendResult } from '@/lib/types';
 import { MonthlySeriesChart, ClimatologyChart, AnomalyChart } from '@/components/charts/scientific-charts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { SectionHeader, StatusPill, HudPanel } from '@/components/ui-mc/kit';
+import { FaultPanel, EmptyState } from '@/components/system/query-state';
+import { SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
 import { Loader2, TrendingUp, TrendingDown, Minus, Sigma, Info } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { cn } from '@/lib/utils';
+
+const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 const SERIES_AGG: Record<string, 'sum' | 'mean'> = { PRECTOTCORR: 'sum' };
+/** Palette hexes mirroring --chart-1..5 / mission tokens (see scientific-charts). */
 const SERIES_COLOR: Record<string, string> = {
-  PRECTOTCORR: '#38bdf8',
-  T2M: '#fb923c',
-  T2M_MAX: '#ef4444',
-  T2M_MIN: '#60a5fa',
-  ALLSKY_SFC_SW_DWN: '#facc15',
-  RH2M: '#a78bfa',
-  WS2M: '#94a3b8',
-  GWETROOT: '#34d399',
-  GWETTOP: '#2dd4bf',
+  PRECTOTCORR: '#4cc3ff', // aqua — water
+  T2M: '#ffb224', // caution
+  T2M_MAX: '#ff7e6b', // coral
+  T2M_MIN: '#8da2ff', // iris
+  ALLSKY_SFC_SW_DWN: '#ffb224', // caution — solar
+  RH2M: '#4cc3ff', // aqua
+  WS2M: '#9aaacd', // dim
+  GWETROOT: '#45e39a', // signal
+  GWETTOP: '#4cc3ff', // aqua
 };
+
+const DIRECTION_TONE: Record<string, string> = {
+  increasing: 'border-iris/40 text-iris',
+  decreasing: 'border-aqua/40 text-aqua',
+};
+
+/** Staggered section entrance (y 12→0, 0.35 s, ~60 ms stagger, once). */
+function Reveal({ i = 0, className, children }: { i?: number; className?: string; children: React.ReactNode }) {
+  return (
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-24px' }}
+      transition={{ duration: 0.35, delay: Math.min(i, 8) * 0.06, ease: EASE }}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 /** Environmental Analysis: charts + statistical trend assessment. */
 export function AnalysisView() {
-  const { activeFarmId, location } = useSession();
+  const { activeFarmId, location, setView } = useSession();
   const { toast } = useToast();
 
   const trends = useMutation({
@@ -55,145 +81,218 @@ export function AnalysisView() {
   const results = trends.data?.results ?? [];
 
   return (
-    <div className="mx-auto max-w-6xl flex flex-col gap-6">
-      <Card className="border-slate-800 bg-slate-900/40">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Environmental trend analysis</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <p className="text-xs text-slate-400 max-w-3xl">
-            Runs the full pipeline on stored observations: monthly aggregation → seasonal Mann-Kendall → Theil-Sen
-            slope with 95% CI → autocorrelation check (Hamed-Rao correction when detected) → Benjamini-Hochberg FDR
-            across variables → plain-language interpretation with caveats.
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      {/* View header — the run control is the primary mission action */}
+      <Reveal>
+        <SectionHeader
+          kicker="Mission console · Deterministic statistics"
+          title="Environmental Trend Analysis"
+          description="Runs the full pipeline on stored observations: monthly aggregation → seasonal Mann-Kendall → Theil-Sen slope with 95% CI → autocorrelation check (Hamed-Rao correction when detected) → Benjamini-Hochberg FDR across variables → plain-language interpretation with caveats."
+          actions={
+            <Button
+              onClick={() => trends.mutate()}
+              disabled={trends.isPending}
+              className="h-9 font-mono text-xs uppercase tracking-wide-mc"
+            >
+              {trends.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                  Computing…
+                </>
+              ) : (
+                'Run trend analysis'
+              )}
+            </Button>
+          }
+        />
+      </Reveal>
+
+      {/* Run provenance strip */}
+      {trends.data && (
+        <Reveal i={1}>
+          <p className="telemetry px-1 text-[11px] text-faint">
+            {trends.data.observationCount.toLocaleString()} observations · {trends.data.period.start} → {trends.data.period.end} ·{' '}
+            {trends.data.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
+            {trends.data.datasetVersions[0]}
           </p>
-          <Button onClick={() => trends.mutate()} disabled={trends.isPending} className="w-fit bg-emerald-600 hover:bg-emerald-500 text-white">
-            {trends.isPending ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> Computing…
-              </>
-            ) : (
-              'Run trend analysis'
-            )}
-          </Button>
-          {trends.data && (
-            <div className="text-xs text-slate-500">
-              {trends.data.observationCount.toLocaleString()} observations · {trends.data.period.start} → {trends.data.period.end} ·{' '}
-              {trends.data.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
-              {trends.data.datasetVersions[0]}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </Reveal>
+      )}
 
-      {trends.isPending && <SkeletonGrid />}
+      {/* Job surfaces */}
+      {trends.isPending && (
+        <Reveal i={2}>
+          <div role="status" aria-live="polite" className="flex flex-col gap-2">
+            <SweepLoader label="Computing trends" />
+            <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+              seasonal Mann-Kendall · Theil-Sen · Hamed-Rao · Benjamini-Hochberg FDR
+            </p>
+          </div>
+        </Reveal>
+      )}
 
+      {trends.isError && (
+        <Reveal i={2}>
+          <FaultPanel error={trends.error} onRetry={() => trends.mutate()} label="Trend analysis" />
+        </Reveal>
+      )}
+
+      {/* Result cards */}
       {results.length > 0 && (
         <>
-          {results.map((r) => {
-            const points = (observations.data?.series?.[r.variable]?.points ?? []) as ObservationPoint[];
-            return (
-              <Card key={r.variable} className="border-slate-800 bg-slate-900/40">
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                    <DirectionIcon direction={r.direction} significant={r.significant} />
-                    {r.label}
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        r.significant ? 'border-emerald-600/40 text-emerald-400' : 'border-slate-700 text-slate-400',
-                      )}
-                    >
-                      {r.significant ? 'significant (p<0.05)' : 'not significant'}
-                    </Badge>
-                    {r.autocorrelationAdjusted && (
-                      <Badge variant="outline" className="border-amber-600/40 text-amber-400">autocorrelation-corrected</Badge>
-                    )}
-                    {!r.minSampleSatisfied && (
-                      <Badge variant="outline" className="border-amber-600/40 text-amber-400">insufficient record</Badge>
-                    )}
-                    <span className="ml-auto font-mono text-xs text-slate-500">{r.unit}</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <MonthlySeriesChart
-                    points={points}
-                    aggregation={SERIES_AGG[r.variable] ?? 'mean'}
-                    variableLabel={r.label}
-                    unit={r.unit}
-                    color={SERIES_COLOR[r.variable] ?? '#38bdf8'}
-                    trend={r}
-                  />
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <div>
-                      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-300">
-                        <Sigma className="h-3.5 w-3.5 text-slate-500" aria-hidden /> Monthly climatology (mean ± 1σ)
-                      </div>
-                      <ClimatologyChart climatology={r.monthlyClimatology} unit={r.unit} />
-                    </div>
-                    <div>
-                      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-300">
-                        <Info className="h-3.5 w-3.5 text-slate-500" aria-hidden /> Final-year anomalies (|z| ≥ 2σ)
-                      </div>
-                      <AnomalyChart anomalies={r.anomalies} />
-                    </div>
-                  </div>
-                  <TrendStatsGrid result={r} />
-                  <ExplanationBlock result={r} />
-                </CardContent>
-              </Card>
-            );
-          })}
+          {results.map((r, idx) => (
+            <Reveal key={r.variable} i={idx + 2}>
+              {/* API contract types `variable` as string; the view narrows to the catalogue key set. */}
+              <ResultCard result={r as TrendResult} observations={observations} />
+            </Reveal>
+          ))}
         </>
       )}
 
+      {/* Idle state — analysis not yet run */}
       {!trends.isPending && results.length === 0 && (
-        <Card className="border-dashed border-slate-800 bg-slate-900/20">
-          <CardContent className="py-10 text-center text-sm text-slate-500">
-            Run the analysis to see rainfall, temperature, radiation, humidity and soil-wetness trends with full
-            statistics. Requires an ingested POWER record (see Earth Intelligence).
-          </CardContent>
-        </Card>
+        <Reveal i={2}>
+          <EmptyState
+            label="Trend analysis"
+            hint="Run the analysis to see rainfall, temperature, radiation, humidity and soil-wetness trends with full statistics. Requires an ingested POWER record (see Earth Intelligence)."
+            action={
+              <Button
+                variant="outline"
+                onClick={() => setView('dashboard')}
+                className="mt-2 h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+              >
+                Open Earth Intelligence
+              </Button>
+            }
+          />
+        </Reveal>
       )}
     </div>
   );
 }
 
-function TrendStatsGrid({ result }: { result: import('@/lib/types').TrendResult }) {
-  const stats: { label: string; value: string }[] = [
-    { label: 'direction', value: result.direction },
-    { label: 'Theil-Sen slope', value: result.slopePerYear !== null ? `${result.slopePerYear.toFixed(3)} ${result.unit}/yr` : 'n/a' },
-    { label: '95% CI', value: result.ciLower !== null ? `${result.ciLower.toFixed(2)} … ${result.ciUpper?.toFixed(2)}` : 'n/a' },
+function ResultCard({
+  result: r,
+  observations,
+}: {
+  result: TrendResult;
+  observations: UseQueryResult<ObservationsResponse>;
+}) {
+  const points = (observations.data?.series?.[r.variable]?.points ?? []) as ObservationPoint[];
+  return (
+    <HudPanel calm className="flex flex-col gap-4">
+      {/* Variable header: direction + significance markers */}
+      <div className="flex flex-wrap items-center gap-2">
+        <DirectionIcon direction={r.direction} significant={r.significant} />
+        <h3 className="font-display text-base font-bold uppercase tracking-wide-mc text-ink">{r.label}</h3>
+        <StatusPill
+          status={r.significant ? 'significant (p<0.05)' : 'not significant'}
+          pulse={false}
+          className={r.significant ? 'border-signal/40 text-signal' : undefined}
+        />
+        {r.autocorrelationAdjusted && (
+          <StatusPill status="autocorrelation-corrected" pulse={false} className="border-caution/40 text-caution" />
+        )}
+        {!r.minSampleSatisfied && (
+          <StatusPill status="insufficient record" pulse={false} className="border-caution/40 text-caution" />
+        )}
+        <span className="ml-auto telemetry text-xs text-faint">{r.unit}</span>
+      </div>
+
+      {/* Monthly series + trend line (observations-gated) */}
+      {observations.isLoading ? (
+        <SkeletonPanel rows={4} label="Loading monthly series" />
+      ) : observations.isError ? (
+        <FaultPanel error={observations.error} onRetry={() => observations.refetch()} label="Observation series" />
+      ) : (
+        <MonthlySeriesChart
+          points={points}
+          aggregation={SERIES_AGG[r.variable] ?? 'mean'}
+          variableLabel={r.label}
+          unit={r.unit}
+          color={SERIES_COLOR[r.variable] ?? '#4cc3ff'}
+          trend={r}
+        />
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div>
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-dim">
+            <Sigma className="h-3.5 w-3.5 text-faint" aria-hidden /> Monthly climatology (mean ± 1σ)
+          </div>
+          <ClimatologyChart climatology={r.monthlyClimatology} unit={r.unit} />
+        </div>
+        <div>
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-dim">
+            <Info className="h-3.5 w-3.5 text-faint" aria-hidden /> Final-year anomalies (|z| ≥ 2σ)
+          </div>
+          <AnomalyChart anomalies={r.anomalies} />
+        </div>
+      </div>
+
+      <TrendStatsGrid result={r} />
+      <ExplanationBlock result={r} />
+    </HudPanel>
+  );
+}
+
+function TrendStatsGrid({ result }: { result: TrendResult }) {
+  const stats: { label: string; value: React.ReactNode }[] = [
+    {
+      label: 'direction',
+      value: <StatusPill status={result.direction} pulse={false} className={DIRECTION_TONE[result.direction] ?? undefined} />,
+    },
+    {
+      label: 'Theil-Sen slope',
+      value: `${result.slopePerYear !== null ? `${result.slopePerYear.toFixed(3)} ${result.unit}/yr` : 'n/a'}`,
+    },
+    {
+      label: '95% CI',
+      value: result.ciLower !== null ? `${result.ciLower.toFixed(2)} … ${result.ciUpper?.toFixed(2)} ${result.unit}/yr` : 'n/a',
+    },
     { label: 'Mann-Kendall Z', value: result.zValue?.toFixed(2) ?? 'n/a' },
     { label: 'p-value', value: result.pValue?.toExponential(2) ?? 'n/a' },
     { label: 'FDR-adjusted p', value: result.multipleTestingAdjustedP?.toExponential(2) ?? 'not applied' },
     { label: 'usable months (n)', value: String(result.sampleCount) },
-    { label: 'missing days', value: String(result.missingCount) },
+    {
+      label: 'missing days',
+      value: (
+        <span className={result.missingCount > 0 ? 'text-caution' : undefined}>
+          {String(result.missingCount)}
+        </span>
+      ),
+    },
     { label: 'method', value: result.method },
   ];
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-      {stats.map((s) => (
-        <div key={s.label} className="rounded border border-slate-800 bg-slate-900/60 px-2.5 py-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-600">{s.label}</div>
-          <div className="mt-0.5 font-mono text-slate-200 break-words">{s.value}</div>
-        </div>
-      ))}
+    <div className="overflow-x-auto rounded-sm border border-edge">
+      <table className="mc-table w-full">
+        <tbody>
+          {stats.map((s) => (
+            <tr key={s.label} className="border-b border-edge/60 last:border-0">
+              <th scope="row" className="w-44 px-3 py-2 text-left">
+                {s.label}
+              </th>
+              <td className="telemetry px-3 py-2 text-ink">{s.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function ExplanationBlock({ result }: { result: import('@/lib/types').TrendResult }) {
+function ExplanationBlock({ result }: { result: TrendResult }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-[#0a101c] p-3.5">
-      <div className="text-sm font-semibold text-slate-100">{result.explanation.headline}</div>
-      <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{result.explanation.interpretation}</p>
+    <div className="hud hud-calm p-3.5">
+      <div className="font-display text-sm font-semibold text-ink">{result.explanation.headline}</div>
+      <p className="mt-1.5 text-xs leading-relaxed text-dim">{result.explanation.interpretation}</p>
       {result.explanation.caveats.length > 0 && (
-        <ul className="mt-2 text-[11px] text-slate-500 list-disc list-inside space-y-0.5">
+        <ul className="mt-2 list-inside list-disc space-y-0.5 text-[11px] text-faint">
           {result.explanation.caveats.map((c, i) => <li key={i}>{c}</li>)}
         </ul>
       )}
       {result.warnings.length > 0 && (
-        <ul className="mt-2 text-[11px] text-amber-400/90 list-disc list-inside space-y-0.5">
+        <ul className="mt-2 list-inside list-disc space-y-0.5 text-[11px] text-caution/90">
           {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
         </ul>
       )}
@@ -202,24 +301,10 @@ function ExplanationBlock({ result }: { result: import('@/lib/types').TrendResul
 }
 
 function DirectionIcon({ direction, significant }: { direction: string; significant: boolean }) {
-  if (!significant || direction === 'no trend') return <Minus className="h-4 w-4 text-slate-500" aria-hidden />;
+  if (!significant || direction === 'no trend') return <Minus className="h-4 w-4 text-faint" aria-hidden />;
   return direction === 'increasing' ? (
-    <TrendingUp className="h-4 w-4 text-emerald-400" aria-hidden />
+    <TrendingUp className="h-4 w-4 text-iris" aria-hidden />
   ) : (
-    <TrendingDown className="h-4 w-4 text-sky-400" aria-hidden />
-  );
-}
-
-function SkeletonGrid() {
-  return (
-    <div className="grid gap-4" aria-busy="true">
-      {[1, 2].map((i) => (
-        <Card key={i} className="border-slate-800 bg-slate-900/40">
-          <CardContent className="py-10 flex items-center justify-center gap-2 text-sm text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> analysing variable set…
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    <TrendingDown className="h-4 w-4 text-aqua" aria-hidden />
   );
 }

@@ -3,11 +3,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * TERRAFIELD ATLAS — MISSION CONSOLE DESIGN SYSTEM
+ * Custom NASA-inspired theme. Single, forced dark "operations room" theme.
+ * Palette: deep-space navy surfaces, NASA red command accents, telemetry
+ * green / aqua / caution amber status colors. No stock shadcn neutrals.
+ */
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-archivo);
+  --font-mono: var(--font-plex-mono);
+  --font-display: var(--font-space-grotesk);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -37,86 +45,396 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 3px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  /* Mission palette utilities (text-nasa, bg-signal, border-edge, ...) */
+  --color-nasa: var(--nasa);
+  --color-signal: var(--signal);
+  --color-aqua: var(--aqua);
+  --color-caution: var(--caution);
+  --color-crit: var(--crit);
+  --color-iris: var(--iris);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-void: var(--void);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-edge: var(--edge);
 }
 
-:root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
+:root,
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --radius: 0.375rem;
+
+  /* Surfaces */
+  --void: #050914;
+  --panel: #0b1322;
+  --panel-2: #101b31;
+  --edge: rgba(151, 174, 224, 0.16);
+
+  /* Typography colors */
+  --ink: #eaf0fb;
+  --dim: #9aaacd;
+  --faint: #627392;
+
+  /* Command accents */
+  --nasa: #fc3d21;
+  --signal: #45e39a;
+  --aqua: #4cc3ff;
+  --caution: #ffb224;
+  --crit: #ff5d5d;
+  --iris: #8da2ff;
+
+  /* Semantic mapping (shadcn contracts) */
+  --background: var(--void);
+  --foreground: var(--ink);
+  --card: var(--panel);
+  --card-foreground: var(--ink);
+  --popover: #0d1729;
+  --popover-foreground: var(--ink);
+  --primary: var(--nasa);
+  --primary-foreground: #ffffff;
+  --secondary: var(--panel-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--panel-2);
+  --muted-foreground: var(--dim);
+  --accent: rgba(252, 61, 33, 0.1);
+  --accent-foreground: #ffd9d2;
+  --destructive: var(--crit);
+  --border: var(--edge);
+  --input: rgba(151, 174, 224, 0.22);
+  --ring: rgba(252, 61, 33, 0.55);
+
+  /* Charts */
+  --chart-1: #45e39a;
+  --chart-2: #4cc3ff;
+  --chart-3: #ffb224;
+  --chart-4: #8da2ff;
+  --chart-5: #ff7e6b;
+
+  /* Sidebar / console rail */
+  --sidebar: #070c18;
+  --sidebar-foreground: var(--dim);
+  --sidebar-primary: var(--nasa);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(252, 61, 33, 0.09);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: rgba(151, 174, 224, 0.12);
+  --sidebar-ring: rgba(252, 61, 33, 0.55);
 }
+
+/* ------------------------------------------------------------------ */
+/* Base                                                                */
+/* ------------------------------------------------------------------ */
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  html {
+    color-scheme: dark;
+    scrollbar-color: #22304c transparent;
+  }
+
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-archivo);
+    background-image:
+      radial-gradient(1100px 500px at 80% -10%, rgba(76, 195, 255, 0.06), transparent 60%),
+      radial-gradient(900px 420px at 12% -6%, rgba(252, 61, 33, 0.05), transparent 55%);
+    background-attachment: fixed;
   }
+
+  ::selection {
+    background: rgba(252, 61, 33, 0.35);
+    color: #fff;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1c2a4a;
+    border-radius: 999px;
+    border: 2px solid var(--void);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a3d6b;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Mission console utilities                                           */
+/* ------------------------------------------------------------------ */
+
+@layer utilities {
+  /* Display typography — wide-tracked uppercase console headings */
+  .font-display {
+    font-family: var(--font-space-grotesk);
+  }
+  .tracking-mission {
+    letter-spacing: 0.22em;
+  }
+  .tracking-wide-mc {
+    letter-spacing: 0.12em;
+  }
+
+  /* Telemetry numerals */
+  .telemetry {
+    font-family: var(--font-plex-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+
+  /* Red kicker with leading bar (section eyebrow) */
+  .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.625rem;
+    font-family: var(--font-space-grotesk);
+    font-weight: 600;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--nasa);
+  }
+  .kicker::before {
+    content: "";
+    width: 1.5rem;
+    height: 2px;
+    background: var(--nasa);
+    flex: none;
+  }
+
+  /* HUD panel — bordered console panel with corner brackets (TL + BR) */
+  .hud {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(151, 174, 224, 0.045), transparent 42%),
+      var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+  }
+  .hud::before,
+  .hud::after {
+    content: "";
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+    opacity: 0.9;
+  }
+  .hud::before {
+    top: -1px;
+    left: -1px;
+    border-top: 2px solid var(--nasa);
+    border-left: 2px solid var(--nasa);
+    border-top-left-radius: 2px;
+  }
+  .hud::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 2px solid var(--nasa);
+    border-right: 2px solid var(--nasa);
+    border-bottom-right-radius: 2px;
+  }
+  .hud-calm::before,
+  .hud-calm::after {
+    border-color: rgba(151, 174, 224, 0.45);
+  }
+
+  /* Blueprint grid background */
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(76, 195, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(76, 195, 255, 0.05) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* Starfield dots for hero / void sections */
+  .starfield {
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgba(234, 240, 251, 0.7) 50%, transparent 51%),
+      radial-gradient(1px 1px at 66% 12%, rgba(234, 240, 251, 0.45) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 82% 68%, rgba(234, 240, 251, 0.5) 50%, transparent 51%),
+      radial-gradient(1px 1px at 30% 78%, rgba(234, 240, 251, 0.35) 50%, transparent 51%),
+      radial-gradient(1px 1px at 48% 44%, rgba(234, 240, 251, 0.3) 50%, transparent 51%),
+      radial-gradient(1px 1px at 92% 38%, rgba(234, 240, 251, 0.4) 50%, transparent 51%);
+  }
+
+  /* Subtle CRT scanlines — hero and telemetry strips only */
+  .scanlines {
+    position: relative;
+  }
+  .scanlines::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(5, 9, 20, 0.14) 0px,
+      rgba(5, 9, 20, 0.14) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode: overlay;
+  }
+
+  /* Text glow accents */
+  .glow-nasa {
+    text-shadow: 0 0 18px rgba(252, 61, 33, 0.5);
+  }
+  .glow-aqua {
+    text-shadow: 0 0 18px rgba(76, 195, 255, 0.45);
+  }
+  .glow-signal {
+    text-shadow: 0 0 16px rgba(69, 227, 154, 0.45);
+  }
+
+  /* Focus visibility — command-grade */
+  .focus-mc {
+    outline: 2px solid var(--nasa);
+    outline-offset: 2px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyframes                                                           */
+/* ------------------------------------------------------------------ */
+
+@keyframes mc-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@keyframes mc-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes mc-sweep {
+  0% { top: -12%; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { top: 112%; opacity: 0; }
+}
+
+@keyframes mc-pulse-soft {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(69, 227, 154, 0.5); }
+  55% { box-shadow: 0 0 0 6px rgba(69, 227, 154, 0); }
+}
+
+@keyframes mc-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mc-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes mc-spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@layer utilities {
+  .anim-blink { animation: mc-blink 1.6s ease-in-out infinite; }
+  .anim-pulse-soft { animation: mc-pulse-soft 2.4s ease-in-out infinite; }
+  .anim-float { animation: mc-float 7s ease-in-out infinite; }
+  .anim-spin-slow { animation: mc-spin-slow 22s linear infinite; }
+  .anim-fade-up { animation: mc-fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+  .skeleton-mc {
+    position: relative;
+    overflow: hidden;
+    background: rgba(151, 174, 224, 0.08);
+    border-radius: var(--radius-sm);
+  }
+  .skeleton-mc::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(151, 174, 224, 0.14),
+      transparent
+    );
+    animation: mc-shimmer 1.8s ease-in-out infinite;
+  }
+
+  .sweep-mc {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 14%;
+    background: linear-gradient(
+      180deg,
+      transparent,
+      rgba(76, 195, 255, 0.16),
+      transparent
+    );
+    animation: mc-sweep 2.2s linear infinite;
+    pointer-events: none;
+  }
+
+  /* Reduced motion: strip every mission animation */
+  @media (prefers-reduced-motion: reduce) {
+    .anim-blink,
+    .anim-pulse-soft,
+    .anim-float,
+    .anim-spin-slow,
+    .anim-fade-up,
+    .sweep-mc {
+      animation: none !important;
+    }
+    .skeleton-mc::after {
+      animation: none !important;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Component-level refinements on top of shadcn primitives             */
+/* ------------------------------------------------------------------ */
+
+/* Map console: kill the default light canvas look */
+.maplibregl-canvas { outline: none; }
+.maplibregl-ctrl-attrib { background: rgba(5, 9, 20, 0.82) !important; color: #9aaacd !important; }
+.maplibregl-ctrl-attrib a { color: #9aaacd !important; }
+.maplibregl-popup-content { background: #0d1729 !important; color: #eaf0fb !important; border: 1px solid var(--edge) !important; }
+.maplibregl-popup-tip { border-top-color: #0d1729 !important; border-bottom-color: #0d1729 !important; }
+
+/* Data tables inside HUD panels */
+.mc-table th {
+  font-family: var(--font-space-grotesk);
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--faint);
+}
+.mc-table td {
+  font-size: 0.75rem;
+  color: var(--dim);
 }

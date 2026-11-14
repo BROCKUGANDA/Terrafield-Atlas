@@ -1,14 +1,34 @@
 'use client';
 
+import React from 'react';
+import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Download, CloudRain, Thermometer, Sun, Waves, Loader2, MapPin, Clock, Database, Flame } from 'lucide-react';
+import { SectionHeader, StatusPill, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
+import { QueryState, FaultPanel, EmptyState, LoadingChip } from '@/components/system/query-state';
+import { SkeletonPanel, SkeletonRows, StatSkeletonRow, SweepLoader } from '@/components/system/skeletons';
+import { Download, MapPin, Database, Loader2, Activity } from 'lucide-react';
+
+const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+/** Staggered section entrance (y 12→0, 0.35 s, ~60 ms stagger, once). */
+function Reveal({ i = 0, className, children }: { i?: number; className?: string; children: React.ReactNode }) {
+  return (
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-24px' }}
+      transition={{ duration: 0.35, delay: i * 0.06, ease: EASE }}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 /** Earth Intelligence Dashboard: coverage, indicators, ingestion control. */
 export function DashboardView() {
@@ -45,154 +65,281 @@ export function DashboardView() {
   });
 
   const recentIngest = obs.data;
+  const seriesEntries = Object.entries(obs.data?.series ?? {});
 
   return (
-    <div className="mx-auto max-w-6xl flex flex-col gap-6">
-      {/* Location control */}
-      <Card className="border-slate-800 bg-slate-900/40">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-            <MapPin className="h-4 w-4 text-emerald-400" aria-hidden /> Selected geography
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <Select
-              value={location.label}
-              onValueChange={(v) => {
-                const r = regions.data?.regions.find((x) => `${x.name}` === v);
-                if (r) setLocation({ lat: r.lat, lon: r.lon, label: r.name, country: r.country, context: r.croppingContext });
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-80 bg-slate-900 border-slate-700 text-sm" aria-label="Select demo region">
-                <SelectValue placeholder="Choose a region preset" />
-              </SelectTrigger>
-              <SelectContent className="bg-slate-900 border-slate-700 max-h-72">
-                {(regions.data?.regions ?? []).map((r) => (
-                  <SelectItem key={r.key} value={r.name} className="text-xs">
-                    {r.name} · {r.country}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <span className="font-mono text-xs text-slate-400">
-              {location.lat.toFixed(3)}°, {location.lon.toFixed(3)}°
-            </span>
-            {activeFarmId && <Badge variant="outline" className="border-emerald-600/40 text-emerald-400">farm-linked</Badge>}
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      {/* View header — geography controls live in the actions rail */}
+      <Reveal>
+        <SectionHeader
+          kicker="Mission console · Earth intelligence"
+          title="Earth Intelligence"
+          description="Real NASA POWER meteorology for the selected geography. Every stored number is traceable to its source and retrieval time; missing days are reported as missing, never fabricated."
+          actions={
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Select
+                value={location.label}
+                onValueChange={(v) => {
+                  const r = regions.data?.regions.find((x) => `${x.name}` === v);
+                  if (r) setLocation({ lat: r.lat, lon: r.lon, label: r.name, country: r.country, context: r.croppingContext });
+                }}
+              >
+                <SelectTrigger
+                  className="h-9 w-full border-edge bg-panel text-xs text-dim sm:w-72"
+                  aria-label="Select demo region"
+                  disabled={regions.isLoading}
+                >
+                  <SelectValue placeholder={regions.isLoading ? 'Loading presets…' : 'Choose a region preset'} />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 border-edge bg-popover text-dim">
+                  {(regions.data?.regions ?? []).map((r) => (
+                    <SelectItem key={r.key} value={r.name} className="text-xs">
+                      {r.name} · {r.country}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <CoordReadout lat={location.lat} lon={location.lon} />
+              {activeFarmId && (
+                <StatusPill status="farm-linked" pulse={false} className="border-signal/40 text-signal" />
+              )}
+              {regions.isLoading && <LoadingChip label="loading presets" />}
+            </div>
+          }
+        />
+      </Reveal>
+
+      {/* Geography context */}
+      <Reveal i={1}>
+        <HudPanel calm className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-aqua" aria-hidden />
+            <h3 className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">Selected geography</h3>
           </div>
-          {location.context && <p className="text-xs text-slate-500 max-w-3xl">{location.context}</p>}
-          <p className="text-[11px] text-slate-600">
-            Curated real-region presets for the public demo; the map in the Geospatial Explorer lets you pick any coordinate.
-          </p>
-        </CardContent>
-      </Card>
+          {regions.isError ? (
+            <FaultPanel error={regions.error} onRetry={() => regions.refetch()} label="Region presets" />
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p className="text-sm text-ink">{location.label}</p>
+                {location.country && (
+                  <span className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">{location.country}</span>
+                )}
+              </div>
+              {location.context && <p className="max-w-3xl text-xs leading-relaxed text-dim">{location.context}</p>}
+              <p className="max-w-3xl text-[11px] text-faint">
+                Curated real-region presets for the public demo; the map in the Geospatial Explorer lets you pick any coordinate.
+              </p>
+            </>
+          )}
+        </HudPanel>
+      </Reveal>
 
       {/* Ingestion control */}
-      <Card className="border-slate-800 bg-slate-900/40">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Download className="h-4 w-4 text-sky-400" aria-hidden /> Environmental record ingestion
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <p className="text-xs text-slate-400 max-w-3xl">
+      <Reveal i={2}>
+        <HudPanel calm className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Download className="h-4 w-4 text-nasa" aria-hidden />
+            <h3 className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">
+              Environmental record ingestion
+            </h3>
+          </div>
+          <p className="max-w-3xl text-xs leading-relaxed text-dim">
             Fetches the real NASA POWER daily record (precipitation, min/mean/max temperature, solar radiation,
             humidity, root-zone wetness) for the selected coordinate in 5-year chunks, and stores it with full
             provenance. Runs ~10–30 s.
           </p>
-          <Button
-            onClick={() => ingest.mutate()}
-            disabled={ingest.isPending}
-            className="w-fit bg-sky-600 hover:bg-sky-500 text-white"
-          >
-            {ingest.isPending ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
-                Requesting NASA POWER…
-              </>
-            ) : (
-              'Ingest 12-year POWER record'
-            )}
-          </Button>
-          {ingest.isError && (
-            <p className="text-xs text-red-400 max-w-3xl" role="alert">
-              {ingest.error instanceof ApiRequestError ? ingest.error.message : 'Ingestion failed.'} No data was fabricated.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Coverage grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={<Database className="h-4 w-4 text-sky-400" />} label="Stored observations" value={(status.data?.database.observations ?? 0).toLocaleString()} sub="real NASA POWER values" />
-        <StatCard icon={<FlameIcon /> } label="Fire detections" value={(status.data?.database.fireDetections ?? 0).toLocaleString()} sub="VIIRS 375 m, 2015→present" />
-        <StatCard icon={<Clock className="h-4 w-4 text-emerald-400" />} label="Record start" value={recentIngest?.series?.PRECTOTCORR?.points?.[0]?.date?.slice(0, 4) ?? '—'} sub={recentIngest?.datasetVersions?.[0] ?? 'no record yet'} />
-        <StatCard icon={<Database className="h-4 w-4 text-amber-400" />} label="Farms configured" value={String(status.data?.database.farms ?? 0)} sub="profiles with soil + scenarios" />
-      </div>
-
-      {/* Environmental indicators from the stored record */}
-      <Card className="border-slate-800 bg-slate-900/40">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Recent observations & data coverage</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {obs.isLoading && <LoadingRow />}
-          {obs.isError && (
-            <p className="text-xs text-amber-400">Observation store unreachable — retrying automatically.</p>
-          )}
-          {obs.data && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {Object.entries(obs.data.series).map(([variable, s]) => {
-                const last = [...s.points].reverse().find((p) => p.value !== null);
-                return (
-                  <div key={variable} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">{variable}</span>
-                      <span className="text-[10px] text-slate-600">{s.points.length} days</span>
-                    </div>
-                    <div className="mt-1 text-lg font-semibold text-slate-100 font-mono">
-                      {last ? last.value.toFixed(1) : 'n/a'}
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">{s.unit}</span>
-                    </div>
-                    <div className="text-[10px] text-slate-600">latest: {last?.date ?? 'no valid value'}</div>
-                  </div>
-                );
-              })}
-              {Object.keys(obs.data.series).length === 0 && (
-                <p className="text-xs text-slate-500 col-span-full">
-                  No observations stored for this location yet — run the ingestion above, then head to
-                  <button className="mx-1 underline text-emerald-400" onClick={() => setView('analysis')}>Environmental Analysis</button>
-                  to detect trends.
-                </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              onClick={() => ingest.mutate()}
+              disabled={ingest.isPending}
+              className="h-9 font-mono text-xs uppercase tracking-wide-mc"
+            >
+              {ingest.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                  Requesting POWER…
+                </>
+              ) : (
+                'Ingest 12-year record'
               )}
+            </Button>
+            {!ingest.isPending && !ingest.isError && (
+              <span className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+                power · daily · provenance logged
+              </span>
+            )}
+          </div>
+          {ingest.isPending && (
+            <div className="flex flex-col gap-2" role="status" aria-live="polite">
+              <SweepLoader label="Requesting NASA POWER" />
+              <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+                5-year chunks in flight · 10–30 s · nothing is written until the real record returns
+              </p>
             </div>
           )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+          {ingest.isError && (
+            <FaultPanel error={ingest.error} onRetry={() => ingest.mutate()} label="POWER ingestion" />
+          )}
+        </HudPanel>
+      </Reveal>
 
-function FlameIcon() {
-  return <Flame className="h-4 w-4 text-amber-400" aria-hidden />;
-}
+      {/* Coverage telemetry */}
+      <Reveal i={3}>
+        <QueryState
+          isLoading={status.isLoading}
+          isError={status.isError}
+          error={status.error}
+          onRetry={() => status.refetch()}
+          label="System telemetry"
+          skeleton={<StatSkeletonRow count={4} />}
+        >
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <TelemetryStat
+              label="Stored observations"
+              value={(status.data?.database.observations ?? 0).toLocaleString()}
+              hint="real NASA POWER values"
+            />
+            <TelemetryStat
+              label="Fire detections"
+              value={(status.data?.database.fireDetections ?? 0).toLocaleString()}
+              hint="VIIRS 375 m, 2015→present"
+            />
+            <TelemetryStat
+              label="Record start"
+              value={recentIngest?.series?.PRECTOTCORR?.points?.[0]?.date?.slice(0, 4) ?? null}
+              hint={recentIngest?.datasetVersions?.[0] ?? 'no record yet'}
+            />
+            <TelemetryStat
+              label="Farms configured"
+              value={String(status.data?.database.farms ?? 0)}
+              hint="profiles with soil + scenarios"
+            />
+          </div>
+        </QueryState>
+      </Reveal>
 
-function StatCard({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub: string }) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
-        {icon} {label}
-      </div>
-      <div className="mt-1.5 text-2xl font-semibold text-slate-100 font-mono">{value}</div>
-      <div className="text-[10px] text-slate-600 mt-0.5">{sub}</div>
-    </div>
-  );
-}
+      {/* Source register status */}
+      <Reveal i={4}>
+        <HudPanel calm className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-aqua" aria-hidden />
+            <h3 className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">
+              Data-source status
+            </h3>
+          </div>
+          {status.isLoading ? (
+            <SkeletonRows rows={3} />
+          ) : status.data ? (
+            <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(status.data.providers).map(([provider, info]) => (
+                <li
+                  key={provider}
+                  className="flex flex-col gap-1.5 rounded-sm border border-edge bg-panel-2/50 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] uppercase tracking-wide-mc text-ink">{provider}</span>
+                    <StatusPill status={info.status} />
+                  </div>
+                  {info.note && <p className="text-[11px] leading-relaxed text-faint">{info.note}</p>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="font-mono text-[11px] text-caution">source status unavailable — see telemetry fault above</p>
+          )}
+        </HudPanel>
+      </Reveal>
 
-function LoadingRow() {
-  return (
-    <div className="flex items-center gap-2 text-xs text-slate-500" role="status">
-      <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> loading stored observations…
+      {/* Recent observations & data coverage */}
+      <Reveal i={5}>
+        <HudPanel calm className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-aqua" aria-hidden />
+            <h3 className="font-display text-sm font-semibold uppercase tracking-wide-mc text-ink">
+              Recent observations &amp; data coverage
+            </h3>
+          </div>
+          <QueryState
+            isLoading={obs.isLoading}
+            isError={obs.isError}
+            error={obs.error}
+            onRetry={() => obs.refetch()}
+            label="Observation coverage"
+            skeleton={<SkeletonPanel rows={6} label="Loading observation coverage" />}
+            isEmpty={obs.data ? seriesEntries.length === 0 : false}
+            empty={
+              <EmptyState
+                label="Observation store"
+                hint="No observations stored for this location yet — run the ingestion above, then head to Environmental Analysis to detect trends."
+                action={
+                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                    <Button
+                      onClick={() => ingest.mutate()}
+                      disabled={ingest.isPending}
+                      className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
+                    >
+                      {ingest.isPending ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+                          Requesting POWER…
+                        </>
+                      ) : (
+                        'Ingest POWER record'
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setView('analysis')}
+                      className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink"
+                    >
+                      Open analysis
+                    </Button>
+                  </div>
+                }
+              />
+            }
+          >
+            <div className="max-h-96 overflow-y-auto rounded-sm border border-edge">
+              <table className="mc-table w-full">
+                <thead className="sticky top-0 z-10 bg-panel">
+                  <tr className="border-b border-edge">
+                    <th className="px-3 py-2 text-left">Variable</th>
+                    <th className="px-3 py-2 text-right">Days</th>
+                    <th className="px-3 py-2 text-right">Latest value</th>
+                    <th className="px-3 py-2 text-left">Unit</th>
+                    <th className="px-3 py-2 text-left">Latest date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {seriesEntries.map(([variable, s]) => {
+                    const last = [...s.points].reverse().find((p) => p.value !== null);
+                    return (
+                      <tr key={variable} className="border-b border-edge/60 last:border-0 hover:bg-panel-2/40">
+                        <td className="px-3 py-2 font-mono text-[11px] uppercase tracking-wide-mc text-aqua">{variable}</td>
+                        <td className="telemetry px-3 py-2 text-right text-dim">{s.points.length}</td>
+                        <td className="telemetry px-3 py-2 text-right text-ink">
+                          {last && last.value !== null ? (
+                            last.value.toFixed(1)
+                          ) : (
+                            <span className="text-caution">n/a</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-faint">{s.unit}</td>
+                        <td className="telemetry px-3 py-2 text-faint">{last?.date ?? 'no valid value'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-faint">
+              Latest valid (non-missing) daily value per variable. Missing points lower confidence and are counted —
+              never substituted.
+            </p>
+          </QueryState>
+        </HudPanel>
+      </Reveal>
     </div>
   );
 }
