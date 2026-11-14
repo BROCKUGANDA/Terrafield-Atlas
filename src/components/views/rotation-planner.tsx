@@ -373,6 +373,7 @@ export function RotationPlannerView() {
             <Button
               onClick={() => compare.mutate()}
               disabled={compare.isPending || scenarios.some((s) => s.cropKeys.length === 0)}
+              data-tour="rotation-compare"
               className={cn('uppercase', MONO_BTN)}
             >
               {compare.isPending ? (

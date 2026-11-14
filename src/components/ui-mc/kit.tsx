@@ -122,17 +122,18 @@ export function TelemetryStat({
   );
 }
 
-/** Base HUD panel wrapper with sane padding. */
+/** Base HUD panel wrapper with sane padding. Forwards div props (incl. data-tour). */
 export function HudPanel({
   children,
   className,
   calm = true,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  calm?: boolean;
-}) {
-  return <div className={cn('hud p-4 sm:p-5', calm && 'hud-calm', className)}>{children}</div>;
+  ...rest
+}: React.HTMLAttributes<HTMLDivElement> & { calm?: boolean }) {
+  return (
+    <div className={cn('hud p-4 sm:p-5', calm && 'hud-calm', className)} {...rest}>
+      {children}
+    </div>
+  );
 }
 
 /** Mono coordinate readout, e.g. "0.280°S · 36.070°E". */

@@ -4,6 +4,7 @@ import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitRes
 import { fetchFiresForDate, persistFireDetections, FIRE_ARCHIVE_START } from '@/lib/adapters/gibsFires';
 import { regionBboxAround, regionKeyFor } from '@/lib/geo';
 import { firmsConfigured } from '@/lib/adapters/firms';
+import { recordIngestCoverage } from '@/lib/fires/coverage';
 
 /**
  * GET  /api/v1/fires?farmId=|lat=&lon=&from=&to= — stored real detections
@@ -179,6 +180,9 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   try {
     for (const date of dateRange(body.from, body.to)) {
       const res = await fetchFiresForDate(date, bbox, correlationId);
+      // Record honest archive coverage (drives watchlist evaluations): a row
+      // here means "GIBS was asked for this date over this bbox".
+      await recordIngestCoverage(lat, lon, date, bbox, res.dataAvailable, res.detections.length);
       if (!res.dataAvailable && res.detections.length === 0) {
         noDataDays.push(date);
         continue;

@@ -13,6 +13,7 @@ Being explicit about what this product does not do is part of its engineering co
 7. **Rotation engine scope**: it compares documented requirements against evidence (rainfall climatology, thermal season, measured soil, sequence rules). It does not model local pest pressure, varieties, labor, input logistics or markets. Economic viability is explicitly "not assessed" rather than invented.
 8. **Trend methods**: Mann-Kendall/Theil-Sen detect monotonic change only; they can miss step changes. The Hamed-Rao lag-1 term applied to the seasonal statistic is a documented adaptation (see METHODOLOGY.md §1.8).
 9. **Correlation ≠ causation**: nowhere does the product claim an environmental association proves an agricultural cause or effect; no yield or profit prediction exists.
+10. **Fire watchlists are threshold alerts, not a fire-perimeter or real-time warning system.** Evaluations count stored VIIRS 375 m detections inside a radius around a center over a lookback window. A watch radius cannot extend past the decoded tile area; a `clear` status means “no detections in the checked window within the archive's twice-daily overpass limits”, not “no fire”; days the GIBS archive lacks are reported as no-data and a `clear` is only issued when every day of the window was actually checked. VIIRS cannot see fires that start and end between overpasses or under cloud. Watchlists re-evaluate on demand (or when their rule is edited) — there is no background scheduler in this topology, so alert freshness equals the last evaluation time, which is always displayed.
 
 ## Engineering limitations (sandbox-imposed, documented)
 
@@ -31,4 +32,4 @@ Being explicit about what this product does not do is part of its engineering co
 
 ## Remaining known defects
 
-- None known in the shipped flows at time of delivery (54/54 unit tests, 9/9 live smoke checks, browser-verified golden path). The product intentionally surfaces provider failures (SoilGrids slowness, FIRMS unreachability) as visible, honest degraded states — these are environmental, not defects.
+- None known in the shipped flows at time of delivery (69/69 unit tests, 9/9 live smoke checks, browser-verified golden path). The product intentionally surfaces provider failures (SoilGrids slowness, FIRMS unreachability) as visible, honest degraded states — these are environmental, not defects.

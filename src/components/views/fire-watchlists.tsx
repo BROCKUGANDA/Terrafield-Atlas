@@ -1,0 +1,717 @@
+'use client';
+
+import React from 'react';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput } from '@/lib/api-client';
+import { logEvent } from '@/components/state/log-store';
+import { useSession } from '@/components/state/store';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { useToast } from '@/hooks/use-toast';
+import { HudPanel, StatusPill, CoordReadout } from '@/components/ui-mc/kit';
+import { EmptyState } from '@/components/system/query-state';
+import { SweepLoader } from '@/components/system/skeletons';
+import { Bell, BellRing, Loader2, Plus, RadioTower, Trash2, Pencil, MapPin, ShieldAlert, CheckCircle2, History } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+const RADIUS_OPTIONS = [5, 10, 15, 20, 25];
+const LOOKBACK_OPTIONS = [3, 7, 14, 30];
+
+const STATUS_TONE: Record<string, string> = {
+  alert: 'border-crit/50 text-crit',
+  watch: 'border-caution/50 text-caution',
+  clear: 'border-signal/40 text-signal',
+  unverified: 'border-edge text-faint',
+};
+
+const STATUS_TONE_BG: Record<string, string> = {
+  alert: 'border-crit/40 bg-crit/5',
+  watch: 'border-caution/30 bg-caution/5',
+  clear: '',
+  unverified: '',
+};
+
+const CONF_LABEL: Record<WatchConfidence, string> = {
+  low: 'any confidence',
+  nominal: 'nominal + high',
+  high: 'high only',
+};
+
+function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn('flex flex-col gap-1', className)}>
+      <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Compact per-day detection bars (real counts from the last evaluation). */
+function DayBars({ perDay }: { perDay: { date: string; total: number; qualifying: number }[] }) {
+  const max = Math.max(1, ...perDay.map((d) => d.total));
+  return (
+    <div className="flex items-end gap-1" role="img" aria-label="Detections per day in the evaluation window">
+      {perDay.map((d) => {
+        const h = Math.max(2, Math.round((d.total / max) * 28));
+        const qh = Math.max(0, Math.round((d.qualifying / max) * 28));
+        return (
+          <div key={d.date} className="flex flex-col items-center gap-1" title={`${d.date}: ${d.total} detection(s), ${d.qualifying} qualifying`}>
+            <div
+              className="relative w-4 overflow-hidden rounded-sm border border-edge bg-panel-2/60"
+              style={{ height: 30 }}
+              aria-hidden
+            >
+              <div className="absolute bottom-0 w-full bg-dim/40" style={{ height: h }} />
+              <div className="absolute bottom-0 w-full bg-caution" style={{ height: Math.min(qh, h) }} />
+            </div>
+            <span className="telemetry text-[8px] text-faint">{d.date.slice(8)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function FireWatchlistsSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { location, setLocation, setView } = useSession();
+  const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions, staleTime: 300_000, retry: 1 });
+  const watchlists = useQuery({
+    queryKey: ['fire-watchlists'],
+    queryFn: api.watchlists,
+    refetchInterval: 120_000,
+    retry: 1,
+  });
+
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState<WatchlistInput>(() => ({
+    name: '',
+    label: location.label,
+    lat: Number(location.lat.toFixed(4)),
+    lon: Number(location.lon.toFixed(4)),
+    radiusKm: 15,
+    minConfidence: 'nominal',
+    lookbackDays: 7,
+    detectionThreshold: 5,
+    notes: '',
+  }));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<WatchlistInput>>({});
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fire-watchlists'] });
+
+  const create = useMutation({
+    mutationFn: () => api.createWatchlist(form),
+    onSuccess: (res) => {
+      toast({ title: 'Watchlist created', description: `“${res.watchlist.name}” is unverified — run “Evaluate” to query the real GIBS VIIRS record for its window.` });
+      logEvent({
+        severity: 'success',
+        category: 'FIRE',
+        title: `Fire watchlist created — ${res.watchlist.name}`,
+        detail: `${res.watchlist.radiusKm.toFixed(0)} km radius · ${CONF_LABEL[res.watchlist.minConfidence]} · alert at ≥ ${res.watchlist.detectionThreshold} detection(s) within ${res.watchlist.lookbackDays} day(s). ${res.note}`,
+        view: 'fire',
+      });
+      setCreating(false);
+      void invalidate();
+    },
+    onError: (err) => {
+      toast({ title: 'Watchlist creation failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+      logEvent({
+        severity: 'crit',
+        category: 'FIRE',
+        title: 'Fire watchlist creation failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'fire',
+      });
+    },
+  });
+
+  const evaluate = useMutation({
+    mutationFn: (id: string) => {
+      setEvaluatingId(id);
+      return api.evaluateWatchlist(id);
+    },
+    onSettled: () => setEvaluatingId(null),
+    onSuccess: (res, id) => {
+      const w = res.watchlist;
+      const ev = res.evaluation;
+      toast({
+        title: `${w.name} — ${ev.status.toUpperCase()}`,
+        description: `${ev.detectionCount} qualifying detection(s) ${ev.windowStart} → ${ev.windowEnd}${ev.daysFetchedFromGibs ? ` · ${ev.daysFetchedFromGibs} day(s) fetched live from GIBS` : ''}${ev.daysNoData.length ? ` · ${ev.daysNoData.length} archive-gap day(s) reported` : ''}.`,
+        variant: ev.status === 'alert' ? 'destructive' : undefined,
+      });
+      logEvent({
+        severity: ev.status === 'alert' ? 'crit' : ev.status === 'watch' ? 'warn' : 'success',
+        category: 'FIRE',
+        title: `Watchlist evaluated — ${w.name}: ${ev.status.toUpperCase()}`,
+        detail: `${ev.rationale}${ev.daysFetchedFromGibs ? ` ${ev.daysFetchedFromGibs} day(s) of the window were fetched live from the real GIBS VIIRS stream; ${ev.rowsWritten} new row(s) stored.` : ' All days were already covered by stored archive checks.'}`,
+        view: 'fire',
+      });
+      void invalidate();
+    },
+    onError: (err) => {
+      toast({ title: 'Evaluation failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error; no status fabricated', variant: 'destructive' });
+      logEvent({
+        severity: 'crit',
+        category: 'FIRE',
+        title: 'Watchlist evaluation failed',
+        detail: err instanceof ApiRequestError ? `${err.code} — ${err.message}` : 'Unexpected error; no status written.',
+        correlationId: err instanceof ApiRequestError ? err.correlationId : undefined,
+        view: 'fire',
+      });
+    },
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<WatchlistInput> }) => api.updateWatchlist(id, body),
+    onSuccess: (res) => {
+      toast({ title: 'Watchlist updated', description: `“${res.watchlist.name}” saved. Rule parameters changed → status reset to unverified until the next evaluation.` });
+      logEvent({
+        severity: 'info',
+        category: 'FIRE',
+        title: `Fire watchlist updated — ${res.watchlist.name}`,
+        detail: `Radius ${res.watchlist.radiusKm.toFixed(0)} km · ${CONF_LABEL[res.watchlist.minConfidence]} · alert at ≥ ${res.watchlist.detectionThreshold} detection(s) within ${res.watchlist.lookbackDays} day(s).`,
+        view: 'fire',
+      });
+      setEditingId(null);
+      setEditForm({});
+      void invalidate();
+    },
+    onError: (err) => {
+      toast({ title: 'Update failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deleteWatchlist(id),
+    onSuccess: (res) => {
+      toast({ title: 'Watchlist deleted', description: `“${res.deleted.name}” removed with its evaluation history.` });
+      logEvent({
+        severity: 'info',
+        category: 'FIRE',
+        title: `Fire watchlist deleted — ${res.deleted.name}`,
+        detail: 'The watchlist and its event history were removed. Stored fire detections remain (they are shared real observations).',
+        view: 'fire',
+      });
+      void invalidate();
+    },
+    onError: (err) => {
+      toast({ title: 'Delete failed', description: err instanceof ApiRequestError ? err.message : 'unexpected error', variant: 'destructive' });
+    },
+  });
+
+  const applyPreset = (key: string) => {
+    if (key === 'current') {
+      setForm((f) => ({ ...f, lat: Number(location.lat.toFixed(4)), lon: Number(location.lon.toFixed(4)), label: location.label, name: f.name || `${location.country ?? 'Region'} — fire watch` }));
+      return;
+    }
+    const r = regions.data?.regions.find((x) => x.key === key);
+    if (r) setForm((f) => ({ ...f, lat: r.lat, lon: r.lon, label: r.name, name: f.name || `${r.country} — fire watch` }));
+  };
+
+  const rows = watchlists.data?.watchlists ?? [];
+  const summary = watchlists.data?.summary;
+  const busy = evaluatingId !== null;
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-24px' }}
+      transition={{ duration: 0.35, ease: EASE }}
+      aria-label="Regional fire watchlists"
+    >
+      <HudPanel className="flex flex-col gap-4" data-tour="fire-watchlists">
+        {/* Section header */}
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="kicker">Watchlists · regional fire-alert rules</p>
+            <h3 className="mt-1.5 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wide-mc text-ink">
+              <RadioTower className="h-4 w-4 text-caution" aria-hidden /> Fire watchlists
+            </h3>
+            <p className="mt-1.5 max-w-3xl text-[11px] leading-relaxed text-dim">
+              Define a geography, radius and threshold rule; <span className="text-ink">Evaluate</span> ensures every day of the
+              lookback window is checked against the real GIBS VIIRS 375 m stream, then reports clear / watch / alert from
+              stored detections only. Days the archive simply does not have are reported as no-data — never zero-filled.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            {summary && rows.length > 0 && (
+              <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
+                {summary.total} list · {summary.alerting} alert · {summary.watch} watch · {summary.clear} clear · {summary.unverified} unverified
+              </span>
+            )}
+            <Button
+              size="sm"
+              className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
+              onClick={() => setCreating((v) => !v)}
+              aria-expanded={creating}
+              aria-controls="watchlist-create-form"
+            >
+              {creating ? <>Close form</> : <><Plus className="h-3.5 w-3.5" aria-hidden /> New watchlist</>}
+            </Button>
+          </div>
+        </div>
+
+        {/* Alert summary strip */}
+        {summary && summary.alerting > 0 && (
+          <div className="hud border-crit/40 bg-crit/5 p-3" role="alert">
+            <div className="flex items-start gap-2.5 text-[11px] leading-relaxed text-crit">
+              <BellRing className="mt-0.5 h-4 w-4 shrink-0 anim-blink" aria-hidden />
+              <div>
+                <p className="font-mono uppercase tracking-wide-mc">{summary.alerting} watchlist{summary.alerting > 1 ? 's' : ''} in ALERT</p>
+                <p className="mt-0.5 text-dim">
+                  {rows.filter((r) => r.lastStatus === 'alert').map((r) => `${r.name} (${r.lastDetectionCount ?? 0} qualifying detection(s))`).join(' · ')} —
+                  evaluate again to refresh, or inspect the detections ledger above.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create form */}
+        {creating && (
+          <form
+            id="watchlist-create-form"
+            className="grid gap-3 rounded-sm border border-edge bg-panel-2/40 p-3.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!form.name.trim()) {
+                toast({ title: 'Name required', description: 'Give the watchlist a short name (≤ 60 characters).', variant: 'destructive' });
+                return;
+              }
+              create.mutate();
+            }}
+          >
+            <div className="flex flex-wrap items-end gap-2.5">
+              <Field label="Region preset" className="w-64">
+                <Select onValueChange={(v) => applyPreset(v)}>
+                  <SelectTrigger className="h-9 border-edge bg-panel text-xs text-dim" aria-label="Region preset">
+                    <SelectValue placeholder="Current console location" />
+                  </SelectTrigger>
+                  <SelectContent className="border-edge bg-popover text-dim">
+                    <SelectItem value="current" className="text-xs">Current console location</SelectItem>
+                    {(regions.data?.regions ?? []).map((r) => (
+                      <SelectItem key={r.key} value={r.key} className="text-xs">{r.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Name" className="min-w-48 flex-1">
+                <Input
+                  value={form.name}
+                  maxLength={60}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Nakuru — dry-season fire watch"
+                  className="h-9 border-edge bg-panel text-xs text-ink"
+                  aria-label="Watchlist name"
+                />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-end gap-2.5">
+              <Field label="Center latitude">
+                <Input
+                  type="number" step="0.0001" min={-90} max={90}
+                  value={form.lat}
+                  onChange={(e) => setForm({ ...form, lat: Number(e.target.value) })}
+                  className="telemetry h-9 w-28 border-edge bg-panel text-xs text-dim"
+                  aria-label="Watchlist center latitude"
+                />
+              </Field>
+              <Field label="Center longitude">
+                <Input
+                  type="number" step="0.0001" min={-180} max={180}
+                  value={form.lon}
+                  onChange={(e) => setForm({ ...form, lon: Number(e.target.value) })}
+                  className="telemetry h-9 w-28 border-edge bg-panel text-xs text-dim"
+                  aria-label="Watchlist center longitude"
+                />
+              </Field>
+              <Field label="Watch radius">
+                <Select value={String(form.radiusKm)} onValueChange={(v) => setForm({ ...form, radiusKm: Number(v) })}>
+                  <SelectTrigger className="h-9 w-24 border-edge bg-panel text-xs text-dim" aria-label="Watch radius in kilometres">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-edge bg-popover text-dim">
+                    {RADIUS_OPTIONS.map((r) => <SelectItem key={r} value={String(r)} className="text-xs">{r} km</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Confidence floor">
+                <Select value={form.minConfidence} onValueChange={(v) => setForm({ ...form, minConfidence: v as WatchConfidence })}>
+                  <SelectTrigger className="h-9 w-36 border-edge bg-panel text-xs text-dim" aria-label="Minimum confidence class counted">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-edge bg-popover text-dim">
+                    <SelectItem value="low" className="text-xs">any confidence</SelectItem>
+                    <SelectItem value="nominal" className="text-xs">nominal + high</SelectItem>
+                    <SelectItem value="high" className="text-xs">high only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Lookback window">
+                <Select value={String(form.lookbackDays)} onValueChange={(v) => setForm({ ...form, lookbackDays: Number(v) })}>
+                  <SelectTrigger className="h-9 w-24 border-edge bg-panel text-xs text-dim" aria-label="Lookback window in days">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-edge bg-popover text-dim">
+                    {LOOKBACK_OPTIONS.map((d) => <SelectItem key={d} value={String(d)} className="text-xs">{d} days</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Alert threshold">
+                <Input
+                  type="number" min={1} max={500}
+                  value={form.detectionThreshold}
+                  onChange={(e) => setForm({ ...form, detectionThreshold: Math.max(1, Number(e.target.value) || 1) })}
+                  className="telemetry h-9 w-20 border-edge bg-panel text-xs text-dim"
+                  aria-label="Alert threshold in qualifying detections"
+                />
+              </Field>
+            </div>
+            <Field label="Notes (optional)">
+              <Textarea
+                value={form.notes ?? ''}
+                maxLength={300}
+                rows={2}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder="Why this region is watched — e.g. miombo woodland adjacent to maize fields, burns Jul–Oct."
+                className="border-edge bg-panel text-xs text-ink"
+                aria-label="Watchlist notes"
+              />
+            </Field>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={create.isPending} className="h-9 font-mono text-xs uppercase tracking-wide-mc">
+                {create.isPending ? (
+                  <><Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> Creating…</>
+                ) : (
+                  <><Plus className="h-3.5 w-3.5" aria-hidden /> Create watchlist</>
+                )}
+              </Button>
+              <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+                alert at ≥ {form.detectionThreshold} {CONF_LABEL[form.minConfidence ?? 'nominal']} detection(s) within {form.lookbackDays} day(s) · watch at ≥ {Math.max(1, Math.ceil((form.detectionThreshold ?? 5) / 2))}
+              </p>
+            </div>
+            {create.isError && (
+              <p className="font-mono text-[10px] uppercase tracking-wide-mc text-crit" role="alert">
+                {create.error instanceof ApiRequestError ? `${create.error.code} — ${create.error.message}` : 'creation failed'}
+              </p>
+            )}
+          </form>
+        )}
+
+        {/* Evaluate-all-in-flight banner */}
+        {busy && (
+          <div className="flex flex-col gap-2" role="status" aria-live="polite">
+            <SweepLoader label="Evaluating watchlist — decoding real VIIRS tiles for uncovered days" />
+            <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
+              gibs vector tiles in flight · archive gaps reported as no-data, never zero-filled
+            </p>
+          </div>
+        )}
+
+        {/* Watchlist cards */}
+        {watchlists.isLoading && (
+          <div className="telemetry px-1 text-[11px] text-faint" role="status">reading watchlists…</div>
+        )}
+        {watchlists.isError && (
+          <div className="hud border-crit/40 p-3 text-[11px] text-crit" role="alert">
+            Watchlist read failed — {watchlists.error instanceof ApiRequestError ? `${watchlists.error.code}: ${watchlists.error.message}` : 'unexpected error'}.
+            <Button variant="outline" size="sm" className="ml-3 h-7 font-mono text-[10px] uppercase tracking-wide-mc" onClick={() => watchlists.refetch()}>
+              retry
+            </Button>
+          </div>
+        )}
+        {!watchlists.isLoading && rows.length === 0 && (
+          <EmptyState
+            label="No watchlists yet"
+            hint="Create one to turn stored VIIRS detections into standing regional alerts: pick a preset (the Zambia Central dry-season preset shows real alerts Jul–Oct), set a radius and threshold, then Evaluate."
+          />
+        )}
+        <div className="grid gap-3 lg:grid-cols-2">
+          {rows.map((w) => (
+            <WatchlistCard
+              key={w.id}
+              w={w}
+              evaluating={evaluate.isPending && evaluatingId === w.id}
+              onEvaluate={() => evaluate.mutate(w.id)}
+              editing={editingId === w.id}
+              editForm={editForm}
+              onEditOpen={() => {
+                setEditingId(editingId === w.id ? null : w.id);
+                setEditForm(editingId === w.id ? {} : {
+                  name: w.name,
+                  radiusKm: w.radiusKm,
+                  minConfidence: w.minConfidence,
+                  lookbackDays: w.lookbackDays,
+                  detectionThreshold: w.detectionThreshold,
+                  notes: w.notes ?? '',
+                });
+              }}
+              onEditChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
+              onEditSubmit={() => update.mutate({ id: w.id, body: editForm })}
+              editPending={update.isPending && editingId === w.id}
+              onDelete={() => remove.mutate(w.id)}
+              deletePending={remove.isPending && remove.variables === w.id}
+              onFocus={() => {
+                setLocation({ lat: w.lat, lon: w.lon, label: w.label ?? w.name, country: undefined, context: w.notes ?? undefined });
+                toast({ title: 'Console geography set', description: `Targeting ${w.label ?? w.name} — ingest the window above to inspect its detections ledger.` });
+                logEvent({
+                  severity: 'info',
+                  category: 'FIRE',
+                  title: `Console geography set — ${w.label ?? w.name}`,
+                  detail: `Targeted from fire watchlist “${w.name}” (${w.lat.toFixed(2)}°, ${w.lon.toFixed(2)}°, radius ${w.radiusKm.toFixed(0)} km).`,
+                  view: 'fire',
+                });
+              }}
+              onShowLedger={() => {
+                setLocation({ lat: w.lat, lon: w.lon, label: w.label ?? w.name });
+                setView('explorer');
+              }}
+            />
+          ))}
+        </div>
+
+        <p className="text-[10px] leading-relaxed text-faint">
+          Watchlist states describe the last recorded evaluation only. A header alert chip appears console-wide while any
+          watchlist is in ALERT. Evaluations share the stored detection pool with the detections ledger — every row is a real
+          VIIRS observation with provenance in Evidence &amp; Provenance.
+        </p>
+      </HudPanel>
+    </motion.section>
+  );
+}
+
+function WatchlistCard({
+  w, evaluating, onEvaluate, editing, editForm, onEditOpen, onEditChange, onEditSubmit, editPending, onDelete, deletePending, onFocus, onShowLedger,
+}: {
+  w: WatchlistRow;
+  evaluating: boolean;
+  onEvaluate: () => void;
+  editing: boolean;
+  editForm: Partial<WatchlistInput>;
+  onEditOpen: () => void;
+  onEditChange: (patch: Partial<WatchlistInput>) => void;
+  onEditSubmit: () => void;
+  editPending: boolean;
+  onDelete: () => void;
+  deletePending: boolean;
+  onFocus: () => void;
+  onShowLedger: () => void;
+}) {
+  const last = w.lastEvent;
+  const statusIcon =
+    w.lastStatus === 'alert' ? <BellRing className="h-3.5 w-3.5" aria-hidden />
+    : w.lastStatus === 'watch' ? <Bell className="h-3.5 w-3.5" aria-hidden />
+    : w.lastStatus === 'clear' ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+    : <History className="h-3.5 w-3.5" aria-hidden />;
+
+  return (
+    <div className={cn('flex flex-col gap-2.5 rounded-sm border p-3.5', STATUS_TONE_BG[w.lastStatus] || 'border-edge bg-panel-2/40')}>
+      {/* Card header */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-display text-[13px] font-bold uppercase tracking-wide-mc text-ink">{w.name}</p>
+          <p className="telemetry mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-faint">
+            <CoordReadout lat={w.lat} lon={w.lon} />
+            <span>· {w.radiusKm.toFixed(0)} km</span>
+            {w.label && <span className="truncate">· {w.label}</span>}
+          </p>
+        </div>
+        <StatusPill status={w.lastStatus} pulse={w.lastStatus === 'alert'} className={STATUS_TONE[w.lastStatus]} />
+      </div>
+
+      {/* Rule line */}
+      <p className="telemetry text-[10px] uppercase tracking-wide-mc text-dim">
+        rule — alert at ≥ {w.detectionThreshold} · {CONF_LABEL[w.minConfidence]} · within {w.lookbackDays} d
+        <span className="text-faint"> (watch at ≥ {w.watchThreshold})</span>
+      </p>
+      {w.notes && <p className="text-[11px] leading-relaxed text-faint">{w.notes}</p>}
+
+      {/* Last evaluation */}
+      {last ? (
+        <div className="flex flex-col gap-2 rounded-sm border border-edge/70 bg-void/40 p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="telemetry text-[10px] uppercase tracking-wide-mc text-faint">
+              last eval {new Date(last.evaluatedAt).toISOString().slice(0, 16).replace('T', ' ')}Z · {last.windowStart} → {last.windowEnd}
+            </span>
+            <span className="telemetry text-[10px] text-dim">
+              {last.detectionCount} qualifying · {last.highConfidenceCount} high / {last.nominalCount} nominal / {last.lowCount} low
+              {last.maxFrpMW !== null ? ` · max FRP ${last.maxFrpMW.toFixed(1)} MW` : ''}
+            </span>
+          </div>
+          {last.perDay.length > 0 && <DayBars perDay={last.perDay} />}
+          {last.rationale && <p className="text-[10px] leading-relaxed text-dim">{last.rationale}</p>}
+          {(last.daysNoDataList.length > 0 || last.daysUnchecked.length > 0) && (
+            <p className="font-mono text-[9px] uppercase tracking-wide-mc text-caution">
+              {last.daysNoDataList.length > 0 && `${last.daysNoDataList.length} archive-gap day(s) reported`}
+              {last.daysNoDataList.length > 0 && last.daysUnchecked.length > 0 && ' · '}
+              {last.daysUnchecked.length > 0 && `${last.daysUnchecked.length} unchecked day(s)`}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="telemetry text-[10px] uppercase tracking-wide-mc text-caution">
+          unverified — never evaluated; run a live check
+        </p>
+      )}
+
+      {/* Edit form */}
+      {editing && (
+        <div className="grid gap-2.5 rounded-sm border border-edge bg-panel-2/40 p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Name" className="min-w-40 flex-1">
+              <Input
+                value={editForm.name ?? ''}
+                maxLength={60}
+                onChange={(e) => onEditChange({ name: e.target.value })}
+                className="h-8 border-edge bg-panel text-xs text-ink"
+                aria-label="Edit watchlist name"
+              />
+            </Field>
+            <Field label="Radius">
+              <Select value={String(editForm.radiusKm ?? w.radiusKm)} onValueChange={(v) => onEditChange({ radiusKm: Number(v) })}>
+                <SelectTrigger className="h-8 w-24 border-edge bg-panel text-xs text-dim" aria-label="Edit radius">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-edge bg-popover text-dim">
+                  {RADIUS_OPTIONS.map((r) => <SelectItem key={r} value={String(r)} className="text-xs">{r} km</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Confidence floor">
+              <Select value={editForm.minConfidence ?? w.minConfidence} onValueChange={(v) => onEditChange({ minConfidence: v as WatchConfidence })}>
+                <SelectTrigger className="h-8 w-32 border-edge bg-panel text-xs text-dim" aria-label="Edit confidence floor">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-edge bg-popover text-dim">
+                  <SelectItem value="low" className="text-xs">any confidence</SelectItem>
+                  <SelectItem value="nominal" className="text-xs">nominal + high</SelectItem>
+                  <SelectItem value="high" className="text-xs">high only</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Lookback">
+              <Select value={String(editForm.lookbackDays ?? w.lookbackDays)} onValueChange={(v) => onEditChange({ lookbackDays: Number(v) })}>
+                <SelectTrigger className="h-8 w-24 border-edge bg-panel text-xs text-dim" aria-label="Edit lookback window">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-edge bg-popover text-dim">
+                  {LOOKBACK_OPTIONS.map((d) => <SelectItem key={d} value={String(d)} className="text-xs">{d} days</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Alert threshold">
+              <Input
+                type="number" min={1} max={500}
+                value={editForm.detectionThreshold ?? w.detectionThreshold}
+                onChange={(e) => onEditChange({ detectionThreshold: Math.max(1, Number(e.target.value) || 1) })}
+                className="telemetry h-8 w-20 border-edge bg-panel text-xs text-dim"
+                aria-label="Edit alert threshold"
+              />
+            </Field>
+          </div>
+          <Field label="Notes">
+            <Textarea
+              value={editForm.notes ?? ''}
+              maxLength={300}
+              rows={2}
+              onChange={(e) => onEditChange({ notes: e.target.value })}
+              className="border-edge bg-panel text-xs text-ink"
+              aria-label="Edit watchlist notes"
+            />
+          </Field>
+          <div className="flex items-center gap-2">
+            <Button size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditSubmit} disabled={editPending}>
+              {editPending ? 'Saving…' : 'Save changes'}
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditOpen}>
+              Cancel
+            </Button>
+            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified</span>
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          onClick={onEvaluate}
+          disabled={evaluating}
+          className={cn('h-8 font-mono text-[11px] uppercase tracking-wide-mc', w.lastStatus === 'alert' && 'bg-crit/90 hover:bg-crit')}
+          aria-label={`Evaluate watchlist ${w.name} live from the GIBS VIIRS archive`}
+        >
+          {evaluating ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> Evaluating…</>
+          ) : (
+            <>{statusIcon} Evaluate now</>
+          )}
+        </Button>
+        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onEditOpen} aria-expanded={editing}>
+          <Pencil className="h-3.5 w-3.5" aria-hidden /> Edit
+        </Button>
+        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onFocus}>
+          <MapPin className="h-3.5 w-3.5" aria-hidden /> Set console location
+        </Button>
+        <Button variant="outline" size="sm" className="h-8 border-edge bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:text-ink" onClick={onShowLedger}>
+          <ShieldAlert className="h-3.5 w-3.5" aria-hidden /> Map region
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-crit/30 bg-transparent font-mono text-[11px] uppercase tracking-wide-mc text-dim hover:border-crit/60 hover:text-crit"
+              aria-label={`Delete watchlist ${w.name}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden /> Delete
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent className="border-edge bg-popover">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="font-display text-sm uppercase tracking-wide-mc text-ink">
+                Delete “{w.name}”?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-xs leading-relaxed text-dim">
+                Removes the watchlist and its {w.eventCount} recorded evaluation(s). Stored fire detections remain — they are
+                shared real observations. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="font-mono text-[11px] uppercase tracking-wide-mc">Keep</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-crit font-mono text-[11px] uppercase tracking-wide-mc hover:bg-crit/90"
+                onClick={onDelete}
+                disabled={deletePending}
+              >
+                {deletePending ? 'Deleting…' : 'Delete watchlist'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        {w.lastStatus === 'alert' && (
+          <span className="telemetry flex items-center gap-1.5 text-[10px] uppercase tracking-wide-mc text-crit" role="status">
+            <BellRing className="h-3 w-3 anim-blink" aria-hidden /> alerting
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame,
-  FileText, Settings, ChevronRight, Activity, Menu, LogOut, Home,
+  FileText, Settings, ChevronRight, Activity, Menu, LogOut, Home, FlameKindling,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
@@ -17,6 +17,7 @@ import { DegradedBanner } from '@/components/system/degraded-banner';
 import { ErrorBoundary } from '@/components/system/error-boundary';
 import { CommandPalette, CommandPaletteTrigger, ShortcutsHelp } from '@/components/system/command-palette';
 import { MissionLogButton } from '@/components/system/mission-log';
+import { GuidedTour } from '@/components/system/guided-tour';
 import { cn } from '@/lib/utils';
 
 const NAV: { key: ViewKey; label: string; short: string; icon: React.ComponentType<{ className?: string }>; group: string }[] = [
@@ -85,6 +86,34 @@ function LinkCheck({ dataUpdatedAt, isFetching }: { dataUpdatedAt: number; isFet
   );
 }
 
+/** Console-wide fire-watchlist alert chip (database-only poll, no provider traffic). */
+function FireWatchAlerts() {
+  const setView = useSession((s) => s.setView);
+  const { data } = useQuery({
+    queryKey: ['fire-watchlists'],
+    queryFn: api.watchlists,
+    refetchInterval: 120_000,
+    retry: 1,
+    staleTime: 60_000,
+  });
+  const alerting = (data?.watchlists ?? []).filter((w) => w.lastStatus === 'alert');
+  if (!data || alerting.length === 0) return null;
+  const names = alerting.map((w) => w.name).join(' · ');
+  return (
+    <button
+      type="button"
+      onClick={() => setView('fire')}
+      className="flex h-8 items-center gap-1.5 rounded-sm border border-crit/50 bg-crit/10 px-2 font-mono text-[10px] uppercase tracking-wide-mc text-crit transition-colors hover:bg-crit/20 focus-visible:outline-2 focus-visible:outline-offset-2"
+      style={{ outlineColor: 'var(--nasa)' }}
+      aria-label={`Fire watchlist alert: ${names}. Open Fire Intelligence.`}
+      title={`Fire watchlist ALERT — ${names}`}
+    >
+      <FlameKindling className="h-3.5 w-3.5 anim-blink" aria-hidden />
+      <span className="whitespace-nowrap">fire alert ×{alerting.length}</span>
+    </button>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { view, setView, location, activeFarmId, setActiveFarmId, operator, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -97,7 +126,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const currentLabel = NAV.find((n) => n.key === view)?.label ?? 'Console';
 
   const navContent = (
-    <nav aria-label="Console navigation" className="flex h-full flex-col gap-4 px-3 py-4">
+    <nav aria-label="Console navigation" data-tour="nav-rail" className="flex h-full flex-col gap-4 px-3 py-4">
       {/* Mission identity */}
       <div className="flex items-center gap-3 px-2 pt-1">
         <MissionPatch className="h-9 w-9 shrink-0" />
@@ -207,7 +236,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <ChevronRight className="h-3 w-3 text-faint" aria-hidden />
               </div>
 
-              <div className="telemetry flex min-w-0 items-center gap-2 text-[11px]">
+              <div className="telemetry flex min-w-0 items-center gap-2 text-[11px]" data-tour="hdr-location">
                 <span className="truncate text-dim">
                   {Math.abs(location.lat).toFixed(2)}°{location.lat >= 0 ? 'N' : 'S'} ·{' '}
                   {Math.abs(location.lon).toFixed(2)}°{location.lon >= 0 ? 'E' : 'W'}
@@ -216,12 +245,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
 
               <div className="ml-auto flex items-center gap-3">
-                <MissionClock />
+                <span data-tour="hdr-clock" className="flex items-center">
+                  <MissionClock />
+                </span>
                 <LinkCheck dataUpdatedAt={health.dataUpdatedAt} isFetching={health.isFetching} />
+
+                <FireWatchAlerts />
 
                 <button
                   type="button"
                   onClick={() => setView('settings')}
+                  data-tour="hdr-health"
                   className="hidden items-center gap-1.5 rounded-sm px-1.5 py-1 transition-colors hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-offset-2 sm:flex"
                   style={{ outlineColor: 'var(--nasa)' }}
                   aria-label={`System health: ${systemsNominal ? 'nominal' : 'degraded'}`}
@@ -242,26 +276,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </span>
                 </button>
 
-                <Select value={activeFarmId ?? 'none'} onValueChange={(v) => setActiveFarmId(v === 'none' ? null : v)}>
-                  <SelectTrigger
-                    className="h-8 w-36 border-edge bg-panel text-xs text-dim sm:w-48"
-                    aria-label="Active farm"
-                  >
-                    <SelectValue placeholder="No active farm" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72 overflow-y-auto border-edge bg-popover text-dim">
-                    <SelectItem value="none" className="text-xs">No active farm</SelectItem>
-                    {(farms.data?.farms ?? []).map((f) => (
-                      <SelectItem key={f.id} value={f.id} className="text-xs">
-                        {f.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div data-tour="hdr-farm">
+                  <Select value={activeFarmId ?? 'none'} onValueChange={(v) => setActiveFarmId(v === 'none' ? null : v)}>
+                    <SelectTrigger
+                      className="h-8 w-36 border-edge bg-panel text-xs text-dim sm:w-48"
+                      aria-label="Active farm"
+                    >
+                      <SelectValue placeholder="No active farm" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72 overflow-y-auto border-edge bg-popover text-dim">
+                      <SelectItem value="none" className="text-xs">No active farm</SelectItem>
+                      {(farms.data?.farms ?? []).map((f) => (
+                        <SelectItem key={f.id} value={f.id} className="text-xs">
+                          {f.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 {operator && (
                   <>
-                    <CommandPaletteTrigger className="hidden sm:inline-flex" />
+                    <span data-tour="hdr-cmdk" className="hidden sm:inline-flex">
+                      <CommandPaletteTrigger />
+                    </span>
                     <MissionLogButton />
                   </>
                 )}
@@ -285,7 +323,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <DegradedBanner />
 
-          {/* Console overlays — ⌘K command palette and ? shortcuts help */}
+          {/* Console overlays — guided tour, ⌘K command palette and ? shortcuts help */}
+          <GuidedTour />
           <CommandPalette />
           <ShortcutsHelp />
 

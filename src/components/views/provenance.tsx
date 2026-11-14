@@ -197,7 +197,7 @@ export function ProvenanceView() {
 
         {/* Request ledger table */}
         <motion.section variants={RISE} custom={2} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="API request ledger" className="mt-6">
-          <HudPanel>
+          <HudPanel data-tour="prov-ledger">
             <div className="flex flex-wrap items-center gap-2">
               <ScrollText className="h-4 w-4 text-signal" aria-hidden />
               <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">API request ledger</h3>

@@ -216,6 +216,100 @@ export interface FireQueryResponse {
   limitations: string;
 }
 
+// ---- fire watchlists (regional fire-alert rules) ----
+
+export type WatchConfidence = 'low' | 'nominal' | 'high';
+export type WatchStatus = 'unverified' | 'clear' | 'watch' | 'alert';
+
+export interface WatchEvent {
+  id: string;
+  evaluatedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  status: WatchStatus;
+  detectionCount: number;
+  highConfidenceCount: number;
+  nominalCount: number;
+  lowCount: number;
+  maxFrpMW: number | null;
+  daysWithDetections: number;
+  daysChecked: number;
+  daysNoData: number;
+  triggeredAlert: boolean;
+  rationale: string;
+  daysNoDataList: string[];
+  daysUnchecked: string[];
+  perDay: { date: string; total: number; qualifying: number }[];
+}
+
+export interface Watchlist {
+  id: string;
+  name: string;
+  label: string | null;
+  lat: number;
+  lon: number;
+  radiusKm: number;
+  minConfidence: WatchConfidence;
+  lookbackDays: number;
+  detectionThreshold: number;
+  watchThreshold: number;
+  notes: string | null;
+  lastStatus: WatchStatus;
+  lastDetectionCount: number | null;
+  lastEvaluatedAt: string | null;
+  createdAt: string;
+}
+
+export interface WatchlistRow extends Watchlist {
+  eventCount: number;
+  lastEvent: WatchEvent | null;
+}
+
+export interface WatchlistsResponse {
+  watchlists: WatchlistRow[];
+  summary: { total: number; alerting: number; watch: number; clear: number; unverified: number };
+  note: string;
+}
+
+export interface WatchEvaluateResponse {
+  watchlist: Watchlist;
+  evaluation: WatchEvaluationResult;
+  event: WatchEvent;
+  recentEvents: WatchEvent[];
+  source: string;
+}
+
+export interface WatchEvaluationResult {
+  status: WatchStatus;
+  windowStart: string;
+  windowEnd: string;
+  daysChecked: number;
+  daysNoData: string[];
+  daysUnchecked: string[];
+  coverageComplete: boolean;
+  detectionCount: number;
+  byConfidence: { low: number; nominal: number; high: number };
+  watchThreshold: number;
+  daysWithDetections: number;
+  maxFrpMW: number | null;
+  perDay: { date: string; total: number; qualifying: number }[];
+  rationale: string;
+  daysFetchedFromGibs: number;
+  rowsWritten: number;
+}
+
+export interface WatchlistInput {
+  name: string;
+  label?: string;
+  lat: number;
+  lon: number;
+  radiusKm?: number;
+  minConfidence?: WatchConfidence;
+  lookbackDays?: number;
+  detectionThreshold?: number;
+  notes?: string;
+}
+
 export interface DataSourceRow {
   id: string;
   provider: string;
@@ -263,6 +357,8 @@ export interface SystemStatus {
     observations: number;
     fireDetections: number;
     farms: number;
+    fireWatchlists: number;
+    fireWatchEvents: number;
     jobCounts: { status: string; count: number }[];
     failedJobs: { id: string; type: string; error: string | null; startedAt: string }[];
   };
@@ -362,6 +458,15 @@ export const api = {
   },
   ingestFires: (body: { lat?: number; lon?: number; farmId?: string; from: string; to: string }) =>
     request<{ totalDetections: number; rowsWritten: number; noDataDays: string[]; source: string; region: { key: string; bbox: { west: number; south: number; east: number; north: number } } }>('/api/v1/fires', { method: 'POST', body: JSON.stringify(body) }),
+  watchlists: () => request<WatchlistsResponse>('/api/v1/fires/watchlists'),
+  createWatchlist: (body: WatchlistInput) =>
+    request<{ watchlist: Watchlist; note: string }>('/api/v1/fires/watchlists', { method: 'POST', body: JSON.stringify(body) }),
+  updateWatchlist: (id: string, body: Partial<WatchlistInput>) =>
+    request<{ watchlist: Watchlist }>(`/api/v1/fires/watchlists/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteWatchlist: (id: string) =>
+    request<{ deleted: { id: string; name: string } }>(`/api/v1/fires/watchlists/${id}`, { method: 'DELETE' }),
+  evaluateWatchlist: (id: string, end?: string) =>
+    request<WatchEvaluateResponse>(`/api/v1/fires/watchlists/${id}/evaluate`, { method: 'POST', body: JSON.stringify(end ? { end } : {}) }),
   provenance: (limit = 50) => request<ProvenanceResponse>(`/api/v1/provenance?limit=${limit}`),
   systemStatus: () => request<SystemStatus>('/api/v1/system/status'),
   report: (farmId: string) => request<ReportResponse>('/api/v1/reports', { method: 'POST', body: JSON.stringify({ farmId }) }),

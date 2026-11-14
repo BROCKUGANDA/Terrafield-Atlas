@@ -5,10 +5,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame, FileText,
   Settings, Home, Command, RefreshCw, ClipboardCopy, LogOut, Keyboard,
-  Download, MapPin, Search, CircleSlash,
+  Download, MapPin, Search, CircleSlash, Compass,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { useUiStore } from '@/components/state/ui-store';
+import { useTourStore } from '@/components/state/tour-store';
 import { logEvent } from '@/components/state/log-store';
 import { api, ApiRequestError } from '@/lib/api-client';
 import { useToast } from '@/hooks/use-toast';
@@ -68,6 +69,7 @@ export function CommandPalette() {
   const setHelpOpen = useUiStore((s) => s.setHelpOpen);
   const setLogOpen = useUiStore((s) => s.setLogOpen);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
+  const { start: startTour, status: tourStatus } = useTourStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -260,6 +262,28 @@ export function CommandPalette() {
 
         <CommandGroup heading="Operations" className="[&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[9px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-mission [&_[cmdk-group-heading]]:text-nasa">
           <CommandItem
+            value="guided tour first run walkthrough restart tour console tutorial onboarding help intro"
+            onSelect={() => {
+              startTour();
+              logEvent({
+                severity: 'info',
+                category: 'SYSTEM',
+                title: 'Guided tour started (command palette)',
+                detail: 'Operator launched the first-run walkthrough from the ⌘K palette.',
+                view,
+              });
+              toast({ title: 'Guided tour started', description: 'Navigate with the Next buttons or ←/→ keys; Esc leaves the tour.' });
+              close();
+            }}
+            disabled={tourStatus === 'active'}
+            className="text-[13px] data-[selected=true]:bg-nasa/10 data-[selected=true]:text-ink"
+          >
+            <Compass className="h-4 w-4 text-nasa" aria-hidden />
+            <span>{tourStatus === 'active' ? 'Guided tour is already running' : 'Start guided tour — console walkthrough'}</span>
+            <CommandShortcut className="telemetry text-[10px] text-faint">17 steps</CommandShortcut>
+          </CommandItem>
+
+          <CommandItem
             value="ingest nasa power 12 years ingest power nasa observations fetch retrieve weather meteorology"
             onSelect={() => {
               logEvent({ severity: 'info', category: 'INGEST', title: 'POWER ingestion requested', detail: `12-year meteorology request for ${activeFarmId ? 'the active farm' : location.label}. Real rows only; missing days reported as missing.`, view });
@@ -360,6 +384,7 @@ export function ShortcutsHelp() {
   const rows: { keys: string; label: string }[] = [
     { keys: '⌘ K / Ctrl K', label: 'Open the command palette' },
     { keys: '?', label: 'Show this shortcuts overlay' },
+    { keys: 'T', label: 'Start / restart the guided tour' },
     { keys: 'O', label: 'Mission Overview' },
     { keys: 'D', label: 'Earth Intelligence' },
     { keys: 'E', label: 'Geospatial Explorer' },

@@ -192,6 +192,7 @@ export function DashboardView() {
             <Button
               onClick={() => ingest.mutate()}
               disabled={ingest.isPending}
+              data-tour="dash-ingest"
               className="h-9 font-mono text-xs uppercase tracking-wide-mc"
             >
               {ingest.isPending ? (

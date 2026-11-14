@@ -23,14 +23,14 @@ Concretely enforced in the codebase:
 
 The demo needs **no signup**:
 
-1. Open the application (the preview panel / deployed URL).
+1. Open the application (the preview panel / deployed URL). A **17-step guided tour** starts automatically on first login — or restart it any time with the `T` key, System Health → Operations, or the ⌘K palette.
 2. **Overview** page → *Explore satellite data*.
 3. **Geospatial Explorer** — toggle MODIS true color, MOD13Q1 NDVI (16-day), SMAP L4 soil-moisture layers; pick any date; draw a farm boundary.
 4. **Earth Intelligence** — ingest the 12-year NASA POWER record for the selected location (~10–30 s, real MERRA-2 data).
 5. **Environmental Analysis** — run the trend pipeline (seasonal Mann-Kendall, Theil-Sen, FDR).
 6. **Farm Workspace** — create a farm, enter a soil test (or fetch the supplementary SoilGrids profile).
 7. **Rotation Planner** — build scenarios, set priorities, compare alternatives with full factor-level explanations.
-8. **Fire Intelligence** — ingest real VIIRS 375 m detections (e.g. the Zambia preset, Jul–Oct) and view the fire calendar.
+8. **Fire Intelligence** — ingest real VIIRS 375 m detections (e.g. the Zambia preset, Jul–Oct), view the fire calendar, and set up **regional fire watchlists**: pick a geography, radius, confidence floor and threshold; *Evaluate now* checks every uncovered day against the live VIIRS archive and reports clear / watch / alert from real detections only (a red header chip surfaces alerts from anywhere in the console).
 9. **Reports** — compile and print the farm assessment (browser print → PDF).
 10. **Evidence & Provenance / System Health** — inspect the request ledger, source register and diagnostics.
 
@@ -55,7 +55,7 @@ The demo needs **no signup**:
 bun run dev            # dev server (auto-run in this sandbox)
 bun run lint           # ESLint
 bun run db:push        # apply the Prisma schema
-bun test tests/        # 54 unit tests (fixtures only — no network)
+bun test tests/        # 69 unit tests (fixtures only — no network)
 bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/ISRIC endpoints
 ```
 

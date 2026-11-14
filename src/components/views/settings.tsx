@@ -11,7 +11,8 @@ import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
-import { Settings, Activity, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown } from 'lucide-react';
+import { Settings, Activity, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass } from 'lucide-react';
+import { useTourStore } from '@/components/state/tour-store';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -45,6 +46,7 @@ export function SettingsView() {
   const status = useQuery({ queryKey: ['system-status'], queryFn: api.systemStatus, refetchInterval: 30_000 });
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { start: startTour, status: tourStatus } = useTourStore();
 
   const invalidate = useMutation({
     mutationFn: async () => {
@@ -171,6 +173,7 @@ export function SettingsView() {
                   <Row k="Trend engine" v={s.engines.trendEngine} mono />
                   <Row k="Rotation engine" v={s.engines.rotationEngine} mono />
                   <Row k="Crop catalogue" v={s.engines.cropCatalogue} mono />
+                  <Row k="Fire watchlists" v={`${s.database.fireWatchlists} defined · ${s.database.fireWatchEvents} evaluation(s) recorded`} />
                   <Row k="Jobs" v={(s.database.jobCounts ?? []).map((j) => `${j.count} ${j.status}`).join(', ') || 'none'} />
                 </div>
               </HudPanel>
@@ -262,6 +265,19 @@ export function SettingsView() {
                   </Button>
                   <Button variant="outline" size="sm" className={cn('h-8 uppercase', MONO_BTN)} onClick={() => queryClient.invalidateQueries()}>
                     <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh all dashboard data
+                  </Button>
+                </div>
+                <div data-tour="settings-tour" className="mt-4 flex flex-wrap items-center gap-3 rounded-sm border border-edge bg-panel-2/40 p-3">
+                  <Compass className="h-4 w-4 text-nasa" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono text-[10px] uppercase tracking-wide-mc text-dim">Guided first-run tour</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-faint">
+                      Currently: <span className="text-dim">{tourStatus === 'active' ? 'running' : tourStatus}</span>. The 17-step
+                      walkthrough of every console module — restart it any time.
+                    </p>
+                  </div>
+                  <Button size="sm" onClick={() => { startTour(); toast({ title: 'Guided tour restarted', description: 'The walkthrough starts at the first step — Esc leaves it at any time.' }); }} className={cn('h-8 uppercase', MONO_BTN)}>
+                    <Compass className="h-3.5 w-3.5" aria-hidden /> Restart tour
                   </Button>
                 </div>
               </HudPanel>

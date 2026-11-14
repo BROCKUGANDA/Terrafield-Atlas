@@ -165,7 +165,9 @@ export function ExplorerView() {
             />
           }
         >
-          {sources.data ? <GibsMap layers={sources.data.mapLayers} height="72vh" /> : null}
+          <div data-tour="explorer-map">
+            {sources.data ? <GibsMap layers={sources.data.mapLayers} height="72vh" /> : null}
+          </div>
         </QueryState>
       </Reveal>
 

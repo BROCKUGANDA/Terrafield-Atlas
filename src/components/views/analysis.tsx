@@ -149,6 +149,7 @@ export function AnalysisView() {
             <Button
               onClick={() => trends.mutate()}
               disabled={trends.isPending}
+              data-tour="analysis-run"
               className="h-9 font-mono text-xs uppercase tracking-wide-mc"
             >
               {trends.isPending ? (

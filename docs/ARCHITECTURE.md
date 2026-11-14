@@ -40,6 +40,9 @@ lib/http.ts — resilient fetch: retry + backoff + circuit breakers + request le
 | `/api/v1/rotation/compare` | POST | evaluate multiple alternatives under identical context |
 | `/api/v1/crops` | GET | versioned crop catalogue with citations |
 | `/api/v1/fires` | GET, POST | stored detections / ingest real VIIRS detections (≤ 40 days) |
+| `/api/v1/fires/watchlists` | GET, POST | regional fire-alert watchlists (list with last evaluation / create) |
+| `/api/v1/fires/watchlists/{id}` | GET, PATCH, DELETE | watchlist detail + event history / edit rule (resets status to unverified) / delete (events cascade) |
+| `/api/v1/fires/watchlists/{id}/evaluate` | POST | LIVE evaluation: ensures per-day GIBS VIIRS archive coverage, computes clear/watch/alert from stored real detections, records a FireWatchEvent |
 | `/api/v1/provenance` | GET | API request ledger + sources + recent analyses |
 | `/api/v1/reports` | POST | compiled farm assessment (printable) |
 | `/api/v1/system/status` | GET, POST | diagnostics; cache invalidation |
@@ -58,6 +61,19 @@ which **never** substitutes fabricated data).
 - **Provenance ledger**: every external request (attempts included) is logged to `ApiRequestLog` with provider, operation, URL, status, latency, bytes, correlation ID.
 - **Partial-data reporting**: POWER fill values become `null` (never 0, never dropped); short months (< 20 valid days) are excluded and counted as missing; fire archive gap days are reported explicitly.
 
+## Fire watchlists (regional alert rules)
+
+Standing regional fire alerts built entirely on stored real detections:
+
+- **Model**: `FireWatchlist` (center, radius 5–25 km, confidence floor, lookback 3–30 days, alert threshold) + `FireWatchEvent` (one row per evaluation — the alert history) + `FireCoverageDay` (per-(region, date) ledger of "we actually asked GIBS", with the bbox that was checked).
+- **Evaluation** (`POST …/evaluate`): for every day in the window, coverage is ensured — days never asked, or asked with a narrower bbox, are fetched live from the GIBS VIIRS 375 m stream and persisted idempotently; the status is then computed by a pure engine from stored rows only. Archive-gap days are reported as no-data, never zero-filled.
+- **Status semantics (honesty-first)**: `alert` = qualifying detections ≥ threshold; `watch` = ≥ ceil(threshold/2) OR partial coverage with real detections; `clear` requires complete coverage; `unverified` = nothing checked yet. Editing rule parameters resets the stored status to `unverified`.
+- **Console integration**: cards in Fire Intelligence (evaluate/edit/delete, per-day bars, rationale), a header alert chip visible from any module while any watchlist alerts (DB-only 120 s poll), counts in System Health.
+
+## Guided first-run tour
+
+A 17-step walkthrough (`src/lib/tour-steps.ts`) that drives the real console: steps switch modules, wait for their `[data-tour]` target element to mount (async data, view-swap animation) with a patience fallback to a centered card, spotlight it with a box-shadow mask, and track scroll/resize/DOM mutations. State persists per browser keyed by a `TOUR_VERSION` (a version bump re-offers the tour once). Offered automatically on the operator's first login; restartable via System Health → Operations, the ⌘K palette, or the `T` hotkey. Keyboard: ←/→ navigate, Esc skips.
+
 ## Security
 
 - No API credentials in the frontend bundle: `FIRMS_MAP_KEY` is read server-side only; the FIRMS endpoint is proxied through our API routes.
@@ -74,6 +90,6 @@ The original engineering brief suggested FastAPI + PostgreSQL/PostGIS + Redis + 
 
 ## Testing strategy
 
-- **Unit (54 tests, `bun test`)**: Mann-Kendall S/variance/ties/Hamed-Rao, Theil-Sen slope + Sen CI, seasonal MK (seasonality trap, zero-variance), BH-FDR canonical example, POWER request validation, GeoJSON rejection paths, monthly aggregation rules, trend-engine honesty paths, rotation-engine determinism/missing-data/incompatibility flags, catalogue citation integrity. Fixtures only — no network.
+- **Unit (69 tests, `bun test`)**: Mann-Kendall S/variance/ties/Hamed-Rao, Theil-Sen slope + Sen CI, seasonal MK (seasonality trap, zero-variance), BH-FDR canonical example, POWER request validation, GeoJSON rejection paths, monthly aggregation rules, trend-engine honesty paths, rotation-engine determinism/missing-data/incompatibility flags, catalogue citation integrity, watchlist-engine status semantics (alert/watch/clear/unverified boundaries, confidence floors, coverage gaps, window math). Fixtures only — no network.
 - **Live smoke (`bun scripts/live-smoke.mjs`)**: 9 checks against the real POWER, GIBS (raster, NDVI, SMAP, fire MVT decode, Domains), SoilGrids (supplementary-tolerated) and FIRMS (honest negative test), plus the platform health endpoint.
 - **In-browser verification**: golden-path exercise documented in the run log (map → ingest → trends → farm → rotation → fire → report).

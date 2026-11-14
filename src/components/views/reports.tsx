@@ -97,7 +97,7 @@ export function ReportsView() {
           description="Compiles environmental record, trend statistics, soil information, rotation comparisons, provenance ledger and methodology — from stored real observations only. Use your browser's print dialog to save as PDF (print styles included)."
           actions={
             <div className="flex flex-wrap items-center gap-2.5">
-              <Button onClick={() => generate.mutate()} disabled={generate.isPending} className={cn('uppercase', MONO_BTN)}>
+              <Button onClick={() => generate.mutate()} disabled={generate.isPending} data-tour="reports-generate" className={cn('uppercase', MONO_BTN)}>
                 {generate.isPending ? (
                   <>
                     <span className="anim-blink h-1.5 w-1.5 rounded-full bg-primary-foreground" aria-hidden /> Compiling…

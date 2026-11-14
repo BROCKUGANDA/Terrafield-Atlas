@@ -16,6 +16,7 @@ import { FireCalendarChart } from '@/components/charts/scientific-charts';
 import { SectionHeader, StatusPill, TelemetryStat, HudPanel, CoordReadout } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel, EmptyState } from '@/components/system/query-state';
 import { StatSkeletonRow, SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
+import { FireWatchlistsSection } from '@/components/views/fire-watchlists';
 import { Flame, Loader2, Download, ShieldAlert, MapPin, FileDown } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -199,6 +200,7 @@ export function FireIntelligenceView() {
             <Button
               onClick={() => ingest.mutate()}
               disabled={ingest.isPending || rangeInvalid}
+              data-tour="fire-ingest"
               className="h-9 font-mono text-xs uppercase tracking-wide-mc"
             >
               {ingest.isPending ? (
@@ -388,9 +390,14 @@ export function FireIntelligenceView() {
         </QueryState>
       </Reveal>
 
+      {/* Regional fire watchlists — standing alert rules per geography */}
+      <Reveal i={3}>
+        <FireWatchlistsSection />
+      </Reveal>
+
       {/* Limitations — always visible once a real response exists */}
       {fires.data && (
-        <Reveal i={3}>
+        <Reveal i={4}>
           <div className="hud p-3.5" style={{ borderColor: 'rgba(255, 178, 36, 0.32)' }}>
             <div className="flex items-start gap-2.5 text-[11px] leading-relaxed text-caution/90">
               <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-caution" aria-hidden />

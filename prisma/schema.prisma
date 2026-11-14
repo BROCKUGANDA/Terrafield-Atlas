@@ -246,6 +246,74 @@ model FireObservation {
   @@index([regionKey, obsDate])
 }
 
+// Per-(region, date) archive-coverage record for the GIBS VIIRS fire stream.
+// A row means "we asked GIBS for this date over this bbox": dataAvailable=false
+// is an honest provider-side archive gap, never a zero-fire claim.
+model FireCoverageDay {
+  id             String   @id @default(cuid())
+  regionKey      String
+  obsDate        DateTime
+  dataAvailable  Boolean
+  detectionCount Int      // detections decoded for this date over the recorded bbox
+  bboxWest       Float
+  bboxSouth      Float
+  bboxEast       Float
+  bboxNorth      Float
+  sourceProvider String
+  checkedAt      DateTime @default(now())
+
+  @@unique([regionKey, obsDate])
+  @@index([regionKey, obsDate])
+}
+
+// Operator-defined regional fire watchlist: threshold rule evaluated against
+// stored REAL detections only. Status is never fabricated — see FireWatchEvent.
+model FireWatchlist {
+  id                 String    @id @default(cuid())
+  name               String
+  label              String?   // geography display label (e.g. region preset name)
+  lat                Float
+  lon                Float
+  radiusKm           Float     @default(15)
+  minConfidence      String    @default("nominal") // low | nominal | high — alert counts detections at/above this class
+  lookbackDays       Int       @default(7)   // evaluation window (3–30 days)
+  detectionThreshold Int       @default(5)   // alert when qualifying count >= threshold
+  notes              String?
+  lastStatus         String    @default("unverified") // unverified | clear | watch | alert
+  lastDetectionCount Int?
+  lastEvaluatedAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  events FireWatchEvent[]
+
+  @@index([lastStatus])
+}
+
+// One row per watchlist evaluation — the alert history ledger.
+model FireWatchEvent {
+  id                  String   @id @default(cuid())
+  watchlistId         String
+  watchlist           FireWatchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  evaluatedAt         DateTime @default(now())
+  windowStart         DateTime
+  windowEnd           DateTime
+  status              String // unverified | clear | watch | alert
+  detectionCount      Int     // qualifying detections (confidence >= minConfidence)
+  highConfidenceCount Int
+  nominalCount        Int
+  lowCount            Int
+  maxFrpMW            Float?
+  daysWithDetections  Int     // days in window with >= 1 stored detection
+  daysChecked         Int     // days whose archive coverage was verified
+  daysNoData          Int     // provider archive-gap days (reported, not zero-filled)
+  triggeredAlert      Boolean
+  detailJson          String   // per-day counts, unchecked/no-data day lists, rationale
+  correlationId       String?
+
+  @@index([watchlistId, evaluatedAt])
+}
+
 model AuditEvent {
   id        String   @id @default(cuid())
   actor     String // 'system' | 'demo-user'

@@ -200,7 +200,7 @@ export function FarmWorkspaceView() {
           </QueryState>
         </HudPanel>
 
-        <HudPanel>
+        <HudPanel data-tour="farm-create">
           <Kicker>New registration</Kicker>
           <h3 className="mt-2 font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Create a farm at the selected location</h3>
           <p className="mt-2 text-[11px] leading-relaxed text-faint">

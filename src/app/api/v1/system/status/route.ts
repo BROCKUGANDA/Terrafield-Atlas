@@ -23,6 +23,8 @@ export async function GET() {
   const observationCount = await db.environmentalObservation.count();
   const fireCount = await db.fireObservation.count();
   const farmCount = await db.farm.count();
+  const watchlistCount = await db.fireWatchlist.count();
+  const watchEventCount = await db.fireWatchEvent.count();
 
   return jsonResponse({
     service: 'terrafield-atlas',
@@ -35,6 +37,8 @@ export async function GET() {
       observations: observationCount,
       fireDetections: fireCount,
       farms: farmCount,
+      fireWatchlists: watchlistCount,
+      fireWatchEvents: watchEventCount,
       jobCounts: jobCounts.map((j) => ({ status: j.status, count: j._count._all })),
       failedJobs: failedJobs.map((j) => ({
         id: j.id, type: j.type, error: j.error, startedAt: j.startedAt,
