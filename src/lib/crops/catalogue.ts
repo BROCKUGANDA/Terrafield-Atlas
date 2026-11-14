@@ -1,0 +1,361 @@
+/**
+ * Versioned crop-characteristics catalogue.
+ *
+ * HONESTY RULES (per the product engineering mandate):
+ * - Every agronomic value below carries an explicit source citation.
+ * - Values are published ranges, not point estimates, because suitability is
+ *   site-specific; the rotation engine reports the range it used.
+ * - Where sources give only class-level guidance (e.g. nutrient demand),
+ *   the catalogue stores the CLASS and cites the guidance, never a fake number.
+ *
+ * Primary sources:
+ * - [S1] FAO "Yield response to water", FAO Irrigation and Drainage Paper 33
+ *        (Doorenbos & Kassam, 1979) — seasonal water-requirement ranges (mm).
+ * - [S2] FAO EcoCrop database / FAO crop production extension guidance —
+ *        pH ranges, growth-cycle lengths, thermal adaptation classes.
+ * - [S3] Karlen, D.L. et al. (1994), "Crop rotations for the 21st century",
+ *        Advances in Agronomy 53:1–45 — rotation/diversity rationale.
+ * - [S4] FAO "Pulses: Nutritious seeds for a sustainable future" (2016) —
+ *        legume nitrogen-fixation guidance.
+ */
+
+export const CROP_CATALOGUE_VERSION = '2026.11-r1';
+
+export interface CropDef {
+  cropKey: string;
+  name: string;
+  scientificName: string;
+  family: string;
+  familyGroup: 'cereal' | 'legume' | 'root-tuber' | 'oilseed' | 'fiber' | 'vegetable';
+  growthDays: [number, number];
+  /** Seasonal water requirement range, mm — [S1] */
+  waterReqMm: [number, number];
+  waterUseClass: 'low' | 'moderate' | 'high';
+  nFixation: boolean;
+  nutrientDemand: 'low' | 'moderate' | 'high'; // N-demand class [S2 extension guidance]
+  soilPh: [number, number]; // [S2]
+  /** thermal adaptation class [S2] */
+  thermalClass: 'tropical' | 'temperate' | 'wide';
+  /** documented staple-calorie crop (FAO food-balance guidance) */
+  calorieStaple: boolean;
+  textureBest: string[];
+  textureAcceptable: string[];
+  notes: string;
+  sources: string[];
+}
+
+const S1 = 'FAO Irrigation & Drainage Paper 33 (Doorenbos & Kassam, 1979), "Yield response to water" — seasonal crop water requirement ranges';
+const S2 = 'FAO EcoCrop database and FAO crop-production extension guidance — pH, duration and adaptation ranges';
+const S3 = 'Karlen et al. (1994), "Crop rotations for the 21st century", Advances in Agronomy 53:1-45';
+const S4 = 'FAO (2016), "Pulses: Nutritious seeds for a sustainable future" — biological N fixation guidance';
+
+export const CROP_CATALOGUE: CropDef[] = [
+  {
+    cropKey: 'maize',
+    name: 'Maize (corn)',
+    scientificName: 'Zea mays',
+    family: 'Poaceae',
+    familyGroup: 'cereal',
+    growthDays: [90, 140],
+    waterReqMm: [500, 800],
+    waterUseClass: 'high',
+    nFixation: false,
+    nutrientDemand: 'high',
+    soilPh: [5.5, 7.8],
+    thermalClass: 'tropical',
+    calorieStaple: true,
+    textureBest: ['loam', 'silt loam', 'clay loam'],
+    textureAcceptable: ['sand', 'sandy loam'],
+    notes: 'High N demand; benefits from preceding legume. Terminal drought sensitive at silking.',
+    sources: [S1, S2, S3],
+  },
+  {
+    cropKey: 'sorghum',
+    name: 'Sorghum',
+    scientificName: 'Sorghum bicolor',
+    family: 'Poaceae',
+    familyGroup: 'cereal',
+    growthDays: [90, 130],
+    waterReqMm: [450, 650],
+    waterUseClass: 'moderate',
+    nFixation: false,
+    nutrientDemand: 'moderate',
+    soilPh: [5.5, 7.5],
+    thermalClass: 'tropical',
+    calorieStaple: true,
+    textureBest: ['loam', 'clay loam', 'sandy loam'],
+    textureAcceptable: ['clay', 'sand'],
+    notes: 'Drought-tolerant cereal; established water-requirement range is lower than maize.',
+    sources: [S1, S2, S3],
+  },
+  {
+    cropKey: 'pearl_millet',
+    name: 'Pearl millet',
+    scientificName: 'Pennisetum glaucum',
+    family: 'Poaceae',
+    familyGroup: 'cereal',
+    growthDays: [70, 100],
+    waterReqMm: [300, 500],
+    waterUseClass: 'low',
+    nFixation: false,
+    nutrientDemand: 'low',
+    soilPh: [5.5, 7.5],
+    thermalClass: 'tropical',
+    calorieStaple: true,
+    textureBest: ['sand', 'sandy loam', 'loam'],
+    textureAcceptable: ['clay loam'],
+    notes: 'Most drought-tolerant major cereal; short cycle suits short rainy seasons.',
+    sources: [S1, S2, S3],
+  },
+  {
+    cropKey: 'wheat',
+    name: 'Wheat',
+    scientificName: 'Triticum aestivum',
+    family: 'Poaceae',
+    familyGroup: 'cereal',
+    growthDays: [100, 130],
+    waterReqMm: [450, 650],
+    waterUseClass: 'moderate',
+    nFixation: false,
+    nutrientDemand: 'high',
+    soilPh: [5.5, 7.5],
+    thermalClass: 'temperate',
+    calorieStaple: true,
+    textureBest: ['loam', 'clay loam', 'silt loam'],
+    textureAcceptable: ['sandy loam', 'clay'],
+    notes: 'Cool-season cereal; rotation with legumes is standard practice for N supply.',
+    sources: [S1, S2, S3],
+  },
+  {
+    cropKey: 'barley',
+    name: 'Barley',
+    scientificName: 'Hordeum vulgare',
+    family: 'Poaceae',
+    familyGroup: 'cereal',
+    growthDays: [90, 120],
+    waterReqMm: [450, 650],
+    waterUseClass: 'moderate',
+    nFixation: false,
+    nutrientDemand: 'moderate',
+    soilPh: [6.0, 7.5],
+    thermalClass: 'temperate',
+    calorieStaple: false,
+    textureBest: ['loam', 'sandy loam', 'clay loam'],
+    textureAcceptable: ['silt loam'],
+    notes: 'Cool-season cereal, shorter cycle than wheat; salinity tolerant.',
+    sources: [S1, S2],
+  },
+  {
+    cropKey: 'common_bean',
+    name: 'Common bean',
+    scientificName: 'Phaseolus vulgaris',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [60, 120],
+    waterReqMm: [300, 500],
+    waterUseClass: 'low',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [6.0, 7.0],
+    thermalClass: 'wide',
+    calorieStaple: false,
+    textureBest: ['loam', 'silt loam'],
+    textureAcceptable: ['sandy loam', 'clay loam'],
+    notes: 'N-fixing legume; sensitive to soil acidity and waterlogging; short cycle.',
+    sources: [S1, S2, S4],
+  },
+  {
+    cropKey: 'cowpea',
+    name: 'Cowpea',
+    scientificName: 'Vigna unguiculata',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [60, 100],
+    waterReqMm: [300, 500],
+    waterUseClass: 'low',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [5.5, 6.8],
+    thermalClass: 'tropical',
+    calorieStaple: false,
+    textureBest: ['sand', 'sandy loam', 'loam'],
+    textureAcceptable: ['clay loam'],
+    notes: 'Heat-tolerant, drought-tolerant N-fixing legume; a documented low-input rotation crop in semi-arid systems.',
+    sources: [S1, S2, S4],
+  },
+  {
+    cropKey: 'groundnut',
+    name: 'Groundnut (peanut)',
+    scientificName: 'Arachis hypogaea',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [90, 150],
+    waterReqMm: [500, 700],
+    waterUseClass: 'moderate',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [5.5, 7.0],
+    thermalClass: 'tropical',
+    calorieStaple: false,
+    textureBest: ['sand', 'sandy loam'],
+    textureAcceptable: ['loam'],
+    notes: 'N-fixing legume with high Ca requirement at podding; good residual-N crop for cereals.',
+    sources: [S1, S2, S4],
+  },
+  {
+    cropKey: 'soybean',
+    name: 'Soybean',
+    scientificName: 'Glycine max',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [90, 150],
+    waterReqMm: [450, 700],
+    waterUseClass: 'moderate',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [6.0, 7.0],
+    thermalClass: 'wide',
+    calorieStaple: false,
+    textureBest: ['loam', 'silt loam', 'clay loam'],
+    textureAcceptable: ['sandy loam'],
+    notes: 'N-fixing legume; rhizobia establishment prefers near-neutral pH — soil test advised.',
+    sources: [S1, S2, S4],
+  },
+  {
+    cropKey: 'chickpea',
+    name: 'Chickpea',
+    scientificName: 'Cicer arietinum',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [90, 120],
+    waterReqMm: [350, 500],
+    waterUseClass: 'low',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [6.0, 8.0],
+    thermalClass: 'temperate',
+    calorieStaple: false,
+    textureBest: ['loam', 'sandy loam'],
+    textureAcceptable: ['clay loam'],
+    notes: 'Cool-season food legume; residual moisture cropping in Mediterranean-type climates.',
+    sources: [S1, S2, S4],
+  },
+  {
+    cropKey: 'pigeonpea',
+    name: 'Pigeonpea',
+    scientificName: 'Cajanus cajan',
+    family: 'Fabaceae',
+    familyGroup: 'legume',
+    growthDays: [120, 180],
+    waterReqMm: [300, 600],
+    waterUseClass: 'low',
+    nFixation: true,
+    nutrientDemand: 'low',
+    soilPh: [5.0, 7.0],
+    thermalClass: 'tropical',
+    calorieStaple: false,
+    textureBest: ['loam', 'sandy loam'],
+    textureAcceptable: ['clay loam', 'clay'],
+    notes: 'Deep-rooted, drought-tolerant, long-duration N-fixing legume (indicative water range for semi-arid systems; ICRISAT guidance).',
+    sources: [S1, S2, S4, 'ICRISAT pigeonpea agronomy guidance (indicative ranges)'],
+  },
+  {
+    cropKey: 'potato',
+    name: 'Potato',
+    scientificName: 'Solanum tuberosum',
+    family: 'Solanaceae',
+    familyGroup: 'root-tuber',
+    growthDays: [90, 150],
+    waterReqMm: [500, 700],
+    waterUseClass: 'high',
+    nFixation: false,
+    nutrientDemand: 'high',
+    soilPh: [5.0, 6.5],
+    thermalClass: 'temperate',
+    calorieStaple: true,
+    textureBest: ['sandy loam', 'loam'],
+    textureAcceptable: ['silt loam'],
+    notes: 'High K demand; acid-preferring (common scab risk above ~pH 6.5). Solanaceae not to follow solanaceous crops.',
+    sources: [S1, S2],
+  },
+  {
+    cropKey: 'cassava',
+    name: 'Cassava',
+    scientificName: 'Manihot esculenta',
+    family: 'Euphorbiaceae',
+    familyGroup: 'root-tuber',
+    growthDays: [300, 400],
+    waterReqMm: [500, 800],
+    waterUseClass: 'moderate',
+    nFixation: false,
+    nutrientDemand: 'moderate',
+    soilPh: [4.5, 8.0],
+    thermalClass: 'tropical',
+    calorieStaple: true,
+    textureBest: ['sandy loam', 'loam', 'sand'],
+    textureAcceptable: ['clay loam', 'clay'],
+    notes: 'Extremely acid/infertile tolerant; documented high K removal; long cycle occupies the field 10+ months.',
+    sources: [S1, S2, 'FAO/CIAT cassava production guidance'],
+  },
+  {
+    cropKey: 'sweet_potato',
+    name: 'Sweet potato',
+    scientificName: 'Ipomoea batatas',
+    family: 'Convolvulaceae',
+    familyGroup: 'root-tuber',
+    growthDays: [90, 150],
+    waterReqMm: [500, 700],
+    waterUseClass: 'moderate',
+    nFixation: false,
+    nutrientDemand: 'moderate',
+    soilPh: [5.5, 6.5],
+    thermalClass: 'tropical',
+    calorieStaple: true,
+    textureBest: ['sandy loam', 'loam'],
+    textureAcceptable: ['clay loam'],
+    notes: 'Tolerant of moderately acid soils; short-cycle food-security root crop.',
+    sources: [S1, S2],
+  },
+  {
+    cropKey: 'sunflower',
+    name: 'Sunflower',
+    scientificName: 'Helianthus annuus',
+    family: 'Asteraceae',
+    familyGroup: 'oilseed',
+    growthDays: [90, 130],
+    waterReqMm: [600, 1000],
+    waterUseClass: 'high',
+    nFixation: false,
+    nutrientDemand: 'high',
+    soilPh: [6.0, 7.5],
+    thermalClass: 'temperate',
+    calorieStaple: false,
+    textureBest: ['loam', 'clay loam'],
+    textureAcceptable: ['silt loam', 'sandy loam'],
+    notes: 'Deep-rooted oilseed; high K and N demand; documented high water-requirement range.',
+    sources: [S1, S2],
+  },
+  {
+    cropKey: 'cotton',
+    name: 'Cotton',
+    scientificName: 'Gossypium hirsutum',
+    family: 'Malvaceae',
+    familyGroup: 'fiber',
+    growthDays: [150, 200],
+    waterReqMm: [700, 1300],
+    waterUseClass: 'high',
+    nFixation: false,
+    nutrientDemand: 'high',
+    soilPh: [6.0, 8.0],
+    thermalClass: 'tropical',
+    calorieStaple: false,
+    textureBest: ['loam', 'clay loam', 'clay'],
+    textureAcceptable: ['sandy loam'],
+    notes: 'Long-duration, high water requirement (irrigated or high-rainfall systems); non-food crop.',
+    sources: [S1, S2],
+  },
+];
+
+export function cropByKey(key: string): CropDef | undefined {
+  return CROP_CATALOGUE.find((c) => c.cropKey === key);
+}

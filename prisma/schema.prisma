@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// TerraField Atlas data model
+// Provenance is first-class: every observation and analysis is traceable to a
+// data source, retrieval timestamp, and processing version.
+// ---------------------------------------------------------------------------
+
+model Farm {
+  id             String   @id @default(cuid())
+  name           String
+  country        String?
+  region         String?
+  centroidLat    Float
+  centroidLon    Float
+  boundaryGeoJson String? // GeoJSON Polygon feature as JSON string (validated server-side)
+  areaHa         Float?
+  notes          String?
+  ownerLabel     String?
+  cropHistory    String? // JSON string: [{season, crop, family}] supplied by farmer
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  soilTests      SoilTest[]
+  scenarios      RotationScenario[]
+  trendAnalyses  TrendAnalysis[]
+  observations   EnvironmentalObservation[]
+  preferences    FarmerPreferenceProfile[]
+}
+
+model SoilTest {
+  id                String   @id @default(cuid())
+  farmId            String
+  farm              Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  measuredAt       DateTime
+  source            String // 'farmer' | 'laboratory' | 'soilgrids' (clearly distinguished)
+  sourceDetail      String? // lab name or SoilGrids retrieval info
+  depthCm           Float?
+  texture           String? // sand / loam / clay / silt labels from particle fractions
+  sandPct           Float?
+  siltPct           Float?
+  clayPct           Float?
+  ph                Float?
+  organicCarbonPct  Float?
+  nitrogenMgKg      Float? // measured total N (lab), distinct from SMAP/POWER wetness
+  phosphorusMgKg    Float?
+  potassiumCmolKg   Float?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  @@index([farmId])
+}
+
+// Registry of external data sources: provider, identifiers, coverage, license.
+model DataSource {
+  id                  String   @id @default(cuid())
+  provider            String // e.g. "NASA Langley Research Center (LaRC) POWER"
+  datasetName         String
+  productId          String? // e.g. "MOD13Q1 v6.1", "SPL4SMGP.007"
+  endpointTemplate    String
+  dataFormat          String // JSON | WMTS raster | MVT vector | CSV
+  temporalCoverage    String
+  spatialResolution   String
+  units               String?
+  authRequired        Boolean  @default(false)
+  rateLimit           String?
+  license             String
+  attribution         String
+  limitations         String
+  status              String // 'operational' | 'degraded' | 'unreachable' | 'credentials-not-configured'
+  lastCheckedAt       DateTime?
+  createdAt           DateTime @default(now())
+}
+
+// One row per external HTTP request (the provenance ledger).
+model ApiRequestLog {
+  id             String   @id @default(cuid())
+  provider       String // NASA_POWER | GIBS | SOILGRIDS | FIRMS
+  datasetId      String?
+  operation      String // daily-point | wmts-tile | mvt-tile | point-query | area-csv
+  requestUrl     String
+  paramsHash     String?
+  status         Int
+  latencyMs      Int
+  responseBytes  Int?
+  ok             Boolean
+  errorDetail    String?
+  correlationId  String?
+  retrievedAt    DateTime @default(now())
+
+  @@index([provider, retrievedAt])
+}
+
+// Real observations only. No synthetic rows are ever written here.
+model EnvironmentalObservation {
+  id             String   @id @default(cuid())
+  farmId          String?
+  farm           Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  lat            Float
+  lon            Float
+  variable       String // PRECTOTCORR | T2M | T2M_MAX | T2M_MIN | ALLSKY_SFC_SW_DWN | RH2M | WS2M | GWETROOT | GWETTOP
+  obsDate        DateTime
+  value          Float
+  unit           String
+  sourceProvider String
+  datasetVersion String
+  retrievedAt    DateTime @default(now())
+
+  @@unique([lat, lon, variable, obsDate])
+  @@index([farmId, variable, obsDate])
+  @@index([variable, obsDate])
+}
+
+// Crop catalogue: versioned agronomic characteristics with source citations.
+model CropCharacteristic {
+  id               String   @id @default(cuid())
+  catalogueVersion String // e.g. "2026.11"
+  cropKey          String
+  name             String
+  scientificName   String
+  family           String // botanical family (rotation grouping)
+  familyGroup      String // cereal | legume | root | oilseed | vegetable | fiber
+  growthDaysMin    Int
+  growthDaysMax    Int
+  waterReqMmMin    Int // seasonal water requirement, FAO-cited range
+  waterReqMmMax    Int
+  waterUseClass    String // low | moderate | high
+  nFixation        Boolean // biological nitrogen fixation
+  nutrientDemand  String // low | moderate | high (NPK removal class)
+  thermalClass    String // tropical | temperate | wide
+  calorieStaple   Boolean  @default(false)
+  soilPhMin        Float
+  soilPhMax        Float
+  textureSuitability String // JSON: {best:[], acceptable:[]}
+  notes            String
+  sources          String // JSON array of citation strings
+  active           Boolean  @default(true)
+
+  @@unique([catalogueVersion, cropKey])
+}
+
+model FarmerPreferenceProfile {
+  id           String   @id @default(cuid())
+  farmId       String
+  farm         Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  soilHealth   Float    @default(0.2) // priority weights, normalized server-side
+  waterEfficiency Float @default(0.2)
+  seasonalAdaptability Float @default(0.15)
+  nutrientManagement Float @default(0.15)
+  cropDiversity Float  @default(0.15)
+  economics    Float    @default(0.1)
+  foodSecurity Float   @default(0.1)
+  rainfedOnly  Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+// Kept via farm.cropHistory JSON for simplicity; rotation history is farmer-supplied.
+
+model RotationScenario {
+  id           String   @id @default(cuid())
+  farmId       String
+  farm         Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name         String
+  cropKeys     String // JSON array
+  ruleVersion  String
+  weights      String // JSON of farmer priorities used
+  scoresJson   String // full factor-level scoring output
+  overallScore Float
+  confidence   Float // 0..1, reduced by missing data
+  incompatibleJson String? // JSON array of hard incompatibilities
+  createdAt    DateTime @default(now())
+
+  @@index([farmId])
+}
+
+model TrendAnalysis {
+  id             String   @id @default(cuid())
+  farmId         String?
+  farm           Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  lat            Float
+  lon            Float
+  variable       String
+  periodStart    DateTime
+  periodEnd      DateTime
+  sampleCount    Int
+  method         String
+  slopePerYear   Float?
+  pValue         Float?
+  zValue         Float?
+  direction      String
+  significant    Boolean
+  ciLower        Float?
+  ciUpper        Float?
+  resultJson     String // full structured result incl. explanations and caveats
+  ruleVersion    String
+  createdAt      DateTime @default(now())
+
+  @@index([farmId, variable])
+  @@index([variable, createdAt])
+}
+
+model ProcessingJob {
+  id           String   @id @default(cuid())
+  type         String // power-ingest | trends | rotation | fires-ingest
+  status       String // queued | running | succeeded | failed
+  params       String // JSON
+  progressNote String?
+  resultRef    String?
+  error        String?
+  correlationId String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  @@index([type, status])
+}
+
+// Cached real fire detections decoded from GIBS VIIRS thermal-anomaly MVT.
+model FireObservation {
+  id          String   @id @default(cuid())
+  regionKey   String // grid key for provenance grouping
+  obsDate     DateTime
+  latitude    Float
+  longitude   Float
+  confidence  String // l | n | h (nominal/high/low mapping documented)
+  satellite   String
+  sensor      String // VIIRS_SNPP | VIIRS_NOAA20 ...
+  dayNight    String
+  acqTime     String
+  brightTi4   Float?
+  brightTi5   Float?
+  frp         Float?
+  uid         String?
+  sourceProvider String
+  retrievedAt DateTime @default(now())
+
+  @@unique([latitude, longitude, obsDate, acqTime, uid])
+  @@index([regionKey, obsDate])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  actor     String // 'system' | 'demo-user'
+  action    String // farm.create, soil-test.create, scenario.create ...
+  targetId  String?
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
