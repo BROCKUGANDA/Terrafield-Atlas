@@ -1,5 +1,7 @@
 # TerraField Atlas
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/BROCKUGANDA/Terrafield-Atlas?utm_source=badge)
+
 **NASA Earth Intelligence, Agricultural Resilience & Geospatial Decision Support**
 Built for the 2026 NASA Space Apps Challenge — primary challenge: **Field Shift: Adapting Farms with NASA Data**; related capabilities: *Be An Earth System Trend Detective!* and *Harmonization of MODIS and VIIRS Hot Spots*.
 
