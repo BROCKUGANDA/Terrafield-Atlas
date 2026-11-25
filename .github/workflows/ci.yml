@@ -39,7 +39,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://postgres@postgres:5432/terrafield_test
       REDIS_URL: redis://redis:6379/15
       TEST_REDIS_URL: redis://redis:6379/15
-      REDIS_KEY_PREFIX: terrafield:ci:
+      REDIS_KEY_PREFIX: "terrafield:ci:"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
