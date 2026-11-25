@@ -7,6 +7,7 @@ if [ "$#" -ne 2 ]; then
 fi
 IMAGE_TAR="$1"
 IMAGE_TAG="$2"
+COMPOSE_FILES="${COMPOSE_FILES:-compose.yaml}"
 [ -s "$IMAGE_TAR" ] || { echo "image artifact is missing or empty" >&2; exit 2; }
 [ -f .env ] || { echo "deployment .env is required" >&2; exit 2; }
 
@@ -19,19 +20,23 @@ export IMAGE_TAG
 
 rollback() {
   echo "release gate failed; restoring database and previous image" >&2
-  docker compose stop web web-secondary worker scheduler outbox > /dev/null 2>&1 || true
+# shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES stop web web-secondary worker scheduler outbox > /dev/null 2>&1 || true
   docker compose exec -T postgres pg_restore -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-terrafield}" --clean --if-exists --no-owner --exit-on-error < "$BACKUP" > /dev/null
   if [ -n "$PREVIOUS_IMAGE" ]; then
     docker tag "$PREVIOUS_IMAGE" terrafield-atlas:rollback
-    IMAGE_TAG=rollback docker compose up -d web web-secondary worker scheduler outbox caddy > /dev/null
+    # shellcheck disable=SC2086
+    IMAGE_TAG=rollback docker compose $COMPOSE_FILES up -d web web-secondary worker scheduler outbox caddy > /dev/null
   else
-    IMAGE_TAG="$IMAGE_TAG" docker compose up -d web web-secondary worker scheduler outbox caddy > /dev/null
+    # shellcheck disable=SC2086
+    IMAGE_TAG="$IMAGE_TAG" docker compose $COMPOSE_FILES up -d web web-secondary worker scheduler outbox caddy > /dev/null
   fi
   exit 1
 }
 trap rollback ERR INT TERM
 
-docker compose up -d --wait migrate web web-secondary worker scheduler outbox caddy prometheus grafana
+# shellcheck disable=SC2086
+docker compose $COMPOSE_FILES up -d --wait migrate web web-secondary worker scheduler outbox caddy prometheus grafana
 
 READY_URL="${NEXTAUTH_URL%/}/api/v1/readyz"
 for attempt in $(seq 1 60); do

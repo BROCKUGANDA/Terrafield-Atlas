@@ -1,0 +1,18 @@
+[Unit]
+Description=TerraField Atlas Caddy edge — TLS termination for terrafieldatlas.us
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/bin/caddy run --config /etc/caddy/terrafield/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/terrafield/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
