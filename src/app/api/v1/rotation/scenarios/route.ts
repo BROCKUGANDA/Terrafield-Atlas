@@ -1,16 +1,20 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
+import {
+  apiHandler, clientKey, dedupedBoundedArray, decodeCursor, encodeCursor, errorResponse,
+  jsonResponse, paginationSchema, parseBody, rateLimit, rateLimitResponse,
+  withIdempotency, writeMutationEffects,
+} from '@/lib/api/helpers';
 import { evaluateRotation } from '@/lib/crops/rotation-engine';
-import { CROP_CATALOGUE, CROP_CATALOGUE_VERSION, cropByKey } from '@/lib/crops/catalogue';
+import { CROP_CATALOGUE_VERSION, cropByKey } from '@/lib/crops/catalogue';
 import { rainfallMonthlyStats, thermalMonthlyStats } from '@/lib/ingest/power';
 import type { Priorities, SoilInformation } from '@/lib/crops/rotation-engine';
+import { accountUserId } from '@/lib/auth';
+import { visibleOwner } from '@/lib/account-access';
 
 /**
  * POST /api/v1/rotation/scenarios — evaluate + persist a named scenario
  * GET  /api/v1/rotation/scenarios?farmId= — list stored scenarios
- *
- * The engine is deterministic: same inputs + rule version → same outputs.
  */
 
 const prioritiesSchema = z.object({
@@ -26,85 +30,58 @@ const prioritiesSchema = z.object({
 const bodySchema = z.object({
   farmId: z.string(),
   name: z.string().min(1).max(120),
-  cropKeys: z.array(z.string()).min(1).max(8),
-  priorities: prioritiesSchema.default({}),
+  cropKeys: dedupedBoundedArray(z.string(), 8, 1),
+  priorities: prioritiesSchema.prefault({}),
   persist: z.boolean().default(true),
 });
 
-export async function loadFarmContext(farmId: string): Promise<{
+async function loadFarmContext(farmId: string): Promise<{
   lat: number;
   lon: number;
   soil: SoilInformation | null;
   rainfall: Awaited<ReturnType<typeof rainfallMonthlyStats>>;
   thermal: Awaited<ReturnType<typeof thermalMonthlyStats>>;
-  soilSourceDetail: string | null;
 } | null> {
   const farm = await db.farm.findUnique({ where: { id: farmId } });
   if (!farm) return null;
-  const { centroidLat, centroidLon } = farm;
-
   const soilTests = await db.soilTest.findMany({
     where: { farmId },
-    orderBy: [{ source: 'asc' }, { measuredAt: 'desc' }], // 'farmer' < 'laboratory' < 'soilgrids'
+    orderBy: [{ source: 'asc' }, { measuredAt: 'desc' }, { id: 'desc' }],
+    take: 200,
   });
-  const measured = soilTests.find((t) => t.source === 'laboratory') ?? soilTests.find((t) => t.source === 'farmer');
-  const modeled = soilTests.find((t) => t.source === 'soilgrids');
+  const measured = soilTests.find((test) => test.source === 'laboratory') ?? soilTests.find((test) => test.source === 'farmer');
+  const modeled = soilTests.find((test) => test.source === 'soilgrids');
   const chosen = measured ?? modeled ?? null;
-
   const soil: SoilInformation | null = chosen
-    ? {
-        ph: chosen.ph,
-        texture: chosen.texture,
-        source: chosen.source as SoilInformation['source'],
-        organicCarbonPct: chosen.organicCarbonPct,
-      }
+    ? { ph: chosen.ph, texture: chosen.texture, source: chosen.source as SoilInformation['source'], organicCarbonPct: chosen.organicCarbonPct }
     : null;
-
   const [rainfall, thermal] = await Promise.all([
-    rainfallMonthlyStats(centroidLat, centroidLon),
-    thermalMonthlyStats(centroidLat, centroidLon),
+    rainfallMonthlyStats(farm.centroidLat, farm.centroidLon, farm.ownerId ? farmId : undefined),
+    thermalMonthlyStats(farm.centroidLat, farm.centroidLon, farm.ownerId ? farmId : undefined),
   ]);
-
-  return {
-    lat: centroidLat,
-    lon: centroidLon,
-    soil,
-    rainfall,
-    thermal,
-    soilSourceDetail: chosen?.sourceDetail ?? null,
-  };
+  return { lat: farm.centroidLat, lon: farm.centroidLon, soil, rainfall, thermal };
 }
 
-export const POST = apiHandler(async (req, { correlationId }) => {
-  const rl = rateLimit(clientKey(req, 'rotation:scenarios'), { capacity: 20, refillPerMinute: 10 });
+export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, '/api/v1/rotation/scenarios', async (req, { userId }) => {
+  const rl = await rateLimit(clientKey(req, 'rotation:scenarios'), { capacity: 20, refillPerMinute: 10 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, bodySchema);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
 
-  const ctx = await loadFarmContext(body.farmId);
-  if (!ctx) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${body.farmId} not found`, correlationId } }, { status: 404, correlationId });
-  }
+  const context = await loadFarmContext(body.farmId);
+  if (!context) return errorResponse(404, 'NOT_FOUND', `farm ${body.farmId} not found`, correlationId);
   for (const key of body.cropKeys) {
-    if (!cropByKey(key)) {
-      return jsonResponse({ error: { code: 'UNKNOWN_CROP', message: `crop '${key}' is not in catalogue version ${CROP_CATALOGUE_VERSION}`, correlationId } }, { status: 400, correlationId });
-    }
+    if (!cropByKey(key)) return errorResponse(400, 'UNKNOWN_CROP', `crop '${key}' is not in catalogue version ${CROP_CATALOGUE_VERSION}`, correlationId);
   }
 
   const priorities: Priorities = body.priorities;
+  const result = evaluateRotation(body.cropKeys, body.name, { rainfall: context.rainfall, thermal: context.thermal }, context.soil, priorities);
+  if (!body.persist) return jsonResponse({ result }, { correlationId });
 
-  const result = evaluateRotation(
-    body.cropKeys,
-    body.name,
-    { rainfall: ctx.rainfall, thermal: ctx.thermal },
-    ctx.soil,
-    priorities,
-  );
-
-  if (body.persist) {
-    const scenario = await db.rotationScenario.create({
-      data: {
+  return {
+    commit: async (tx) => {
+      const scenario = await tx.rotationScenario.create({ data: {
         farmId: body.farmId,
         name: body.name,
         cropKeys: JSON.stringify(body.cropKeys),
@@ -114,39 +91,47 @@ export const POST = apiHandler(async (req, { correlationId }) => {
         overallScore: result.overallScore,
         confidence: result.confidence,
         incompatibleJson: JSON.stringify(result.incompatible),
-      },
-    });
-    await db.auditEvent.create({
-      data: { actor: 'demo-user', action: 'scenario.create', targetId: scenario.id, detail: `${body.name}: ${body.cropKeys.join('→')}` },
-    });
-    return jsonResponse({ scenarioId: scenario.id, result }, { status: 201, correlationId });
-  }
-  return jsonResponse({ result }, { correlationId });
-});
+      } });
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'scenario.create',
+        targetId: scenario.id,
+        detail: `${body.name}: ${body.cropKeys.join('→')}`,
+        aggregateType: 'RotationScenario',
+        aggregateId: scenario.id,
+        eventType: 'scenario.created',
+        payload: { scenarioId: scenario.id, farmId: body.farmId, ownerId: userId },
+      });
+      return jsonResponse({ scenarioId: scenario.id, result }, { status: 201, correlationId });
+    },
+  };
+}));
 
 export const GET = apiHandler(async (req, { correlationId }) => {
   const url = new URL(req.url);
   const farmId = url.searchParams.get('farmId') ?? undefined;
+  const query = paginationSchema(100, 50).parse(Object.fromEntries(url.searchParams.entries()));
   const scenarios = await db.rotationScenario.findMany({
-    where: farmId ? { farmId } : undefined,
-    orderBy: { createdAt: 'desc' },
-    take: 50,
+    where: { ...(farmId ? { farmId } : {}), farm: visibleOwner(await accountUserId(req)) },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: query.limit + 1,
+    ...(query.cursor ? { cursor: { id: decodeCursor(query.cursor) }, skip: 1 } : {}),
   });
-  return jsonResponse(
-    {
-      scenarios: scenarios.map((s) => ({
-        id: s.id,
-        farmId: s.farmId,
-        name: s.name,
-        cropKeys: JSON.parse(s.cropKeys) as string[],
-        ruleVersion: s.ruleVersion,
-        overallScore: s.overallScore,
-        confidence: s.confidence,
-        incompatible: JSON.parse(s.incompatibleJson ?? '[]'),
-        createdAt: s.createdAt,
-        result: JSON.parse(s.scoresJson),
-      })),
-    },
-    { correlationId },
-  );
+  const page = scenarios.slice(0, query.limit);
+  const nextCursor = scenarios.length > query.limit ? encodeCursor(page[page.length - 1].id) : null;
+  return jsonResponse({
+    scenarios: page.map((scenario) => ({
+      id: scenario.id,
+      farmId: scenario.farmId,
+      name: scenario.name,
+      cropKeys: JSON.parse(scenario.cropKeys) as string[],
+      ruleVersion: scenario.ruleVersion,
+      overallScore: scenario.overallScore,
+      confidence: scenario.confidence,
+      incompatible: JSON.parse(scenario.incompatibleJson ?? '[]'),
+      createdAt: scenario.createdAt,
+      result: JSON.parse(scenario.scoresJson),
+    })),
+    nextCursor,
+  }, { correlationId });
 });

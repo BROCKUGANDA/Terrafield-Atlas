@@ -1,19 +1,26 @@
 'use client';
 
 import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { AppShell } from '@/components/app-shell';
 import { useSession } from '@/components/state/store';
 import { useConsoleUrlSync } from '@/hooks/use-console-sync';
 import { LandingView } from '@/components/views/landing';
-import { DashboardView } from '@/components/views/dashboard';
-import { ExplorerView } from '@/components/views/explorer';
-import { AnalysisView } from '@/components/views/analysis';
-import { FarmWorkspaceView } from '@/components/views/farm-workspace';
-import { RotationPlannerView } from '@/components/views/rotation-planner';
-import { ProvenanceView } from '@/components/views/provenance';
-import { FireIntelligenceView } from '@/components/views/fire-intelligence';
-import { ReportsView } from '@/components/views/reports';
-import { SettingsView } from '@/components/views/settings';
+const DashboardView = dynamic(() => import('@/components/views/dashboard').then((m) => m.DashboardView));
+const ExplorerView = dynamic(() => import('@/components/views/explorer').then((m) => m.ExplorerView));
+const SourcesView = dynamic(() => import('@/components/views/sources').then((m) => m.SourcesView));
+const AnalysisView = dynamic(() => import('@/components/views/analysis').then((m) => m.AnalysisView));
+const FarmWorkspaceView = dynamic(() => import('@/components/views/farm-workspace').then((m) => m.FarmWorkspaceView));
+const RotationPlannerView = dynamic(() => import('@/components/views/rotation-planner').then((m) => m.RotationPlannerView));
+const ProvenanceView = dynamic(() => import('@/components/views/provenance').then((m) => m.ProvenanceView));
+const FireIntelligenceView = dynamic(() => import('@/components/views/fire-intelligence').then((m) => m.FireIntelligenceView));
+const ReportsView = dynamic(() => import('@/components/views/reports').then((m) => m.ReportsView));
+const OrganizationsView = dynamic(() => import('@/components/views/organizations').then((m) => m.OrganizationsView));
+const BillingView = dynamic(() => import('@/components/views/billing').then((m) => m.BillingView));
+const IntelligenceView = dynamic(() => import('@/components/views/intelligence').then((m) => m.IntelligenceView));
+const AdminView = dynamic(() => import('@/components/views/admin').then((m) => m.AdminView));
+const SettingsView = dynamic(() => import('@/components/views/settings').then((m) => m.SettingsView));
 
 /**
  * Single-route console. Access model:
@@ -30,6 +37,10 @@ export default function Home() {
   // exact console position is bookmarkable and shareable.
   useConsoleUrlSync(!!operator);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [activeView]);
+
   return (
     <AppShell>
       <AnimatePresence mode="wait" initial={false}>
@@ -43,12 +54,17 @@ export default function Home() {
           {activeView === 'landing' && <LandingView />}
           {activeView === 'dashboard' && <DashboardView />}
           {activeView === 'explorer' && <ExplorerView />}
+          {activeView === 'sources' && <SourcesView />}
           {activeView === 'analysis' && <AnalysisView />}
           {activeView === 'farm' && <FarmWorkspaceView />}
           {activeView === 'rotation' && <RotationPlannerView />}
           {activeView === 'provenance' && <ProvenanceView />}
           {activeView === 'fire' && <FireIntelligenceView />}
           {activeView === 'reports' && <ReportsView />}
+          {activeView === 'organizations' && <OrganizationsView />}
+          {activeView === 'billing' && <BillingView />}
+          {activeView === 'intelligence' && <IntelligenceView />}
+          {activeView === 'admin' && <AdminView />}
           {activeView === 'settings' && <SettingsView />}
         </motion.section>
       </AnimatePresence>

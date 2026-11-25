@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { GIBS_LAYERS } from '@/lib/adapters/gibsLayers';
-import { jsonResponse } from '@/lib/api/helpers';
+import { apiHandler, jsonResponse } from '@/lib/api/helpers';
 
 /**
  * GET /api/v1/observations/sources
@@ -9,26 +9,27 @@ import { jsonResponse } from '@/lib/api/helpers';
  * rate limits, license, attribution, limitations and status.
  * Plus the GIBS map-layer registry used by the Geospatial Explorer.
  */
-export async function GET() {
+export const GET = apiHandler(async (_req, { correlationId }) => {
   const sources = await db.dataSource.findMany({
     orderBy: { datasetName: 'asc' },
+    take: 500,
   });
   return jsonResponse({
     sources,
-    mapLayers: GIBS_LAYERS.map((l) => ({
-      id: l.id,
-      name: l.name,
-      group: l.group,
-      format: l.format,
-      resolution: l.resolution,
-      temporalCoverage: l.temporalCoverage,
-      cadence: l.cadence,
-      description: l.description,
-      productSource: l.productSource,
-      limitations: l.limitations,
-      tileMatrixSet: l.tileMatrixSet,
+    mapLayers: GIBS_LAYERS.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      group: layer.group,
+      format: layer.format,
+      resolution: layer.resolution,
+      temporalCoverage: layer.temporalCoverage,
+      cadence: layer.cadence,
+      description: layer.description,
+      productSource: layer.productSource,
+      limitations: layer.limitations,
+      tileMatrixSet: layer.tileMatrixSet,
     })),
-    note:
-      'The register is first-class provenance: every observation and analysis in this platform is traceable to one of these sources and its retrieval timestamp.',
-  });
-}
+    note: 'The register is first-class provenance: every observation and analysis is traceable to a source and retrieval timestamp.',
+    correlationId,
+  }, { correlationId });
+});

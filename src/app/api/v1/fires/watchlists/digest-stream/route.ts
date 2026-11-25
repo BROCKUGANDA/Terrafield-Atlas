@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { clientKey, errorResponse, rateLimit } from '@/lib/api/helpers';
-import { getCorrelationId } from '@/lib/correlation';
+import { apiHandler, clientKey, errorResponse, rateLimit } from '@/lib/api/helpers';
 import {
   formatSseComment,
   formatSseMessage,
@@ -12,6 +11,8 @@ import {
 } from '@/lib/fires/digest-push';
 import { digestChannel, digestChannelStatus } from '@/lib/fires/digest-channel';
 import { schedulerEnabled, schedulerStatusTickSec } from '@/lib/scheduler';
+import { getToken } from 'next-auth/jwt';
+import { db } from '@/lib/db';
 
 /**
  * GET /api/v1/fires/watchlists/digest-stream — the push-style digest delivery
@@ -29,7 +30,7 @@ import { schedulerEnabled, schedulerStatusTickSec } from '@/lib/scheduler';
  *   event: watchlist.digest     pushed cadence-aware digests — recomputed the
  *                               moment an evaluation event lands (manual,
  *                               backtest or scheduled) or a scheduled run
- *                               fails, and written to EVERY open console
+ *                               fails; private digests reach only their owner
  *
  * Semantics, honestly stated:
  *   - No replay buffer. A reconnect starts a fresh hello and receives only
@@ -47,12 +48,10 @@ export const dynamic = 'force-dynamic';
 
 const encoder = new TextEncoder();
 
-export async function GET(req: NextRequest) {
-  const correlationId = getCorrelationId(req.headers.get('x-correlation-id'));
-
+export const GET = apiHandler(async (req: NextRequest, { correlationId }) => {
   // Connection-storm guard: one token per CONNECT (events afterwards are
   // pushed by the server, never requested).
-  const rl = rateLimit(clientKey(req, 'watchlists:digest-stream'), { capacity: 30, refillPerMinute: 12 });
+  const rl = await rateLimit(clientKey(req, 'watchlists:digest-stream'), { capacity: 30, refillPerMinute: 12 });
   if (!rl.allowed) {
     const res = errorResponse(429, 'RATE_LIMITED', `too many stream connections; retry after ${rl.retryAfterSec}s`, correlationId);
     res.headers.set('Retry-After', String(rl.retryAfterSec));
@@ -86,8 +85,21 @@ export async function GET(req: NextRequest) {
   }
 
   const connectionId = crypto.randomUUID();
+  // Only the signed NextAuth cookie establishes an audience. Query parameters
+  // and client-supplied owner headers never participate in authorization.
+  const sessionOwner = async (): Promise<string | null> => {
+    try {
+      if (!process.env.NEXTAUTH_SECRET) return null;
+      const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+      if (!token?.sub || typeof token.exp !== 'number' || token.exp * 1000 <= Date.now()) return null;
+      const user = await db.accountUser.findUnique({ where: { id: token.sub }, select: { id: true, emailVerified: true } });
+      return user?.emailVerified && token.exp * 1000 > Date.now() ? user.id : null;
+    } catch { return null; }
+  };
+  const ownerId = await sessionOwner();
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   let sinkRegistered = false;
+  let closeStream = () => {};
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -109,6 +121,9 @@ export async function GET(req: NextRequest) {
       // check above, say so and close instead of silently dropping events.
       const sink: DigestSink = {
         clientId: connectionId,
+        ownerId: ownerId ?? undefined,
+        authorizePrivate: async () => ownerId !== null && await sessionOwner() === ownerId,
+        close: () => cleanup(),
         send(chunk) {
           controller.enqueue(encoder.encode(chunk));
         },
@@ -125,17 +140,22 @@ export async function GET(req: NextRequest) {
         if (keepaliveTimer) clearInterval(keepaliveTimer);
         keepaliveTimer = null;
         if (sinkRegistered) hub.unregister(connectionId);
+        sinkRegistered = false;
+        req.signal.removeEventListener('abort', cleanup);
         try {
           controller.close();
         } catch {
           // already closed — nothing to do
         }
       };
+      closeStream = cleanup;
 
       // Comment heartbeat: keeps proxies from idling the stream out and
       // carries no data. Timer is unref'd — it never holds the process open.
-      keepaliveTimer = setInterval(() => {
+      keepaliveTimer = setInterval(async () => {
         try {
+          if (ownerId && await sessionOwner() !== ownerId) { cleanup(); return; }
+          if (!sinkRegistered) return;
           controller.enqueue(encoder.encode(formatSseComment('keepalive')));
         } catch {
           cleanup(); // stream already dead — drop the timer and the slot
@@ -145,23 +165,23 @@ export async function GET(req: NextRequest) {
 
       // Client went away (tab closed, navigate, network drop): free the slot.
       req.signal.addEventListener('abort', cleanup);
+      if (req.signal.aborted) cleanup();
     },
     cancel() {
       // The consumer released the stream (browser closed the EventSource).
-      if (keepaliveTimer) clearInterval(keepaliveTimer);
-      keepaliveTimer = null;
-      if (sinkRegistered) hub.unregister(connectionId);
+      closeStream();
     },
   });
 
   return sseResponse(stream, correlationId);
-}
+});
 
 function sseResponse(stream: ReadableStream<Uint8Array>, correlationId: string): NextResponse {
   return new NextResponse(stream, {
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
+      'Cache-Control': 'private, no-store, no-transform',
+      'Vary': 'Cookie',
       'X-Accel-Buffering': 'no', // never let a proxy buffer the stream
       'X-Correlation-Id': correlationId,
     },

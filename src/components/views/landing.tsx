@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSession as useAccountSession } from 'next-auth/react';
 import { motion } from 'framer-motion';
 import {
   Satellite, Droplets, Thermometer, Leaf, Flame, FileSearch, ArrowRight,
@@ -94,12 +95,31 @@ const fadeUp = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// A/B: landing-hero-v1 — deterministic variant assignment, real exposure and
-// outcome ledger (src/lib/experiments.ts). The unit id is a client-generated
-// UUID in localStorage — a random label with no identity attached.
+// A/B: deterministic public assignment; only verified same-origin account
+// sessions persist exposures/outcomes. The unit id is a random, non-PII label.
 // ---------------------------------------------------------------------------
 const EXPERIMENT_KEY = 'landing-hero-v1';
 const EXPERIMENT_OUTCOME = 'experiment.cta_enter_console';
+
+function experimentIdempotencyKey(storageKey: string): string {
+  try {
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+    const fresh = `tf-ab-${crypto.randomUUID()}`;
+    sessionStorage.setItem(storageKey, fresh);
+    return fresh;
+  } catch {
+    return `tf-ab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function recordExperimentEvent(unit: string, outcome: string, storageKey: string) {
+  fetch('/api/v1/experiments', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': experimentIdempotencyKey(storageKey) },
+    body: JSON.stringify({ exp: EXPERIMENT_KEY, unit, outcome }),
+  }).catch(() => {});
+}
 
 function visitorUnitId(): string {
   try {
@@ -118,6 +138,8 @@ export function LandingView() {
   const login = useSession((s) => s.login);
   const logout = useSession((s) => s.logout);
   const setView = useSession((s) => s.setView);
+  const { data: accountSession } = useAccountSession();
+  const verifiedAccount = accountSession?.user?.email;
 
   const sources = useQuery({ queryKey: ['sources'], queryFn: api.sources });
   const status = useQuery({ queryKey: ['system-status'], queryFn: api.systemStatus });
@@ -126,9 +148,8 @@ export function LandingView() {
   const [callsign, setCallsign] = useState('');
   const [hoveredStation, setHoveredStation] = useState<GlobeStation | null>(null);
 
-  // A/B assignment — one fetch on mount; the server records the exposure
-  // (distinct-unit ledger). Copy falls back to the control text until the
-  // assignment lands; the page never blocks on it.
+  // Public assignment is read-only. Verified account sessions separately
+  // persist an idempotent exposure; copy falls back until assignment lands.
   const unitIdRef = useRef('');
   const [heroCopy, setHeroCopy] = useState<{ intro: string; cta: string } | null>(null);
   useEffect(() => {
@@ -148,21 +169,21 @@ export function LandingView() {
   const heroIntro = heroCopy?.intro ?? HERO_INTRO;
   const heroCta = heroCopy?.cta ?? 'Enter console';
 
+  useEffect(() => {
+    if (verifiedAccount && unitIdRef.current) recordExperimentEvent(unitIdRef.current, 'experiment.exposure', 'tf_ab_exposure_key');
+  }, [verifiedAccount]);
+
   /** Outcome ledger — at most ONE conversion recorded per unit per session. */
   const recordEnterOutcome = () => {
     const unit = unitIdRef.current;
-    if (!unit) return;
+    if (!verifiedAccount || !unit) return;
     try {
       if (sessionStorage.getItem('tf_ab_outcome_done') === '1') return;
       sessionStorage.setItem('tf_ab_outcome_done', '1');
     } catch {
-      /* storage unavailable — still record; the ledger tolerates repeats */
+      /* storage unavailable — the server idempotency key still prevents replay */
     }
-    fetch('/api/v1/experiments', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ exp: EXPERIMENT_KEY, unit, outcome: EXPERIMENT_OUTCOME }),
-    }).catch(() => {});
+    recordExperimentEvent(unit, EXPERIMENT_OUTCOME, 'tf_ab_outcome_key');
   };
 
   // Lazy-mount the 3D layer after first paint to keep the hero instant.
@@ -513,7 +534,7 @@ export function LandingView() {
                 </div>
               }
             >
-              <div className="max-h-96 overflow-y-auto">
+              <div className="max-h-96 overflow-x-auto overflow-y-auto" tabIndex={0} role="region" aria-label="Data source registry table">
                 <Table className="mc-table w-full min-w-[42rem]">
                   <TableHeader>
                     <TableRow className="border-edge hover:bg-transparent">

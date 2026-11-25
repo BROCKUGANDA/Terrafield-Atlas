@@ -1,0 +1,35 @@
+{
+  "baseUrl": "http://127.0.0.1:13000",
+  "startedAt": "2026-11-25T10:59:55.221Z",
+  "checks": [
+    {
+      "name": "anonymous writes to seeded records are denied",
+      "status": "passed"
+    },
+    {
+      "name": "offline recovery shows an actionable fault and retries successfully",
+      "status": "passed"
+    },
+    {
+      "name": "a delayed location response cannot replace the newer selection",
+      "status": "passed"
+    },
+    {
+      "name": "provider degradation remains visible and never fabricates data",
+      "status": "passed"
+    },
+    {
+      "name": "durable queue failure is surfaced without a fake success",
+      "status": "passed"
+    }
+  ],
+  "failures": [],
+  "skipped": [
+    {
+      "name": "authenticated create/edit/delete",
+      "reason": "TEST_ACCOUNT_EMAIL/TEST_ACCOUNT_PASSWORD not supplied"
+    }
+  ],
+  "finishedAt": "2026-11-25T11:00:29.139Z",
+  "status": "passed"
+}

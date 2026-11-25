@@ -1,10 +1,13 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { apiHandler, jsonResponse, parseBody } from '@/lib/api/helpers';
+import { apiHandler, decodeCursor, encodeCursor, jsonResponse, paginationSchema, parseBody } from '@/lib/api/helpers';
 import { aggregateAnnual, analyzeTrend } from '@/lib/stats/analyze';
 import { rainfallMonthlyStats, thermalMonthlyStats } from '@/lib/ingest/power';
 import { POWER_VARIABLES } from '@/lib/types';
 import type { ObservationPoint, VariableKey } from '@/lib/types';
+import type { ApiRequestLog } from '@prisma/client';
+import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { assertEntitlement, recordUsage } from '@/lib/commercial';
 
 /**
  * POST /api/v1/reports
@@ -14,7 +17,22 @@ import type { ObservationPoint, VariableKey } from '@/lib/types';
  * The frontend renders it printable (browser print → PDF).
  */
 
-const bodySchema = z.object({ farmId: z.string() });
+const bodySchema = z.object({ farmId: z.string(), persist: z.boolean().default(false) });
+
+export const GET = apiHandler(async (req, { correlationId }) => {
+  const context = await resolveTenantContext(req);
+  if (!context.userId) return jsonResponse({ reports: [] }, { correlationId });
+  const query = paginationSchema(100, 50).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
+  const rows = await db.reportRecord.findMany({
+    where: context.organizationId ? { organizationId: context.organizationId } : { ownerId: context.userId },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: query.limit + 1,
+    ...(query.cursor ? { cursor: { id: decodeCursor(query.cursor) }, skip: 1 } : {}),
+    select: { id: true, title: true, format: true, farmId: true, createdAt: true },
+  });
+  const page = rows.slice(0, query.limit);
+  return jsonResponse({ reports: page, nextCursor: rows.length > query.limit ? encodeCursor(page[page.length - 1].id) : null }, { correlationId });
+});
 
 export const POST = apiHandler(async (req, { correlationId }) => {
   const parsed = await parseBody(req, bodySchema);
@@ -32,7 +50,7 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   const { centroidLat: lat, centroidLon: lon } = farm;
 
   const rows = await db.environmentalObservation.findMany({
-    where: { lat, lon },
+    where: { lat, lon, ownerId: farm.ownerId, organizationId: farm.organizationId, ...(farm.ownerId ? { farmId } : {}) },
     orderBy: { obsDate: 'asc' },
   });
   const scenarios = await db.rotationScenario.findMany({
@@ -67,17 +85,15 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   );
   const annual = Object.fromEntries(trendResults.map((r) => [r.variable, aggregateAnnual(r.variable, byVar.get(r.variable) ?? [])]));
 
-  const [rainfall, thermal] = await Promise.all([rainfallMonthlyStats(lat, lon), thermalMonthlyStats(lat, lon)]);
+  const scope = farm.ownerId ? farmId : undefined;
+  const [rainfall, thermal] = await Promise.all([rainfallMonthlyStats(lat, lon, scope), thermalMonthlyStats(lat, lon, scope)]);
 
   const soil = farm.soilTests;
   const measured = soil.find((t) => t.source === 'laboratory') ?? soil.find((t) => t.source === 'farmer') ?? null;
   const soilgrids = soil.find((t) => t.source === 'soilgrids') ?? null;
 
-  const requestLogs = await db.apiRequestLog.findMany({
-    where: { OR: [{ provider: 'NASA_POWER' }, { provider: 'GIBS' }, { provider: 'SOILGRIDS' }] },
-    orderBy: { retrievedAt: 'desc' },
-    take: 12,
-  });
+  // Provider request rows have no tenant attribution and contain coordinates.
+  const requestLogs: ApiRequestLog[] = [];
 
   const report = {
     generatedAt: new Date().toISOString(),
@@ -177,5 +193,24 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     ],
   };
 
+  if (parsed.data.persist) {
+    const context = await resolveTenantContext(req);
+    if (!context.userId) return jsonResponse({ error: { code: 'AUTH_REQUIRED', message: 'sign in to persist a report', correlationId } }, { status: 401, correlationId });
+    requirePermission(context, 'report.create');
+    await assertEntitlement(context, 'reports_per_month');
+    const stored = await db.reportRecord.create({
+      data: {
+        organizationId: context.organizationId ?? farm.organizationId,
+        ownerId: context.userId,
+        farmId: farm.id,
+        title: `${farm.name} — evidence assessment`,
+        format: 'json',
+        contentJson: JSON.stringify(report),
+        provenanceJson: JSON.stringify({ datasetVersions: report.environmentalRecord.datasetVersions, generatedAt: report.generatedAt, correlationId, methodology: report.methodology }),
+      },
+    });
+    await recordUsage({ context, metric: 'reports_per_month', operationId: `report:${stored.id}` });
+    return jsonResponse({ ...report, reportId: stored.id, persisted: true }, { correlationId });
+  }
   return jsonResponse(report, { correlationId });
 });

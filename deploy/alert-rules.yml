@@ -1,0 +1,39 @@
+groups:
+  - name: terrafield
+    rules:
+      - alert: TerrafieldDatabaseDown
+        expr: terrafield_database_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "TerraField database is unavailable"
+      - alert: TerrafieldRedisDown
+        expr: terrafield_redis_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "TerraField Redis is unavailable"
+      - alert: TerrafieldSchedulerLeaderMissing
+        expr: terrafield_scheduler_leader == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "TerraField scheduler has no fresh leader"
+      - alert: TerrafieldWorkersMissing
+        expr: terrafield_queue_workers == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "TerraField durable workers are missing"
+      - alert: TerrafieldQueueOldestJobAge
+        expr: terrafield_queue_oldest_job_age_seconds > 600
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "TerraField queue has an oldest job older than 10 minutes"
+      - alert: TerrafieldHttpErrorRate
+        expr: sum(rate(terrafield_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(terrafield_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "TerraField HTTP 5xx rate exceeds 5%"

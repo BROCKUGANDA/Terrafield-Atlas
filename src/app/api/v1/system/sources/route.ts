@@ -1,4 +1,5 @@
-import { apiHandler, jsonResponse } from '@/lib/api/helpers';
+import { apiHandler, jsonResponse, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
+import { requireAdministrator } from '@/lib/account-access';
 import { sourceSigns } from '@/lib/source-health';
 import { fetchEonetWildfires } from '@/lib/adapters/eonet';
 
@@ -15,6 +16,11 @@ import { fetchEonetWildfires } from '@/lib/adapters/eonet';
 export const GET = apiHandler(async (req, { correlationId }) => {
   const url = new URL(req.url);
   const force = url.searchParams.get('force') === '1';
+  if (force) {
+    const userId = await requireAdministrator(req);
+    const rl = await rateLimit(`system:sources:force:${userId}`, { capacity: 6, refillPerMinute: 2 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
+  }
   const signs = await sourceSigns(force);
   const eonet = await fetchEonetWildfires({ days: 10, correlationId });
   return jsonResponse(

@@ -233,7 +233,8 @@ describe('confidence floor and reporting', () => {
     });
     expect(ev.daysNoData).toEqual(['2026-10-12']);
     expect(ev.rationale).toContain('archive gaps');
-    expect(ev.status).toBe('clear'); // gap day is checked-but-no-archive, not unchecked
+    expect(ev.status).toBe('unverified'); // checked-but-missing is not evidence of no fires
+    expect(ev.coverageComplete).toBe(false);
   });
 
   test('perDay counts total vs qualifying separately', () => {

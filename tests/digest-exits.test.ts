@@ -192,6 +192,25 @@ describe('webhook SSRF guard', () => {
     expect(assertWebhookTargetSafe('http://100.128.0.1/digest').ok).toBe(true);
   });
 
+  test('IPv4-mapped, compatible, NAT64 and non-global IPv6 targets are refused', () => {
+    for (const url of [
+      'http://[::ffff:127.0.0.1]/digest',
+      'http://[::ffff:7f00:1]/digest',
+      'http://[::ffff:10.0.0.1]/digest',
+      'http://[::127.0.0.1]/digest',
+      'http://[::7f00:1]/digest',
+      'http://[::]/digest',
+      'http://[64:ff9b::7f00:1]/digest',
+      'http://[64:ff9b:1::a00:1]/digest',
+      'http://[2002:7f00:1::]/digest',
+      'http://[fe80::1]/digest',
+      'http://[fc00::1]/digest',
+      'http://[ff02::1]/digest',
+    ]) expect(assertWebhookTargetSafe(url).ok, url).toBe(false);
+    expect(assertWebhookTargetSafe('http://[2606:4700:4700::1111]/digest').ok).toBe(true);
+    expect(assertWebhookTargetSafe('http://[2001:4860:4860::8888]/digest').ok).toBe(true);
+  });
+
   test('configuration reports the guard verdict for the armed URL', () => {
     const bad = parseWebhookConfig({ DIGEST_WEBHOOK_URL: 'http://169.254.169.254/x', DIGEST_WEBHOOK_SECRET: 'k'.repeat(32) });
     expect(bad.enabled).toBe(true);
@@ -382,6 +401,7 @@ function fakePayload(p: Partial<DigestPushPayload>): DigestPushPayload {
       current: { evaluations: 1, last: { status: 'clear' } },
     } as unknown as DigestPushPayload['digest'],
     ...p,
+    eventId: p.eventId ?? 'event-1',
   };
 }
 

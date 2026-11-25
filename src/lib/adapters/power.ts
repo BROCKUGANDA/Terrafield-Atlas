@@ -1,5 +1,7 @@
 import { resilientFetch } from '@/lib/http';
-import { cacheGet, cacheSet, stableHash } from '@/lib/cache';
+import { cacheGet, cacheSet, canonicalKey } from '@/lib/cache';
+import { redisRuntime } from '@/lib/redis';
+import { isPrivateProvider } from '@/lib/ingest/provider-context';
 import { POWER_VARIABLES, type PowerFetchResult, type VariableKey, type VariableMeta } from '@/lib/types';
 
 /**
@@ -52,6 +54,8 @@ export interface PowerRequestInput {
   end: string;
   variables: VariableKey[];
   correlationId?: string;
+  /** Aborts the provider request when the job deadline passes. */
+  signal?: AbortSignal;
 }
 
 export function validatePowerRequest(input: PowerRequestInput): void {
@@ -106,9 +110,14 @@ export async function fetchPowerDaily(
   input: PowerRequestInput,
 ): Promise<PowerFetchResult> {
   validatePowerRequest(input);
-  const paramsKey = `${input.lat.toFixed(3)},${input.lon.toFixed(3)},${input.start},${input.end},${[...input.variables].sort().join(',')}`;
-  const cacheKey = `NASA_POWER:daily:${stableHash(paramsKey)}`;
-  const cached = cacheGet<PowerFetchResult>(cacheKey);
+  const variables = [...input.variables].sort();
+  const cacheKey = `NASA_POWER:daily:v2:${canonicalKey({ lat: input.lat, lon: input.lon, start: input.start, end: input.end, variables })}`;
+  const refresh = () => refreshPowerDaily(input, cacheKey);
+  return isPrivateProvider() ? refresh() : redisRuntime().singleFlight(`refresh:${cacheKey}`, refresh, { ttlMs: 60_000, lockMs: 90_000 });
+}
+
+async function refreshPowerDaily(input: PowerRequestInput, cacheKey: string): Promise<PowerFetchResult> {
+  const cached = await cacheGet<PowerFetchResult>(cacheKey);
   if (cached) return cached;
 
   const url =
@@ -124,6 +133,7 @@ export async function fetchPowerDaily(
     datasetId: 'POWER Daily API v2 (MERRA-2)',
     operation: 'daily-point',
     correlationId: input.correlationId,
+    signal: input.signal,
     longRunning: true,
   });
 
@@ -194,6 +204,6 @@ export async function fetchPowerDaily(
     },
   };
 
-  cacheSet(cacheKey, result, 6 * 60 * 60 * 1000);
+  await cacheSet(cacheKey, result, 6 * 60 * 60 * 1000);
   return result;
 }

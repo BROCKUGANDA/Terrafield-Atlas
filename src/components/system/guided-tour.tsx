@@ -191,7 +191,17 @@ export function GuidedTour() {
     return () => ro.disconnect();
   }, [active, stepIndex, resolved]);
 
-  // Keyboard navigation while the tour is active.
+  // Move focus into the modal card and restore it when the tour closes.
+  useEffect(() => {
+    if (!active || !resolved) return undefined;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cardRef.current?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [active, resolved]);
+
+  // Keyboard navigation and a strict Tab focus trap while the tour is active.
   useEffect(() => {
     if (!active) return undefined;
     const onKey = (e: KeyboardEvent) => {
@@ -200,6 +210,24 @@ export function GuidedTour() {
       if (e.key === 'Escape') {
         e.preventDefault();
         skip();
+        return;
+      }
+      if (e.key === 'Tab') {
+        const focusable = [...(cardRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
+        if (focusable.length === 0) {
+          e.preventDefault();
+          cardRef.current?.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && (document.activeElement === first || document.activeElement === cardRef.current)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
         return;
       }
       if (typing) return;

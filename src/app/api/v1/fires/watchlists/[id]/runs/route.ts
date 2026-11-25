@@ -27,7 +27,7 @@ const LEDGER_ACTIONS = ['watchlist.schedule.run', 'watchlist.schedule.fail'] as 
 
 export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
   const { id } = await params;
-  const rl = rateLimit(clientKey(req, 'watchlists:runs'), { capacity: 30, refillPerMinute: 20 });
+  const rl = await rateLimit(clientKey(req, 'watchlists:runs'), { capacity: 30, refillPerMinute: 20 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
 
   const w = await db.fireWatchlist.findUnique({ where: { id } });
@@ -87,7 +87,7 @@ export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) =
       counts,
       showing: runs.length,
       cap: RUN_HISTORY_CAP,
-      note: `Every scheduled run is recorded here by the in-process scheduler: successes as ledger rows plus a matching FireWatchEvent (joined on correlationId), failures as ledger rows only — a failed run never writes a status. Counts cover the whole ledger; entries show the newest ${RUN_HISTORY_CAP}. Live scheduler state (ticks, budget, next due) is in /api/v1/system/status.`,
+      note: `Every scheduled run is recorded here by the database-leased scheduler: successes as ledger rows plus a matching FireWatchEvent (joined on correlationId), failures as ledger rows only — a failed run never writes a status. Counts cover the whole ledger; entries show the newest ${RUN_HISTORY_CAP}. Live scheduler state (ticks, budget, next due) is in /api/v1/system/status.`,
       correlationId,
     },
     { correlationId },

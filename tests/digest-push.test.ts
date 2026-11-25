@@ -73,6 +73,7 @@ describe('push payload builders', () => {
 
   test('evaluation pushes carry the triggering evaluation’s trigger', () => {
     const p = buildDigestPushPayload({
+      eventId: 'event-1',
       reason: 'evaluation',
       trigger: 'scheduled',
       correlationId: 'sched-abc-12345678',
@@ -96,6 +97,7 @@ describe('push payload builders', () => {
 
   test('scheduled-failure pushes never claim an evaluation trigger', () => {
     const p = buildDigestPushPayload({
+      eventId: 'failure-1',
       reason: 'scheduled-failure',
       trigger: 'scheduled', // even if a caller passes one, failures write no evaluation
       correlationId: null,

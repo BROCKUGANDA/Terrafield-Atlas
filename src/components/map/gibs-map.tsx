@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Map as MlMap, NavigationControl, AttributionControl, setWorkerUrl } from 'maplibre-gl';
-import type { GeoJSONSource, RasterTileSource, MapMouseEvent } from 'maplibre-gl';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { Map as MlMap, NavigationControl, AttributionControl, Popup, setWorkerUrl } from 'maplibre-gl';
+import type { GeoJSONSource, RasterTileSource, MapLayerMouseEvent, MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useSession } from '@/components/state/store';
-import type { MapLayerInfo } from '@/lib/api-client';
+import type { FarmSummary, MapLayerInfo } from '@/lib/api-client';
+import { farmPinCollection, selectedFarmFocus } from '@/lib/map/farm-pins';
+import { latestDailyGibsDate } from '@/lib/map/gibs-availability';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
@@ -37,20 +39,40 @@ const GROUP_COLORS: Record<string, string> = {
 
 export interface GibsMapProps {
   layers: MapLayerInfo[];
+  farms: FarmSummary[];
+  activeFarmId: string | null;
   height?: string;
 }
 
-export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
+export function GibsMap({ layers, farms, activeFarmId, height = '70vh' }: GibsMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
-  const { location, mapDate, fireDetectionsGeoJson, farmBoundary, setFarmBoundary } = useSession();
-
+  const { location, mapDate, setMapDate, fireDetectionsGeoJson, farmBoundary, setFarmBoundary } = useSession();
+  const initialLocationRef = useRef(location);
+  const popupRef = useRef<Popup | null>(null);
+  const activeRasterSourceRef = useRef<string | null>(null);
+  const activeRasterLayerRef = useRef<string | null>(null);
+  const imageryRequestKeyRef = useRef('');
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [opacity, setOpacity] = useState<Record<string, number>>({});
   const [drawMode, setDrawMode] = useState(false);
   const [legend, setLegend] = useState<MapLayerInfo | null>(null);
   const [ready, setReady] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
   const [baseReady, setBaseReady] = useState(false);
+  const [imageryResult, setImageryResult] = useState<{ key: string; status: 'ready' | 'unavailable' } | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<{ requested: string; available: string; layerId: string; lat: number; lon: number } | null>(null);
+  const farmFeatures = useMemo(() => farmPinCollection(farms), [farms]);
+  const focus = selectedFarmFocus(farms, activeFarmId) ?? location;
+  const activeRasterLayer = layers.find((layer) => visible[layer.id]);
+  const activeRasterSourceId = activeRasterLayer ? `gibs-${activeRasterLayer.id}` : null;
+  const imageryRequestKey = activeRasterLayer ? `${activeRasterLayer.id}|${mapDate}|${focus.lat}|${focus.lon}` : '';
+  const imageryStatus = !activeRasterSourceId
+    ? 'no-layer'
+    : imageryResult?.key === imageryRequestKey
+      ? imageryResult.status
+      : 'loading';
+  const showingFallback = fallbackNotice?.available === mapDate && fallbackNotice.layerId === activeRasterLayer?.id && fallbackNotice.lat === focus.lat && fallbackNotice.lon === focus.lon;
 
   // initialise map once
   useEffect(() => {
@@ -69,17 +91,49 @@ export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
         sources: {},
         layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#060b14' } }],
       },
-      center: [location.lon, location.lat],
+      center: [initialLocationRef.current.lon, initialLocationRef.current.lat],
       zoom: 8,
       attributionControl: false,
     });
     mapRef.current = map;
     map.on('load', () => setReady(true));
+    map.on('sourcedata', (event) => {
+      const sourceEvent = event as { sourceId?: string; sourceDataType?: string };
+      if (sourceEvent.sourceId === activeRasterSourceRef.current && sourceEvent.sourceDataType === 'content') {
+        setImageryResult({ key: imageryRequestKeyRef.current, status: 'ready' });
+      }
+    });
+    map.on('idle', () => {
+      const sourceId = activeRasterSourceRef.current;
+      if (!sourceId || !map.getSource(sourceId) || !map.isSourceLoaded(sourceId)) return;
+      const key = imageryRequestKeyRef.current;
+      setImageryResult((previous) => previous?.key === key && previous.status === 'unavailable'
+        ? previous
+        : { key, status: 'ready' });
+    });
+    map.on('error', (event) => {
+      const sourceError = event as unknown as { sourceId?: string; error?: { message?: string } };
+      const activeLayerId = activeRasterLayerRef.current;
+      const errorMessage = sourceError.error?.message ?? '';
+      if (activeLayerId && (sourceError.sourceId === activeRasterSourceRef.current || errorMessage.includes(activeLayerId))) {
+        const key = imageryRequestKeyRef.current;
+        setImageryResult((previous) => previous?.key === key && previous.status === 'ready'
+          ? previous
+          : { key, status: 'unavailable' });
+      }
+    });
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
+    const observer = new ResizeObserver(() => map.resize());
+    observer.observe(containerRef.current);
     return () => {
+      observer.disconnect();
+      popupRef.current?.remove();
+      popupRef.current = null;
       map.remove();
       mapRef.current = null;
+      setReady(false);
+      setBaseReady(false);
     };
      
   }, []);
@@ -111,13 +165,15 @@ export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
     // (state is initialized here because the layer registry arrives asynchronously
     // from a query — a documented external-system synchronization)
     const first = layers.find((l) => l.group === 'satellite-imagery') ?? layers[0];
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisible((v) => (Object.keys(v).length === 0 ? { [first.id]: true } : v));
      
     setOpacity((o) => (Object.keys(o).length === 0 ? Object.fromEntries(layers.map((l) => [l.id, 0.9])) : o));
      
     setBaseReady(true);
      
+  // Date changes are applied by the source-update effect below; recreating the
+  // whole map on every date pick would discard user pan/zoom state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, layers]);
 
   // when date changes: setTiles on every raster source
@@ -142,11 +198,45 @@ export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
     }
   }, [visible, opacity, layers, ready]);
 
-  // centre marker + fly-to (requires base layers so overlays stay on top)
+  useEffect(() => {
+    activeRasterSourceRef.current = activeRasterSourceId;
+    activeRasterLayerRef.current = activeRasterLayer?.id ?? null;
+    imageryRequestKeyRef.current = imageryRequestKey;
+    if (!ready || !baseReady || !activeRasterSourceId) return;
+    const timer = window.setTimeout(() => {
+      setImageryResult((previous) => previous?.key === imageryRequestKey
+        ? previous
+        : { key: imageryRequestKey, status: 'unavailable' });
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [activeRasterLayer, activeRasterSourceId, baseReady, imageryRequestKey, ready]);
+
+  useEffect(() => {
+    if (!ready || activeRasterLayer?.id !== 'MODIS_Terra_CorrectedReflectance_TrueColor') return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    void latestDailyGibsDate(activeRasterLayer, mapDate, focus.lat, focus.lon, controller.signal).then((availableDate) => {
+      if (controller.signal.aborted) return;
+      if (!availableDate) {
+        setImageryResult({ key: imageryRequestKey, status: 'unavailable' });
+        return;
+      }
+      if (availableDate !== mapDate) {
+        setFallbackNotice({ requested: mapDate, available: availableDate, layerId: activeRasterLayer.id, lat: focus.lat, lon: focus.lon });
+        setMapDate(availableDate);
+      }
+    }).catch(() => undefined);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [activeRasterLayer, focus.lat, focus.lon, imageryRequestKey, mapDate, ready, setMapDate]);
+
+  // Centre on the selected farm when available; otherwise use the free coordinate.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !baseReady) return;
-    let marker = map.getSource('centre-marker') as GeoJSONSource | undefined;
+    const marker = map.getSource('centre-marker') as GeoJSONSource | undefined;
     if (!marker) {
       map.addSource('centre-marker', {
         type: 'geojson',
@@ -170,12 +260,53 @@ export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
         {
           type: 'Feature',
           properties: {},
-          geometry: { type: 'Point', coordinates: [location.lon, location.lat] },
+          geometry: { type: 'Point', coordinates: [focus.lon, focus.lat] },
         },
       ],
     });
-    map.flyTo({ center: [location.lon, location.lat], zoom: Math.max(map.getZoom(), 8), duration: 900 });
-  }, [location, ready, baseReady]);
+    map.flyTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 8), duration: 900 });
+  }, [focus.lat, focus.lon, ready, baseReady]);
+
+  // Public and owner-visible farm pins come from the account-filtered farms API.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !baseReady) return;
+    if (!map.getSource('farm-pins')) {
+      map.addSource('farm-pins', { type: 'geojson', data: farmFeatures });
+      map.addLayer({
+        id: 'farm-pins',
+        type: 'circle',
+        source: 'farm-pins',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#4cc3ff',
+          'circle-stroke-color': '#f8fafc',
+          'circle-stroke-width': 2,
+          'circle-opacity': 0.95,
+        },
+      });
+    }
+    (map.getSource('farm-pins') as GeoJSONSource).setData(farmFeatures);
+    map.setPaintProperty('farm-pins', 'circle-radius', ['case', ['==', ['get', 'farmId'], activeFarmId ?? ''], 10, 7]);
+    map.setPaintProperty('farm-pins', 'circle-color', ['case', ['==', ['get', 'farmId'], activeFarmId ?? ''], '#fbbf24', '#4cc3ff']);
+    const onFarmClick = (event: MapLayerMouseEvent) => {
+      const feature = event.features?.[0];
+      if (!feature || feature.geometry.type !== 'Point') return;
+      const [lon, lat] = feature.geometry.coordinates;
+      popupRef.current?.remove();
+      popupRef.current = new Popup({ closeOnClick: true }).setLngLat([lon, lat]).setText(String(feature.properties?.name ?? 'Farm')).addTo(map);
+    };
+    const onFarmEnter = () => { map.getCanvas().style.cursor = 'pointer'; };
+    const onFarmLeave = () => { map.getCanvas().style.cursor = ''; };
+    map.on('click', 'farm-pins', onFarmClick);
+    map.on('mouseenter', 'farm-pins', onFarmEnter);
+    map.on('mouseleave', 'farm-pins', onFarmLeave);
+    return () => {
+      map.off('click', 'farm-pins', onFarmClick);
+      map.off('mouseenter', 'farm-pins', onFarmEnter);
+      map.off('mouseleave', 'farm-pins', onFarmLeave);
+    };
+  }, [activeFarmId, farmFeatures, ready, baseReady]);
 
   // fire detections overlay (kept above raster layers)
   useEffect(() => {
@@ -277,9 +408,49 @@ export function GibsMap({ layers, height = '70vh' }: GibsMapProps) {
         </div>
       )}
 
-      {/* Layer control panel (positioning on wrapper — .hud is position:relative) */}
-      <div className="absolute left-3 top-3 z-10 w-64 max-w-[calc(100%-1.5rem)]">
+      {ready && baseReady && (imageryStatus !== 'ready' || showingFallback) && (
+        <div
+          className="absolute bottom-12 left-1/2 z-10 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-sm border border-edge bg-void/95 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-wide-mc text-dim shadow-lg"
+          role={imageryStatus === 'unavailable' ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {showingFallback
+            ? `No imagery for ${fallbackNotice.requested} here; showing latest available tile from ${fallbackNotice.available}.`
+            : imageryStatus === 'loading'
+            ? 'Loading real NASA GIBS imagery…'
+            : imageryStatus === 'no-layer'
+              ? 'Select an imagery layer to display satellite tiles.'
+              : `No NASA GIBS tiles loaded for ${mapDate} here. Try another date or layer; no imagery is fabricated.`}
+        </div>
+      )}
+
+      {ready && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="absolute left-3 top-3 z-20 h-11 border-edge bg-panel/95 font-mono text-[11px] uppercase tracking-wide-mc text-dim sm:hidden"
+          onClick={() => setLayersOpen(true)}
+          aria-expanded={layersOpen}
+          aria-controls="map-layer-panel"
+        >
+          <Layers className="h-4 w-4" aria-hidden /> Layers
+        </Button>
+      )}
+
+      {/* Desktop layer panel / mobile bottom sheet. */}
+      <div
+        id="map-layer-panel"
+        className={cn(
+          'absolute left-3 top-3 z-10 w-64 max-w-[calc(100%-1.5rem)] hidden sm:block',
+          layersOpen && 'bottom-3 left-3 right-3 top-auto block max-h-[70%] w-auto max-w-none overflow-y-auto rounded-sm border border-edge bg-panel/95 p-2 shadow-xl',
+        )}
+      >
         <div className="hud p-3 text-xs" style={{ background: 'rgba(11, 19, 34, 0.94)' }}>
+          <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-wide-mc text-ink">
+            <Layers className="h-3.5 w-3.5 text-signal" aria-hidden /> Layers
+            <span className="telemetry text-faint">· {mapDate}</span>
+            <button type="button" className="ml-auto h-11 px-2 text-dim sm:hidden" onClick={() => setLayersOpen(false)} aria-label="Close map layers">×</button>
+          </div>
           <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-wide-mc text-ink">
             <Layers className="h-3.5 w-3.5 text-signal" aria-hidden /> Layers
             <span className="telemetry text-faint">· {mapDate}</span>

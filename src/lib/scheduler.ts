@@ -6,7 +6,6 @@ import {
   type TickResult,
 } from '@/lib/schedule-core';
 import { runWatchlistEvaluation } from '@/lib/fires/watchlist-evaluate';
-import { publishDigestForWatchlist } from '@/lib/fires/digest-channel';
 
 /**
  * In-process background scheduler for watchlist re-evaluation.
@@ -32,6 +31,8 @@ import { publishDigestForWatchlist } from '@/lib/fires/digest-channel';
 
 const TICK_MS = 60_000;
 export const MAX_RUNS_PER_TICK = 5;
+export const SCHEDULER_LEASE_KEY = 'scheduler:leader';
+const SCHEDULER_LEASE_TTL_MS = 90_000;
 
 interface SchedulerRuntime {
   timer: ReturnType<typeof setInterval> | null;
@@ -43,6 +44,8 @@ interface SchedulerRuntime {
   ticksFired: number;
   ticksSkippedBusy: number;
   consecutiveFailedRuns: number;
+  holder: string | null;
+  leader: boolean;
 }
 
 const runtimeHost = globalThis as unknown as { __terraSchedulerRuntime?: SchedulerRuntime };
@@ -59,9 +62,50 @@ function runtime(): SchedulerRuntime {
       ticksFired: 0,
       ticksSkippedBusy: 0,
       consecutiveFailedRuns: 0,
+      holder: null,
+      leader: false,
     };
   }
   return runtimeHost.__terraSchedulerRuntime;
+}
+
+export async function tryAcquireSchedulerLeadership(holder: string): Promise<boolean> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SCHEDULER_LEASE_TTL_MS);
+  const claimed = await db.jobLease.updateMany({
+    where: { key: SCHEDULER_LEASE_KEY, OR: [{ expiresAt: { lte: now } }, { holder }] },
+    data: { holder, expiresAt, heartbeatAt: now },
+  });
+  if (claimed.count === 1) return true;
+  const inserted = await db.jobLease.createMany({
+    data: [{ key: SCHEDULER_LEASE_KEY, holder, expiresAt, heartbeatAt: now }],
+    skipDuplicates: true,
+  });
+  return inserted.count === 1;
+}
+
+export async function releaseSchedulerLeadership(holder: string): Promise<void> {
+  await db.jobLease.deleteMany({ where: { key: SCHEDULER_LEASE_KEY, holder } }).catch(() => undefined);
+}
+
+async function renewSchedulerLease(holder: string): Promise<boolean> {
+  const now = new Date();
+  const renewed = await db.jobLease.updateMany({
+    where: { key: SCHEDULER_LEASE_KEY, holder },
+    data: { expiresAt: new Date(now.getTime() + SCHEDULER_LEASE_TTL_MS), heartbeatAt: now },
+  });
+  return renewed.count === 1;
+}
+
+export async function schedulerLeaseStatus(): Promise<{ leader: boolean; holder: string | null; heartbeatAt: string | null; expiresAt: string | null }> {
+  const lease = await db.jobLease.findUnique({ where: { key: SCHEDULER_LEASE_KEY } });
+  const leader = Boolean(lease && lease.expiresAt.getTime() > Date.now());
+  return {
+    leader,
+    holder: leader ? lease!.holder : null,
+    heartbeatAt: lease?.heartbeatAt.toISOString() ?? null,
+    expiresAt: lease?.expiresAt.toISOString() ?? null,
+  };
 }
 
 /** In-flight evaluation registry shared with nothing else — best-effort skip. */
@@ -89,6 +133,7 @@ async function claim(w: SchedulableWatch, nextAt: Date, now: Date): Promise<bool
   const res = await db.fireWatchlist.updateMany({
     where: {
       id: w.id,
+      reevaluateIntervalMin: w.reevaluateIntervalMin,
       OR: [{ nextReevaluateAt: null }, { nextReevaluateAt: { lte: now } }],
     },
     data: { nextReevaluateAt: nextAt },
@@ -99,12 +144,15 @@ async function claim(w: SchedulableWatch, nextAt: Date, now: Date): Promise<bool
 async function evaluate(w: SchedulableWatch, ctx: { correlationId: string; now: Date }): Promise<{ status: string; detectionCount: number }> {
   inFlight.add(w.id);
   try {
+    const watchlist = await db.fireWatchlist.findUnique({ where: { id: w.id }, select: { ownerId: true, reevaluateIntervalMin: true } });
+    if (!watchlist || watchlist.reevaluateIntervalMin !== w.reevaluateIntervalMin) throw new Error('scheduled watchlist no longer available');
     const outcome = await runWatchlistEvaluation({
       watchlistId: w.id,
       trigger: 'scheduled',
       end: undefined, // live semantics: window ends yesterday
       correlationId: ctx.correlationId,
       actor: 'system:scheduler',
+      ownerId: watchlist.ownerId,
       now: ctx.now,
     });
     if (!outcome.ok) throw new Error(outcome.failure.message);
@@ -122,29 +170,40 @@ async function recordOutcome(
 ): Promise<void> {
   if (outcome.ok) runtime().consecutiveFailedRuns = 0;
   else runtime().consecutiveFailedRuns += 1;
-  await db.auditEvent.create({
-    data: {
-      actor: 'system:scheduler',
-      action: outcome.ok ? 'watchlist.schedule.run' : 'watchlist.schedule.fail',
-      targetId: w.id,
-      detail: JSON.stringify(
-        outcome.ok
-          ? { status: outcome.status, detectionCount: outcome.detectionCount, nextReevaluateAt: outcome.claimedNextAt.toISOString(), correlationId: outcome.correlationId }
-          : { error: outcome.error, nextReevaluateAt: outcome.claimedNextAt.toISOString(), correlationId: outcome.correlationId },
-      ),
-    },
-  });
-  // Push-style digest delivery: successful runs publish through the shared
-  // evaluation core (it records the event itself); FAILED runs write no
-  // evaluation event, so THIS is the only place a failure becomes a digest
-  // push. Fire-and-forget — the ledger row above is already the durable
-  // record, and with zero open consoles this costs nothing.
-  if (!outcome.ok) {
-    void publishDigestForWatchlist(w.id, 'scheduled-failure', {
-      correlationId: outcome.correlationId,
-      triggeredAt: new Date(),
+  const watchlist = await db.fireWatchlist.findUnique({ where: { id: w.id }, select: { ownerId: true, organizationId: true } });
+  await db.$transaction(async (tx) => {
+    const audit = await tx.auditEvent.create({
+      data: {
+        actor: 'system:scheduler',
+        action: outcome.ok ? 'watchlist.schedule.run' : 'watchlist.schedule.fail',
+        targetId: w.id,
+        detail: JSON.stringify(
+          outcome.ok
+            ? { status: outcome.status, detectionCount: outcome.detectionCount, nextReevaluateAt: outcome.claimedNextAt.toISOString(), correlationId: outcome.correlationId }
+            : { error: outcome.error, nextReevaluateAt: outcome.claimedNextAt.toISOString(), correlationId: outcome.correlationId },
+        ),
+      },
     });
-  }
+    if (!outcome.ok) {
+      await tx.outboxEvent.create({
+        data: {
+          aggregateType: 'FireWatchlist',
+          aggregateId: w.id,
+          eventType: 'watchlist.digest',
+          payload: JSON.stringify({
+            watchlistId: w.id,
+            ownerId: watchlist?.ownerId ?? null,
+            organizationId: watchlist?.organizationId ?? null,
+            reason: 'scheduled-failure',
+            trigger: null,
+            correlationId: outcome.correlationId,
+            triggeredAt: audit.createdAt.toISOString(),
+            triggeringEventId: audit.id,
+          }),
+        },
+      });
+    }
+  });
 }
 
 // --- lifecycle ---
@@ -156,7 +215,18 @@ async function tickOnce(): Promise<void> {
     return;
   }
   rt.running = true;
+  rt.holder ??= `scheduler:${process.pid}:${crypto.randomUUID()}`;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
+    rt.leader = await tryAcquireSchedulerLeadership(rt.holder);
+    if (!rt.leader) {
+      rt.ticksSkippedBusy += 1;
+      return;
+    }
+    heartbeat = setInterval(() => {
+      void renewSchedulerLease(rt.holder!).then((renewed) => { rt.leader = renewed; }).catch(() => { rt.leader = false; });
+    }, Math.floor(SCHEDULER_LEASE_TTL_MS / 3));
+    heartbeat.unref?.();
     const result = await runSchedulerTick({
       now: new Date(),
       maxRuns: MAX_RUNS_PER_TICK,
@@ -176,6 +246,7 @@ async function tickOnce(): Promise<void> {
     rt.lastTickAt = new Date();
     console.error('[scheduler] tick failed:', err instanceof Error ? err.message : err);
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     rt.running = false;
   }
 }
@@ -234,7 +305,7 @@ export function startScheduler(): void {
   rt.startedAt = new Date();
   rt.timer = setInterval(() => void tickOnce(), TICK_MS);
   rt.timer.unref?.(); // never hold the process open just for the scheduler
-  console.log(`[scheduler] started — in-process watchlist re-evaluation, tick ${TICK_MS / 1000}s, max ${MAX_RUNS_PER_TICK} run(s)/tick`);
+  console.log(`[scheduler] started — database-leased watchlist re-evaluation, tick ${TICK_MS / 1000}s, max ${MAX_RUNS_PER_TICK} run(s)/tick`);
 }
 
 /** Diagnostics for /api/v1/system/status (one cheap DB aggregate included). */
@@ -251,8 +322,9 @@ export async function schedulerStatus() {
   const now = new Date();
   const dueNow = selectDueWatchlists(dueNowRows, now, MAX_RUNS_PER_TICK);
   return {
-    kind: 'in-process' as const,
+    kind: 'database-leased' as const,
     enabled: rt.enabled,
+    leader: rt.leader,
     disabledByEnv: process.env.WATCH_SCHEDULER_OFF === '1',
     tickEverySec: TICK_MS / 1000,
     maxRunsPerTick: MAX_RUNS_PER_TICK,
@@ -268,6 +340,6 @@ export async function schedulerStatus() {
     scheduledWatchlists: scheduledCount,
     nextDueAt: nextDue._min.nextReevaluateAt ? nextDue._min.nextReevaluateAt.toISOString() : null,
     dueNow: dueNow.map((w) => ({ id: w.id, name: w.name })),
-    note: 'Scheduled re-evaluation runs inside the single Next.js runtime (no broker/worker tier). Cadences are opt-in per watchlist; every run is recorded in the audit ledger.',
+    note: 'Scheduled re-evaluation uses a PostgreSQL leadership lease and per-watchlist evaluation leases. Cadences are opt-in per watchlist; every run is recorded in the audit ledger.',
   };
 }

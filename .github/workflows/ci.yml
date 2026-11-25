@@ -16,18 +16,51 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: terrafield_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres -d terrafield_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
-      DATABASE_URL: file:./db/ci.db
+      DATABASE_URL: postgresql://postgres@postgres:5432/terrafield_test
+      TEST_DATABASE_URL: postgresql://postgres@postgres:5432/terrafield_test
+      REDIS_URL: redis://redis:6379/15
+      TEST_REDIS_URL: redis://redis:6379/15
+      REDIS_KEY_PREFIX: terrafield:ci:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bun run db:generate
-      - run: bun run lint
-      - run: bun test tests/
-      - run: bun run build
+      - name: Generate Prisma client
+        run: bun run db:generate
+      - name: Migrate empty PostgreSQL database
+        run: bun run db:migrate:deploy
+      - name: Verify migration deploy is idempotent
+        run: bun run db:migrate:deploy
+      - name: Lint
+        run: bun run lint
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Unit tests
+        run: bun run test
+      - name: Integration tests
+        run: bun run test:integration
+      - name: Build
+        run: bun run build
         env:
-          DATABASE_URL: "file:./db/ci.db"
           NODE_ENV: production

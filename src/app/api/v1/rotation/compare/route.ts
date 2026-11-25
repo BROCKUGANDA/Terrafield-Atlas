@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
+import {
+  apiHandler, clientKey, dedupedBoundedArray, errorResponse, jsonResponse,
+  parseBody, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects,
+} from '@/lib/api/helpers';
 import { evaluateRotation } from '@/lib/crops/rotation-engine';
 import { cropByKey } from '@/lib/crops/catalogue';
 import { rainfallMonthlyStats, thermalMonthlyStats } from '@/lib/ingest/power';
@@ -8,9 +11,8 @@ import type { Priorities, SoilInformation } from '@/lib/crops/rotation-engine';
 
 /**
  * POST /api/v1/rotation/compare
- * Evaluates MULTIPLE alternative sequences in one call with identical farm
- * context and farmer priorities — the comparison view of the planner.
- * Deterministic: identical inputs → identical ranked output.
+ * Evaluates alternative sequences with identical farm context and priorities.
+ * Provider/climatology work happens before the serializable persistence transaction.
  */
 
 const prioritiesSchema = z.object({
@@ -25,38 +27,42 @@ const prioritiesSchema = z.object({
 
 const bodySchema = z.object({
   farmId: z.string(),
-  scenarios: z
-    .array(z.object({ name: z.string().min(1).max(120), cropKeys: z.array(z.string()).min(1).max(8) }))
-    .min(2)
-    .max(5),
-  priorities: prioritiesSchema.default({}),
+  scenarios: z.array(z.object({
+    name: z.string().min(1).max(120),
+    cropKeys: dedupedBoundedArray(z.string(), 8, 1),
+  })).min(2).max(5),
+  priorities: prioritiesSchema.prefault({}),
 });
 
-export const POST = apiHandler(async (req, { correlationId }) => {
-  const rl = rateLimit(clientKey(req, 'rotation:compare'), { capacity: 15, refillPerMinute: 8 });
+export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, '/api/v1/rotation/compare', async (req, { userId }) => {
+  const rl = await rateLimit(clientKey(req, 'rotation:compare'), { capacity: 15, refillPerMinute: 8 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, bodySchema);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
 
-  const farm = await db.farm.findUnique({ where: { id: body.farmId } });
-  if (!farm) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${body.farmId} not found`, correlationId } }, { status: 404, correlationId });
+  const names = body.scenarios.map((scenario) => scenario.name);
+  if (new Set(names).size !== names.length) {
+    return errorResponse(400, 'DUPLICATE_SCENARIO_NAME', 'scenario names must be unique within one comparison', correlationId);
   }
-  for (const s of body.scenarios) {
-    for (const key of s.cropKeys) {
+
+  const farm = await db.farm.findUnique({ where: { id: body.farmId } });
+  if (!farm) return errorResponse(404, 'NOT_FOUND', `farm ${body.farmId} not found`, correlationId);
+  for (const scenario of body.scenarios) {
+    for (const key of scenario.cropKeys) {
       if (!cropByKey(key)) {
-        return jsonResponse({ error: { code: 'UNKNOWN_CROP', message: `crop '${key}' is not in the catalogue`, correlationId } }, { status: 400, correlationId });
+        return errorResponse(400, 'UNKNOWN_CROP', `crop '${key}' is not in the catalogue`, correlationId);
       }
     }
   }
 
   const soilTests = await db.soilTest.findMany({
     where: { farmId: body.farmId },
-    orderBy: [{ source: 'asc' }, { measuredAt: 'desc' }],
+    orderBy: [{ source: 'asc' }, { measuredAt: 'desc' }, { id: 'desc' }],
+    take: 200,
   });
-  const measured = soilTests.find((t) => t.source === 'laboratory') ?? soilTests.find((t) => t.source === 'farmer');
-  const modeled = soilTests.find((t) => t.source === 'soilgrids');
+  const measured = soilTests.find((test) => test.source === 'laboratory') ?? soilTests.find((test) => test.source === 'farmer');
+  const modeled = soilTests.find((test) => test.source === 'soilgrids');
   const chosen = measured ?? modeled ?? null;
   const soil: SoilInformation | null = chosen
     ? {
@@ -68,76 +74,73 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     : null;
 
   const [rainfall, thermal] = await Promise.all([
-    rainfallMonthlyStats(farm.centroidLat, farm.centroidLon),
-    thermalMonthlyStats(farm.centroidLat, farm.centroidLon),
+    rainfallMonthlyStats(farm.centroidLat, farm.centroidLon, farm.ownerId ? farm.id : undefined),
+    thermalMonthlyStats(farm.centroidLat, farm.centroidLon, farm.ownerId ? farm.id : undefined),
   ]);
 
   const priorities: Priorities = body.priorities;
-  const results = body.scenarios.map((s) =>
-    evaluateRotation(s.cropKeys, s.name, { rainfall, thermal }, soil, priorities),
+  const results = body.scenarios.map((scenario) =>
+    evaluateRotation(scenario.cropKeys, scenario.name, { rainfall, thermal }, soil, priorities),
   );
-
   const ranked = [...results].sort((a, b) => b.overallScore - a.overallScore);
 
-  // Persist every compared alternative so field reports carry the comparison
-  // evidence chain. Idempotent per (farm, scenario name): a re-compare of the
-  // same named options replaces its stored rows, so reports always reflect the
-  // latest deterministic evaluation under the weights actually used.
-  const persistedScenarioIds: string[] = [];
-  for (const s of body.scenarios) {
-    const result = results.find((r) => r.scenarioName === s.name);
-    if (!result) continue;
-    await db.rotationScenario.deleteMany({ where: { farmId: body.farmId, name: s.name } });
-    const stored = await db.rotationScenario.create({
-      data: {
+  return {
+    commit: async (tx) => {
+      const persistedScenarioIds: string[] = [];
+      for (const scenario of body.scenarios) {
+        const result = results.find((item) => item.scenarioName === scenario.name)!;
+        const data = {
+          cropKeys: JSON.stringify(scenario.cropKeys),
+          ruleVersion: result.ruleVersion,
+          weights: JSON.stringify(priorities),
+          scoresJson: JSON.stringify(result),
+          overallScore: result.overallScore,
+          confidence: result.confidence,
+          incompatibleJson: JSON.stringify(result.incompatible),
+        };
+        const stored = await tx.rotationScenario.upsert({
+          where: { farmId_name: { farmId: body.farmId, name: scenario.name } },
+          create: { farmId: body.farmId, name: scenario.name, ...data },
+          update: data,
+        });
+        persistedScenarioIds.push(stored.id);
+      }
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'scenario.compare',
+        targetId: body.farmId,
+        detail: `${results.length} alternatives compared (${persistedScenarioIds.length} persisted): ${names.join(' | ')}`,
+        aggregateType: 'Farm',
+        aggregateId: body.farmId,
+        eventType: 'scenario.compared',
+        payload: { farmId: body.farmId, ownerId: userId, scenarioIds: persistedScenarioIds },
+      });
+      const job = await tx.processingJob.create({
+        data: {
+          type: 'rotation',
+          ownerId: farm.ownerId,
+          status: 'succeeded',
+          params: JSON.stringify({ farmId: body.farmId, scenarios: names, priorities }),
+          progressNote: `${results.length} alternatives evaluated with rule set ${ranked[0]?.ruleVersion}`,
+          resultRef: JSON.stringify({ scenarioIds: persistedScenarioIds }),
+          correlationId,
+          finishedAt: new Date(),
+        },
+      });
+      return jsonResponse({
+        jobId: job.id,
         farmId: body.farmId,
-        name: s.name,
-        cropKeys: JSON.stringify(s.cropKeys),
-        ruleVersion: result.ruleVersion,
-        weights: JSON.stringify(priorities),
-        scoresJson: JSON.stringify(result),
-        overallScore: result.overallScore,
-        confidence: result.confidence,
-        incompatibleJson: JSON.stringify(result.incompatible),
-      },
-    });
-    persistedScenarioIds.push(stored.id);
-  }
-  await db.auditEvent.create({
-    data: {
-      actor: 'demo-user',
-      action: 'scenario.compare',
-      targetId: body.farmId,
-      detail: `${results.length} alternatives compared (${persistedScenarioIds.length} persisted): ${body.scenarios.map((x) => x.name).join(' | ')}`,
+        environmentAvailable: { rainfall: !!rainfall, thermal: !!thermal },
+        soilAvailable: { present: !!soil, source: soil?.source ?? null },
+        ranking: ranked.map((result, index) => ({
+          rank: index + 1,
+          scenarioName: result.scenarioName,
+          overallScore: result.overallScore,
+          confidence: result.confidence,
+          incompatibleCount: result.incompatible.length,
+        })),
+        results,
+      }, { correlationId });
     },
-  });
-
-  const job = await db.processingJob.create({
-    data: {
-      type: 'rotation',
-      status: 'succeeded',
-      params: JSON.stringify({ farmId: body.farmId, scenarios: body.scenarios.map((s) => s.name), priorities }),
-      progressNote: `${results.length} alternatives evaluated with rule set ${ranked[0]?.ruleVersion}`,
-      correlationId,
-      finishedAt: new Date(),
-    },
-  });
-
-  return jsonResponse(
-    {
-      jobId: job.id,
-      farmId: body.farmId,
-      environmentAvailable: { rainfall: !!rainfall, thermal: !!thermal },
-      soilAvailable: { present: !!soil, source: soil?.source ?? null },
-      ranking: ranked.map((r, i) => ({
-        rank: i + 1,
-        scenarioName: r.scenarioName,
-        overallScore: r.overallScore,
-        confidence: r.confidence,
-        incompatibleCount: r.incompatible.length,
-      })),
-      results,
-    },
-    { correlationId },
-  );
-});
+  };
+}));

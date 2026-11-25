@@ -1,21 +1,26 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { ingestPowerForLocation } from '@/lib/ingest/power';
 import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
 import { POWER_VARIABLES } from '@/lib/types';
 import type { VariableKey } from '@/lib/types';
+import { enqueueJob, jobUrl } from '@/lib/queue';
+import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { assertEntitlement } from '@/lib/commercial';
 
 /**
  * POST /api/v1/observations/ingest
- * Ingests (idempotently) the real NASA POWER daily record for a farm or
- * coordinate. Creates a ProcessingJob record and runs the ingestion inline
- * with status tracking (the sandbox runs a single process; the job ledger
- * provides the same observability a queue would).
  *
- * Because ingestion of a 12-year × 7-variable record takes ~10-20 s (three
- * 5-year POWER requests), the route accepts a `years` parameter (min 2) and
- * returns a full result; the frontend drives it with a loading state and the
- * job is recorded either way.
+ * Ingests (idempotently) the real NASA POWER daily record for a farm or
+ * coordinate. Ingestion of a 12-year x 7-variable record takes tens of
+ * seconds of provider traffic, so the route does NOT run it inline:
+ *
+ *  - the durable job row and its outbox event are committed atomically,
+ *  - the queue pointer is pushed afterwards,
+ *  - the client receives 202 with the durable job id and the job URL.
+ *
+ * The worker (src/lib/jobs/worker.ts) executes the job with a heartbeat
+ * lease, an overall deadline, cooperative cancellation and PostgreSQL
+ * natural-key upserts, so a retry never duplicates an observation.
  */
 
 const bodySchema = z.object({
@@ -29,7 +34,7 @@ const bodySchema = z.object({
 });
 
 export const POST = apiHandler(async (req, { correlationId }) => {
-  const rl = rateLimit(clientKey(req, 'observations:ingest'), { capacity: 6, refillPerMinute: 3 });
+  const rl = await rateLimit(clientKey(req, 'observations:ingest'), { capacity: 6, refillPerMinute: 3 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, bodySchema);
   if (!parsed.ok) return parsed.res;
@@ -37,50 +42,56 @@ export const POST = apiHandler(async (req, { correlationId }) => {
 
   let lat = body.lat;
   let lon = body.lon;
-  let farmId = body.farmId ?? null;
-  if (farmId && (lat === undefined || lon === undefined)) {
-    const farm = await db.farm.findUnique({ where: { id: farmId }, select: { centroidLat: true, centroidLon: true } });
+  const farmId = body.farmId ?? null;
+  let dataOwnerId: string | null = null;
+  let dataOrganizationId: string | null = null;
+  if (farmId) {
+    const farm = await db.farm.findUnique({ where: { id: farmId }, select: { centroidLat: true, centroidLon: true, ownerId: true, organizationId: true } });
     if (!farm) {
       return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${farmId} not found`, correlationId } }, { status: 404, correlationId });
     }
-    lat = farm.centroidLat;
-    lon = farm.centroidLon;
+    lat ??= farm.centroidLat;
+    lon ??= farm.centroidLon;
+    dataOwnerId = farm.ownerId;
+    dataOrganizationId = farm.organizationId;
   }
   if (lat === undefined || lon === undefined) {
     return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: 'provide farmId or lat+lon', correlationId } }, { status: 400, correlationId });
   }
 
-  const job = await db.processingJob.create({
-    data: {
-      type: 'power-ingest',
-      status: 'running',
-      params: JSON.stringify({ lat, lon, years: body.years, variables: body.variables, farmId }),
-      correlationId,
-      progressNote: 'requesting NASA POWER daily API (MERRA-2) in 5-year chunks',
-    },
+  // The tenant is the authenticated account; the data owner is the farm owner
+  // (null for the shared public namespace).
+  const context = await resolveTenantContext(req);
+  requirePermission(context, 'analysis.run');
+  await assertEntitlement(context, 'processing_jobs_per_month');
+  const tenantId = context.userId ?? dataOwnerId;
+  const idempotencyKey = req.headers.get('idempotency-key')?.trim() || null;
+
+  const job = await enqueueJob({
+    type: 'power-ingest',
+    ownerId: tenantId,
+    organizationId: context.organizationId ?? dataOrganizationId,
+    params: { lat, lon, years: body.years, variables: body.variables, farmId, ownerId: dataOwnerId, organizationId: dataOrganizationId },
+    correlationId,
+    idempotencyKey,
+    route: '/api/v1/observations/ingest',
   });
 
-  try {
-    const outcome = await ingestPowerForLocation(lat, lon, body.years, body.variables, farmId ?? undefined, correlationId);
-    const done = await db.processingJob.update({
-      where: { id: job.id },
-      data: {
-        status: 'succeeded',
-        progressNote: `wrote ${outcome.rowsWritten} observations (${outcome.chunks} POWER requests)`,
-        resultRef: JSON.stringify(outcome),
-        finishedAt: new Date(),
-      },
-    });
-    return jsonResponse({ job: done, outcome }, { status: 201, correlationId });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await db.processingJob.update({
-      where: { id: job.id },
-      data: { status: 'failed', error: msg, finishedAt: new Date(), progressNote: 'provider request failed after retries with backoff' },
-    });
-    return jsonResponse(
-      { error: { code: 'PROVIDER_UNAVAILABLE', message: 'NASA POWER ingestion failed after retries with exponential backoff. No data was fabricated.', providerMessage: msg, jobId: job.id, correlationId } },
-      { status: 502, correlationId },
-    );
-  }
+  const url = jobUrl(job.jobId);
+  return jsonResponse(
+    {
+      jobId: job.jobId,
+      jobUrl: url,
+      type: job.type,
+      status: job.status,
+      duplicate: !job.created,
+      enqueued: job.enqueued,
+      deadlineAt: job.deadlineAt,
+      correlationId,
+      message: job.enqueued
+        ? 'Ingestion is queued as a durable job. Poll the job URL for the result.'
+        : 'Ingestion is queued as a durable job; the queue pointer is pending outbox reconciliation.',
+    },
+    { status: 202, correlationId, headers: { Location: url } },
+  );
 });

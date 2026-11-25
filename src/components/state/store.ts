@@ -14,6 +14,11 @@ export type ViewKey =
   | 'provenance'
   | 'fire'
   | 'reports'
+  | 'organizations'
+  | 'billing'
+  | 'intelligence'
+  | 'sources'
+  | 'admin'
   | 'settings';
 
 export interface SelectedLocation {
@@ -55,6 +60,7 @@ export const DEFAULT_ROTATION_PRIORITIES = {
 };
 
 interface SessionState {
+  privateWorkspace: boolean;
   view: ViewKey;
   setView: (v: ViewKey) => void;
   location: SelectedLocation;
@@ -81,6 +87,7 @@ const todayIso = new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10);
 export const useSession = create<SessionState>()(
   persist(
     (set) => ({
+      privateWorkspace: false,
       view: 'landing',
       setView: (view) => set({ view }),
       location: { lat: -0.28, lon: 36.07, label: 'Nakuru County — Rift Valley highlands', country: 'Kenya', context: 'Highland mixed maize–dairy smallholdings; two rainy seasons' },
@@ -112,13 +119,14 @@ export const useSession = create<SessionState>()(
           severity: 'success',
           category: 'AUTH',
           title: `Operator session opened — ${cs}`,
-          detail: 'Demo console access (local callsign, no real credentials). Session persisted for the next visit.',
+          detail: 'Public demo access (local callsign, no real credentials). Session expires after 8 hours.',
           view: 'dashboard',
         });
       },
       logout: () => {
         const cs = useSession.getState().operator?.callsign ?? 'guest';
         set({ operator: null, view: 'landing' });
+        void fetch('/api/v1/session', { method: 'DELETE', keepalive: true }).catch(() => undefined);
         logEvent({
           severity: 'info',
           category: 'AUTH',
@@ -130,12 +138,15 @@ export const useSession = create<SessionState>()(
     }),
     {
       name: 'terrafield-console-session',
+      skipHydration: true,
       partialize: (s) => ({
         operator: s.operator,
+        ...(s.privateWorkspace ? {} : {
         location: s.location,
         activeFarmId: s.activeFarmId,
         rotationDrafts: s.rotationDrafts,
         rotationPriorities: s.rotationPriorities,
+        }),
       }),
     },
   ),

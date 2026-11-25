@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { apiHandler, clientKey, jsonResponse, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
 import { computeWatchlistDigest } from '@/lib/fires/watchlist-digest-service';
+import { accountUserId } from '@/lib/auth';
 
 /**
  * GET /api/v1/fires/watchlists/[id]/digest — cadence-aware alert digest for
@@ -27,7 +28,7 @@ const querySchema = z.object({
 
 export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
   const { id } = await params;
-  const rl = rateLimit(clientKey(req, 'watchlists:digest'), { capacity: 30, refillPerMinute: 20 });
+  const rl = await rateLimit(clientKey(req, 'watchlists:digest'), { capacity: 30, refillPerMinute: 20 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
 
   const w = await db.fireWatchlist.findUnique({ where: { id }, select: { id: true } });
@@ -43,7 +44,7 @@ export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) =
     );
   }
 
-  const computed = await computeWatchlistDigest(id, { requestedHours: parsedQuery.data.hours ?? null });
+  const computed = await computeWatchlistDigest(id, { requestedHours: parsedQuery.data.hours ?? null, ownerId: await accountUserId(req) });
   if (!computed.ok) {
     return jsonResponse({ error: { code: 'NOT_FOUND', message: computed.failure.message, correlationId } }, { status: 404, correlationId });
   }
@@ -52,7 +53,7 @@ export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) =
     {
       ...computed.result.digest,
       watchlist: computed.result.watchlist,
-      note: 'Digest generated from recorded evaluations and the scheduler audit ledger — nothing interpolated, archive gaps never zero-filled. Delivered on demand here, and PUSHED live over the digest-stream SSE channel whenever a new evaluation or scheduled failure lands.',
+      note: 'Digest generated from recorded evaluations and the scheduler audit ledger — nothing interpolated, archive gaps never zero-filled. Private digests are owner-only on demand; shared SSE, email and webhook delivery is disabled for private watchlists.',
       correlationId,
     },
     { correlationId },

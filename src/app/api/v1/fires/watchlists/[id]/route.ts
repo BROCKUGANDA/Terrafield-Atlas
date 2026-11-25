@@ -1,23 +1,23 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
+import {
+  apiHandler, clientKey, errorResponse, jsonResponse, paginationSchema,
+  parseBody, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects,
+} from '@/lib/api/helpers';
 import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
 import { isReevaluateInterval, nextRunAfter, REEVALUATE_INTERVALS } from '@/lib/schedule-core';
+import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
 /**
- * GET    /api/v1/fires/watchlists/[id] — one watchlist + full event history
- * PATCH  /api/v1/fires/watchlists/[id] — edit rule parameters (name, radius,
- *         confidence floor, lookback, threshold, notes; location can move) and
- *         the scheduled re-evaluation cadence (reevaluateIntervalMin)
- * DELETE /api/v1/fires/watchlists/[id] — remove the watchlist (events cascade)
+ * GET    /api/v1/fires/watchlists/[id]
+ * PATCH  /api/v1/fires/watchlists/[id]
+ * DELETE /api/v1/fires/watchlists/[id]
  */
 
 type WatchCtx = { params: Promise<{ id: string }> };
 
-// null = scheduled re-evaluation off; otherwise one of the supported cadences.
-const reevaluateSchema = z
-  .union([z.null(), z.number().int()])
-  .refine((v) => v === null || isReevaluateInterval(v), {
+const reevaluateSchema = z.union([z.null(), z.number().int()])
+  .refine((value) => value === null || isReevaluateInterval(value), {
     message: `reevaluateIntervalMin must be null or one of ${REEVALUATE_INTERVALS.join(' | ')} minutes`,
   });
 
@@ -34,83 +34,95 @@ const patchSchema = z.object({
   reevaluateIntervalMin: reevaluateSchema.optional(),
 });
 
-export const GET = apiHandler<WatchCtx>(async (_req, { correlationId, params }) => {
+export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
   const { id } = await params;
-  const w = await db.fireWatchlist.findUnique({ where: { id } });
-  if (!w) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `watchlist ${id} not found`, correlationId } }, { status: 404, correlationId });
-  }
-  const events = await db.fireWatchEvent.findMany({ where: { watchlistId: id }, orderBy: { evaluatedAt: 'desc' }, take: 25 });
-  return jsonResponse(
-    { watchlist: serializeWatchlist(w), events: events.map(serializeEvent), correlationId },
-    { correlationId },
-  );
+  paginationSchema(100, 25).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
+  const watchlist = await db.fireWatchlist.findUnique({ where: { id } });
+  if (!watchlist) return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
+  const events = await db.fireWatchEvent.findMany({ where: { watchlistId: id }, orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }], take: 25 });
+  return jsonResponse({ watchlist: serializeWatchlist(watchlist), events: events.map(serializeEvent), correlationId }, { correlationId });
 });
 
-export const PATCH = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
+export const PATCH = apiHandler<WatchCtx>((req, { correlationId, params }) => withIdempotency(req, `/api/v1/fires/watchlists/${req.nextUrl.pathname.split('/').at(-1)}`, async (req, { userId }) => {
   const { id } = await params;
-  const rl = rateLimit(clientKey(req, 'watchlists:update'), { capacity: 15, refillPerMinute: 10 });
+  const rl = await rateLimit(clientKey(req, 'watchlists:update'), { capacity: 15, refillPerMinute: 10 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, patchSchema);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
-  if (Object.keys(body).length === 0) {
-    return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: 'no editable fields supplied', correlationId } }, { status: 400, correlationId });
-  }
+  const context = await resolveTenantContext(req);
+  requirePermission(context, 'farm.write');
+  if (Object.keys(body).length === 0) return errorResponse(400, 'VALIDATION_ERROR', 'no editable fields supplied', correlationId);
   const existing = await db.fireWatchlist.findUnique({ where: { id } });
-  if (!existing) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `watchlist ${id} not found`, correlationId } }, { status: 404, correlationId });
-  }
+  if (!existing) return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
   if (body.name && body.name !== existing.name) {
-    const dupe = await db.fireWatchlist.findFirst({ where: { name: body.name } });
-    if (dupe) {
-      return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: `a watchlist named “${body.name}” already exists`, correlationId } }, { status: 400, correlationId });
-    }
+    const duplicate = await db.fireWatchlist.findFirst({ where: { name: body.name, ownerId: existing.ownerId, organizationId: existing.organizationId, id: { not: id } } });
+    if (duplicate) return errorResponse(400, 'VALIDATION_ERROR', `a watchlist named “${body.name}” already exists`, correlationId);
   }
-  // Cadence change: (re)arm the scheduler clock when enabling/changing, clear
-  // it when switching off. Not a rule parameter — the stored status stays.
-  const scheduleData =
-    body.reevaluateIntervalMin === undefined
-      ? {}
-      : body.reevaluateIntervalMin === null
-        ? { reevaluateIntervalMin: null, nextReevaluateAt: null }
-        : { reevaluateIntervalMin: body.reevaluateIntervalMin, nextReevaluateAt: nextRunAfter(Date.now(), body.reevaluateIntervalMin) };
-  const updated = await db.fireWatchlist.update({
-    where: { id },
-    data: {
-      ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.label !== undefined ? { label: body.label ?? null } : {}),
-      ...(body.lat !== undefined ? { lat: body.lat } : {}),
-      ...(body.lon !== undefined ? { lon: body.lon } : {}),
-      ...(body.radiusKm !== undefined ? { radiusKm: body.radiusKm } : {}),
-      ...(body.minConfidence !== undefined ? { minConfidence: body.minConfidence } : {}),
-      ...(body.lookbackDays !== undefined ? { lookbackDays: body.lookbackDays } : {}),
-      ...(body.detectionThreshold !== undefined ? { detectionThreshold: body.detectionThreshold } : {}),
-      ...(body.notes !== undefined ? { notes: body.notes ?? null } : {}),
-      ...scheduleData,
-      // rule parameters changed → the stored status no longer describes the rule
-      ...(body.minConfidence !== undefined || body.lookbackDays !== undefined || body.detectionThreshold !== undefined || body.lat !== undefined || body.lon !== undefined || body.radiusKm !== undefined
-        ? { lastStatus: 'unverified', lastDetectionCount: null }
-        : {}),
+  const scheduleData = body.reevaluateIntervalMin === undefined
+    ? {}
+    : body.reevaluateIntervalMin === null
+      ? { reevaluateIntervalMin: null, nextReevaluateAt: null }
+      : { reevaluateIntervalMin: body.reevaluateIntervalMin, nextReevaluateAt: nextRunAfter(Date.now(), body.reevaluateIntervalMin) };
+  return {
+    commit: async (tx) => {
+      const updated = await tx.fireWatchlist.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.label !== undefined ? { label: body.label ?? null } : {}),
+          ...(body.lat !== undefined ? { lat: body.lat } : {}),
+          ...(body.lon !== undefined ? { lon: body.lon } : {}),
+          ...(body.radiusKm !== undefined ? { radiusKm: body.radiusKm } : {}),
+          ...(body.minConfidence !== undefined ? { minConfidence: body.minConfidence } : {}),
+          ...(body.lookbackDays !== undefined ? { lookbackDays: body.lookbackDays } : {}),
+          ...(body.detectionThreshold !== undefined ? { detectionThreshold: body.detectionThreshold } : {}),
+          ...(body.notes !== undefined ? { notes: body.notes ?? null } : {}),
+          ...scheduleData,
+          ...(body.minConfidence !== undefined || body.lookbackDays !== undefined || body.detectionThreshold !== undefined || body.lat !== undefined || body.lon !== undefined || body.radiusKm !== undefined
+            ? { lastStatus: 'unverified', lastDetectionCount: null }
+            : {}),
+        },
+      });
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'watchlist.update',
+        targetId: id,
+        detail: JSON.stringify(body),
+        organizationId: context.organizationId,
+        aggregateType: 'FireWatchlist',
+        aggregateId: id,
+        eventType: 'watchlist.updated',
+        payload: { watchlistId: id, ownerId: userId, fields: Object.keys(body) },
+      });
+      return jsonResponse({ watchlist: serializeWatchlist(updated), correlationId }, { correlationId });
     },
-  });
-  await db.auditEvent.create({
-    data: { actor: 'demo-user', action: 'watchlist.update', targetId: id, detail: JSON.stringify(body) },
-  });
-  return jsonResponse({ watchlist: serializeWatchlist(updated), correlationId }, { correlationId });
-});
+  };
+}));
 
-export const DELETE = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
+export const DELETE = apiHandler<WatchCtx>((req, { correlationId, params }) => withIdempotency(req, `/api/v1/fires/watchlists/${req.nextUrl.pathname.split('/').at(-1)}`, async (req, { userId }) => {
   const { id } = await params;
-  const rl = rateLimit(clientKey(req, 'watchlists:delete'), { capacity: 10, refillPerMinute: 5 });
+  const rl = await rateLimit(clientKey(req, 'watchlists:delete'), { capacity: 10, refillPerMinute: 5 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const existing = await db.fireWatchlist.findUnique({ where: { id } });
-  if (!existing) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `watchlist ${id} not found`, correlationId } }, { status: 404, correlationId });
-  }
-  await db.fireWatchlist.delete({ where: { id } }); // events cascade
-  await db.auditEvent.create({
-    data: { actor: 'demo-user', action: 'watchlist.delete', targetId: id, detail: JSON.stringify({ name: existing.name }) },
-  });
-  return jsonResponse({ deleted: { id, name: existing.name }, correlationId }, { correlationId });
-});
+  if (!existing) return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
+  const context = await resolveTenantContext(req);
+  requirePermission(context, 'farm.write');
+  return {
+    commit: async (tx) => {
+      await tx.fireWatchlist.delete({ where: { id } });
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'watchlist.delete',
+        targetId: id,
+        detail: JSON.stringify({ name: existing.name }),
+        organizationId: context.organizationId,
+        aggregateType: 'FireWatchlist',
+        aggregateId: id,
+        eventType: 'watchlist.deleted',
+        payload: { watchlistId: id, ownerId: userId, name: existing.name },
+      });
+      return jsonResponse({ deleted: { id, name: existing.name }, correlationId }, { correlationId });
+    },
+  };
+}));

@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { CROP_CATALOGUE, CROP_CATALOGUE_VERSION } from '@/lib/crops/catalogue';
 import { GIBS_LAYERS } from '@/lib/adapters/gibsLayers';
@@ -126,21 +127,121 @@ const DATA_SOURCES = [
       'Modeled predictions (regression-kriging), NOT in-field measurements. SUPPLEMENTARY only: always labeled, always lower confidence, never silently substituted for a farmer/lab soil test.',
     status: 'operational',
   },
+  {
+    provider: 'NASA Earth Observatory Natural Event Tracker (EONET)',
+    datasetName: 'EONET v3 open natural events',
+    productId: 'EONET v3',
+    endpointTemplate: 'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=30',
+    dataFormat: 'JSON',
+    temporalCoverage: 'rolling open-event window',
+    spatialResolution: 'event locations (not per-pixel observations)',
+    units: 'event categories, dates, coordinates',
+    authRequired: false,
+    rateLimit: 'public API; cached for 15 minutes',
+    license: 'NASA open data',
+    attribution: 'NASA EONET',
+    limitations: 'Event-level context only. Reporting delays apply; this is not an instantaneous fire-detection or emergency service.',
+    status: 'operational',
+  },
+  {
+    provider: 'NASA MAAP — public STAC API',
+    datasetName: 'MAAP public STAC item search',
+    productId: 'maap-public-stac-api-dev',
+    endpointTemplate: 'https://stac.maap-project.org/search',
+    dataFormat: 'STAC 1.0 GeoJSON item metadata',
+    temporalCoverage: 'collection-dependent',
+    spatialResolution: 'collection-dependent',
+    units: 'asset metadata; units defined by each collection',
+    authRequired: false,
+    rateLimit: 'public service; bounded searches and cached metadata',
+    license: 'Per-collection; review asset license and access conditions before use',
+    attribution: 'NASA MAAP and the underlying data provider',
+    limitations: 'STAC discovery does not grant asset access or imply unrestricted commercial licensing. No global dataset download is performed.',
+    status: 'operational',
+  },
 ];
 
-export async function ensureSeeded(): Promise<void> {
+const SOURCE_GOVERNANCE: Record<string, Record<string, unknown>> = {
+  'POWER Daily API v2 (point requests)': {
+    productVersion: 'POWER API v2 / MERRA-2',
+    spatialCoverage: 'Global terrestrial grid',
+    nativeResolutionM: 55_000,
+    qualityMetadata: JSON.stringify({ fillValue: -999, timeStandard: 'LST', missingPolicy: 'exclude-and-count' }),
+    processingHistory: JSON.stringify([{ step: 'daily-point-fetch', version: 'power-adapter/2026.11' }, { step: 'monthly-aggregation', minValidDays: 20 }]),
+    accessConditions: 'Public API; no credentials',
+    apiLimits: '~1 request/sec sustained recommended',
+    knownLimitations: 'Reanalysis grid cell, not farm microclimate; LST day boundaries.',
+    stacApiUrl: null,
+  },
+  'MODIS Terra NDVI 16-Day composite (MOD13Q1 rendering)': {
+    productVersion: 'MOD13Q1 v6.1', spatialCoverage: 'Global', nativeResolutionM: 250,
+    qualityMetadata: JSON.stringify({ quantitativeQaAvailable: false, rendering: 'colormap' }),
+    processingHistory: JSON.stringify([{ step: 'wmts-render', version: 'GIBS' }]),
+    accessConditions: 'Visualization public; science files require Earthdata credentials',
+    apiLimits: 'Public CDN', knownLimitations: 'Rendered NDVI is not analyzed numerically.', stacApiUrl: null,
+  },
+  'SMAP L4 Analyzed Root-Zone Soil Moisture (rendered)': {
+    productVersion: 'SPL4SMGP.007', spatialCoverage: 'Global land', nativeResolutionM: 9_000,
+    qualityMetadata: JSON.stringify({ quantitativeQaAvailable: false, rendering: 'colormap' }),
+    processingHistory: JSON.stringify([{ step: 'wmts-render', version: 'GIBS' }]),
+    accessConditions: 'Visualization public; science files require Earthdata credentials',
+    apiLimits: 'Public CDN', knownLimitations: '9 km assimilation product; never field-scale moisture.', stacApiUrl: null,
+  },
+  'VIIRS Suomi-NPP 375 m thermal anomalies (active fires, vector tiles)': {
+    productVersion: 'VIIRS SNPP 375 m', spatialCoverage: 'Global', nativeResolutionM: 375,
+    qualityMetadata: JSON.stringify({ confidenceClasses: ['l', 'n', 'h'], archiveGaps: 'reported' }),
+    processingHistory: JSON.stringify([{ step: 'mvt-decode', version: 'gibs-fires/2026.11' }]),
+    accessConditions: 'Public GIBS vector tiles', apiLimits: 'Bounded tiles/days per ingest',
+    knownLimitations: 'Twice-daily overpasses, clouds, archive gaps; thermal anomaly is not a confirmed fire.', stacApiUrl: null,
+  },
+  'SoilGrids v2.0 point REST': {
+    productVersion: 'SoilGrids 2.0 (2020 release)', spatialCoverage: 'Global', nativeResolutionM: 250,
+    qualityMetadata: JSON.stringify({ estimateType: 'modeled', confidencePolicy: 'discounted' }),
+    processingHistory: JSON.stringify([{ step: 'unit-conversion', rule: 'provider d_factor' }]),
+    accessConditions: 'Public REST; intermittent availability', apiLimits: 'Point queries only in this integration',
+    knownLimitations: 'Modeled estimates; never a laboratory measurement.', stacApiUrl: null,
+  },
+  'MAAP public STAC item search': {
+    productVersion: 'STAC 1.0 / MAAP dev catalog', spatialCoverage: 'Collection-dependent', nativeResolutionM: null,
+    qualityMetadata: JSON.stringify({ assetAccess: 'validated separately', license: 'per-collection' }),
+    processingHistory: JSON.stringify([{ step: 'stac-discovery', version: 'stac-adapter/2026.11' }]),
+    accessConditions: 'Metadata public; assets may require authentication',
+    apiLimits: '50 items maximum; five optional asset probes', knownLimitations: 'Discovery does not grant data access.', stacApiUrl: 'https://stac.maap-project.org/',
+  },
+};
+
+const seedRuns = new WeakMap<object, Promise<void>>();
+
+export function ensureSeeded(database: Pick<typeof db, 'dataSource' | 'cropCharacteristic'> = db): Promise<void> {
+  let pending = seedRuns.get(database);
+  if (!pending) {
+    pending = seedDatabase(database);
+    seedRuns.set(database, pending);
+    void pending.catch(() => {
+      if (seedRuns.get(database) === pending) seedRuns.delete(database);
+    });
+  }
+  return pending;
+}
+
+async function seedDatabase(database: Pick<typeof db, 'dataSource' | 'cropCharacteristic'>): Promise<void> {
   // Data sources
-  const existing = await db.dataSource.count();
+  const existing = await database.dataSource.count();
   if (existing === 0) {
-    await db.dataSource.createMany({ data: DATA_SOURCES.map((s) => ({ ...s, lastCheckedAt: new Date() })) });
+    await database.dataSource.createMany({ data: DATA_SOURCES.map((s) => ({ ...s, lastCheckedAt: new Date() })) });
+  }
+  for (const [datasetName, governance] of Object.entries(SOURCE_GOVERNANCE)) {
+    await database.dataSource.updateMany({
+      where: { datasetName, productVersion: null },
+      data: governance as Prisma.DataSourceUpdateManyMutationInput,
+    });
   }
   // Crop catalogue (versioned)
-  const cropCount = await db.cropCharacteristic.count({
-    where: { catalogueVersion: CROP_CATALOGUE_VERSION },
-  });
-  if (cropCount === 0) {
-    await db.cropCharacteristic.createMany({
-      data: CROP_CATALOGUE.map((c) => ({
+  for (const c of CROP_CATALOGUE) {
+    await database.cropCharacteristic.upsert({
+      where: { catalogueVersion_cropKey: { catalogueVersion: CROP_CATALOGUE_VERSION, cropKey: c.cropKey } },
+      update: {},
+      create: {
         catalogueVersion: CROP_CATALOGUE_VERSION,
         cropKey: c.cropKey,
         name: c.name,
@@ -162,7 +263,7 @@ export async function ensureSeeded(): Promise<void> {
         notes: c.notes,
         sources: JSON.stringify(c.sources),
         active: true,
-      })),
+      },
     });
   }
 }

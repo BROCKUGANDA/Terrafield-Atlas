@@ -1,15 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { motion, type Variants } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api-client';
+import { api, request } from '@/lib/api-client';
 import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
-import { QueryState, FaultPanel } from '@/components/system/query-state';
+import { QueryState } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
 import { Settings, Activity, Clock, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass, RadioTower } from 'lucide-react';
 import { useTourStore } from '@/components/state/tour-store';
@@ -27,30 +26,17 @@ const RISE: Variants = {
 
 const MONO_BTN = 'font-mono text-[11px] uppercase tracking-wide-mc';
 
-/** Live cooldown countdown for an open circuit breaker (mono, ticks down). */
-function Cooldown({ provider, ms }: { provider: string; ms: number }) {
-  const [s, setS] = useState(() => Math.max(0, Math.ceil(ms / 1000)));
-  useEffect(() => {
-    const t = setInterval(() => setS((v) => Math.max(0, v - 1)), 1000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <span role="status" className="inline-flex items-center gap-2 rounded-sm border border-crit/40 bg-crit/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wide-mc text-crit">
-      <ShieldAlert className="h-3 w-3" aria-hidden /> circuit open · {provider} · cooldown <span className="telemetry text-ink">{s}s</span>
-    </span>
-  );
-}
-
 /** Settings & System Health. */
 export function SettingsView() {
   const status = useQuery({ queryKey: ['system-status'], queryFn: api.systemStatus, refetchInterval: 30_000 });
+  const sourceSigns = useQuery({ queryKey: ['system-sources'], queryFn: () => api.systemSources(), refetchInterval: 60_000, retry: 1 });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { start: startTour, status: tourStatus } = useTourStore();
 
   const invalidate = useMutation({
     mutationFn: async () => {
-      await fetch('/api/v1/system/status?action=invalidate-cache', { method: 'POST' });
+      await request('/api/v1/system/status?action=invalidate-cache', { method: 'POST' });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['system-status'] });
@@ -190,19 +176,21 @@ export function SettingsView() {
                   <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2 py-0.5 text-[10px] uppercase tracking-wide-mc text-dim">
                     cache {s.cache.liveEntries} live / {s.cache.expiredEntries} expired
                   </span>
-                  {(s.circuitBreakers ?? []).filter((c) => c.open).map((c) => (
-                    <Cooldown key={c.provider} provider={c.provider} ms={c.cooldownRemainingMs} />
-                  ))}
-                  {(s.circuitBreakers ?? []).filter((c) => !c.open && c.consecutiveFailures > 0).map((c) => (
-                    <span key={c.provider} className="inline-flex items-center gap-2 rounded-sm border border-caution/40 bg-caution/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wide-mc text-caution">
-                      {c.provider}: {c.consecutiveFailures} recent failure(s)
+                  {(s.circuitBreakers?.open ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-2 rounded-sm border border-crit/40 bg-crit/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wide-mc text-crit">
+                      {s.circuitBreakers.open} of {s.circuitBreakers.total} provider circuits open
                     </span>
-                  ))}
+                  )}
+                  {(s.circuitBreakers?.withFailures ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-2 rounded-sm border border-caution/40 bg-caution/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wide-mc text-caution">
+                      {s.circuitBreakers.withFailures} provider circuit(s) with recent failures
+                    </span>
+                  )}
                 </div>
               </HudPanel>
             </motion.section>
 
-            {/* Scheduled re-evaluation (in-process background scheduler) */}
+            {/* Scheduled re-evaluation (database-leased scheduler) */}
             {s.scheduler && (
               <motion.section variants={RISE} custom={2.5} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Watchlist re-evaluation scheduler">
                 <HudPanel>
@@ -213,11 +201,11 @@ export function SettingsView() {
                       'telemetry rounded-sm border px-2 py-0.5 text-[10px] uppercase tracking-wide-mc',
                       s.scheduler.enabled ? 'border-signal/40 text-signal' : 'border-caution/50 text-caution',
                     )}>
-                      {s.scheduler.enabled ? 'running (in-process)' : s.scheduler.disabledByEnv ? 'disabled by WATCH_SCHEDULER_OFF' : 'not started'}
+                      {s.scheduler.enabled ? 'running (database-leased)' : s.scheduler.disabledByEnv ? 'disabled by WATCH_SCHEDULER_OFF' : 'not started'}
                     </span>
                   </div>
                   <div className="mt-3 flex flex-col gap-1.5">
-                    <Row k="Topology" v="single Next.js runtime · 60 s tick · no broker or worker tier" />
+                    <Row k="Topology" v="PostgreSQL leadership lease · 60 s tick · Redis/BullMQ workers" />
                     <Row k="Run budget" v={`max ${s.scheduler.maxRunsPerTick} evaluation(s) per tick`} mono />
                     <Row k="Scheduled watchlists" v={`${s.scheduler.scheduledWatchlists} with a cadence set${s.scheduler.dueNow.length ? ` · ${s.scheduler.dueNow.length} due now (${s.scheduler.dueNow.map((w) => w.name).join(', ')})` : ''}`} />
                     <Row k="Next due" v={s.scheduler.nextDueAt ? new Date(s.scheduler.nextDueAt).toISOString().slice(0, 16).replace('T', ' ') + 'Z' : '—'} mono />
@@ -264,13 +252,8 @@ export function SettingsView() {
                     </span>
                   </div>
                   <div className="mt-3 flex flex-col gap-1.5">
-                    <Row k="Topology" v="Server-Sent Events on the single HTTP port · no broker, no extra port" />
+                    <Row k="Topology" v="Server-Sent Events on HTTPS · Redis pub/sub fans out across web replicas" />
                     <Row k="Delivered" v={`${s.digestChannel.eventsDelivered} digest frame(s) to ${s.digestChannel.connectionsOpened} connection(s) since boot`} mono />
-                    <Row
-                      k="Last event"
-                      v={s.digestChannel.lastEventAt ? new Date(s.digestChannel.lastEventAt).toISOString().slice(0, 16).replace('T', ' ') + 'Z' : '— (no digest pushed yet; every evaluation and scheduler failure publishes one)'}
-                      mono
-                    />
                     <Row k="Capacity" v={`${s.digestChannel.maxClients} concurrent stream connection(s); excess gets 503 + Retry-After`} mono />
                     {s.digestChannel.exits && (
                       <>
@@ -278,31 +261,27 @@ export function SettingsView() {
                           k="Webhook exit"
                           v={
                             s.digestChannel.exits.webhook.state === 'configured'
-                              ? `armed → ${s.digestChannel.exits.webhook.host ?? 'configured host'}${s.digestChannel.exits.webhook.secretPresent ? ` · HMAC signed${s.digestChannel.exits.webhook.secretAdequate === false ? ' (secret <32 bytes — rotate)' : ' (v1, timestamped)'}` : ' · UNSIGNED'}${s.digestChannel.exits.webhook.targetAllowlisted ? ' · ALLOWLISTED private target (operator opt-in)' : ''}${s.digestChannel.exits.webhook.targetSafe === false ? ' · SSRF GUARD REFUSED TARGET' : ''} · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed${s.digestChannel.exits.webhook.lastError ? ` · last error: ${s.digestChannel.exits.webhook.lastError}` : ''}`
+                              ? `armed · ${s.digestChannel.exits.webhook.delivered} delivered / ${s.digestChannel.exits.webhook.failed} failed`
                               : s.digestChannel.exits.webhook.state === 'disabled'
-                                ? 'disabled by DIGEST_WEBHOOK_OFF=1'
-                                : 'not configured (set DIGEST_WEBHOOK_URL to arm — zero outbound work while unset)'
+                                ? 'disabled'
+                                : 'not configured — zero outbound work while unset'
                           }
                           mono
                         />
-                        {s.digestChannel.exits.webhook.state === 'configured' && s.digestChannel.exits.webhook.signingScheme && (
-                          <Row k="Signing" v={s.digestChannel.exits.webhook.signingScheme} mono />
-                        )}
                         <Row
                           k="Email exit"
                           v={
                             s.digestChannel.exits.email.state === 'configured'
-                              ? `armed → ${s.digestChannel.exits.email.host}:${s.digestChannel.exits.email.port} · ${s.digestChannel.exits.email.recipients} recipient(s) · scheduler facts only · ${s.digestChannel.exits.email.sent} sent / ${s.digestChannel.exits.email.failed} failed`
+                              ? `armed · ${s.digestChannel.exits.email.delivered} sent / ${s.digestChannel.exits.email.failed} failed`
                               : s.digestChannel.exits.email.state === 'disabled'
-                                ? 'disabled by DIGEST_EMAIL_OFF=1'
-                                : `credentials not configured${s.digestChannel.exits.email.missing.length ? ` (missing: ${s.digestChannel.exits.email.missing.join(', ')})` : ''} — zero sends attempted, nothing fabricated`
+                                ? 'disabled'
+                                : 'not configured — zero sends attempted'
                           }
                           mono
                         />
                       </>
                     )}
                   </div>
-                  <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.digestChannel.note}</p>
                 </HudPanel>
               </motion.section>
             )}
@@ -322,7 +301,6 @@ export function SettingsView() {
                           <span className="font-mono text-xs font-semibold text-ink">{e.key}</span>
                           <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{e.active ? 'active' : 'paused'}</span>
                         </div>
-                        <p className="mt-1 text-[11px] leading-relaxed text-dim">{e.hypothesis}</p>
                         <div className="mt-2 grid gap-2 sm:grid-cols-2">
                           {e.variants.map((v) => (
                             <div key={v.variant} className="flex items-center justify-between rounded-sm border border-edge bg-panel/40 px-2.5 py-1.5">
@@ -337,7 +315,6 @@ export function SettingsView() {
                       </div>
                     ))}
                   </div>
-                  <p className="mt-3 text-[10px] leading-relaxed text-faint">{s.experiments![0]?.note}</p>
                 </HudPanel>
               </motion.section>
             )}
@@ -350,6 +327,7 @@ export function SettingsView() {
                   <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Provider availability</h3>
                   <span className="telemetry text-[10px] uppercase tracking-wide-mc text-faint">polled every 30s</span>
                 </div>
+                {sourceSigns.data?.note && <p className="mt-2 text-[11px] leading-relaxed text-dim" role="status">{sourceSigns.data.note}</p>}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   {Object.entries(s.providers ?? {}).map(([name, p]) => (
                     <div key={name} className="rounded-sm border border-edge bg-panel-2/40 p-3">

@@ -58,6 +58,8 @@ export type DigestPushReason = 'evaluation' | 'scheduled-failure';
 /** What pushed a digest: an evaluation event (any trigger) or a failed scheduled run. */
 export interface DigestPushPayload {
   type: 'digest';
+  /** Stable triggering identity used by every receiver for deduplication. */
+  eventId: string;
   reason: DigestPushReason;
   /** Trigger of the evaluation that landed — null when reason is a scheduled failure. */
   trigger: 'manual' | 'backtest' | 'scheduled' | null;
@@ -74,6 +76,7 @@ export interface DigestPushPayload {
 }
 
 export function buildDigestPushPayload(input: {
+  eventId: string;
   reason: DigestPushReason;
   trigger: 'manual' | 'backtest' | 'scheduled' | null;
   correlationId: string | null;
@@ -86,6 +89,7 @@ export function buildDigestPushPayload(input: {
 }): DigestPushPayload {
   return {
     type: 'digest',
+    eventId: input.eventId,
     reason: input.reason,
     trigger: input.reason === 'evaluation' ? input.trigger : null,
     correlationId: input.correlationId,
@@ -137,6 +141,9 @@ export function buildHelloPayload(input: {
 /** A connected client's write side. `send` MUST throw once the stream is dead — that is the eviction signal. */
 export interface DigestSink {
   clientId: string;
+  ownerId?: string;
+  authorizePrivate?: () => Promise<boolean>;
+  close?: () => void;
   send(chunk: string): void;
 }
 
@@ -152,8 +159,10 @@ export interface DigestHub {
   unregister(clientId: string): void;
   /** Publish one SSE event to every live sink; dead sinks are evicted, never rethrown. */
   publish(event: string, data: unknown): { eventId: number; message: string; delivered: number; evicted: number };
+  publishPrivate(event: string, data: unknown, ownerId: string): Promise<{ delivered: number }>;
   subscriberCount(): number;
   status(): DigestHubStatus;
+  close?(): Promise<void>;
 }
 
 export function createDigestHub(maxClients = MAX_STREAM_CLIENTS): DigestHub {
@@ -174,6 +183,28 @@ export function createDigestHub(maxClients = MAX_STREAM_CLIENTS): DigestHub {
     },
     unregister(clientId) {
       sinks.delete(clientId);
+    },
+    async publishPrivate(event, data, ownerId) {
+      const id = ++eventIdSeq;
+      const message = formatSseMessage({ id, event, data });
+      let delivered = 0;
+      for (const sink of [...sinks.values()]) {
+        if (!ownerId || sink.ownerId !== ownerId) continue;
+        try {
+          if (!sink.authorizePrivate || !await sink.authorizePrivate()) throw new Error('private session invalid');
+          if (sinks.get(sink.clientId) !== sink) continue;
+          sink.send(message);
+          delivered += 1;
+        } catch {
+          sinks.delete(sink.clientId);
+          try { sink.close?.(); } catch { /* already closed */ }
+        }
+      }
+      if (delivered) {
+        eventsDelivered += delivered;
+        lastEventAt = new Date();
+      }
+      return { delivered };
     },
     publish(event, data) {
       eventIdSeq += 1;

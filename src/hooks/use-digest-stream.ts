@@ -36,6 +36,7 @@ function isValidDigestPushPayload(x: unknown): x is DigestPushPayload {
   if (x === null || typeof x !== 'object') return false;
   const p = x as Record<string, unknown>;
   if (p.type !== 'digest') return false;
+  if (typeof p.eventId !== 'string' || p.eventId.length === 0) return false;
   if (p.reason !== 'evaluation' && p.reason !== 'scheduled-failure') return false;
   if (typeof p.watchlistId !== 'string' || p.watchlistId.length === 0) return false;
   if (typeof p.pushedAt !== 'string' || typeof p.triggeredAt !== 'string') return false;
@@ -67,12 +68,14 @@ export function useDigestStream(): void {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fatalLogged = useRef(false);
+  const seenEvents = useRef(new Set<string>());
+  const newestPushAt = useRef(new Map<string, number>());
 
   useEffect(() => {
     const es = new EventSource(DIGEST_STREAM_PATH);
     const push = usePushChannel.getState; // stable actions — no shell re-render on events
 
-    const onDigest = (raw: MessageEvent<string>) => {
+    const onDigest = async (raw: MessageEvent<string>) => {
       const payload = parseEvent<unknown>(raw);
       if (!isValidDigestPushPayload(payload)) {
         console.warn('[digest-stream] malformed push payload ignored');
@@ -84,6 +87,19 @@ export function useDigestStream(): void {
         });
         return;
       }
+      if (seenEvents.current.has(payload.eventId)) return;
+      const pushedAtMs = Date.parse(payload.pushedAt);
+      if (pushedAtMs < (newestPushAt.current.get(payload.watchlistId) ?? 0)) return;
+      seenEvents.current.add(payload.eventId);
+      newestPushAt.current.set(payload.watchlistId, pushedAtMs);
+      if (seenEvents.current.size > 500) {
+        const keep = [...seenEvents.current].slice(-250);
+        seenEvents.current = new Set(keep);
+      }
+
+      // Cancel an older in-flight GET before applying pushed data. Otherwise
+      // that GET can resolve later and replace a newer server fact.
+      await queryClient.cancelQueries({ queryKey: ['watchlist-digest', payload.watchlistId] });
 
       // 1. Straight into the popover's default cache slot — zero requests.
       queryClient.setQueryData(['watchlist-digest', payload.watchlistId, 'cadence'], {
@@ -142,7 +158,7 @@ export function useDigestStream(): void {
     es.addEventListener('channel.full', () => {
       push().onReconnecting(); // capacity — the browser retries the connection
     });
-    es.addEventListener('watchlist.digest', onDigest as EventListener);
+    es.addEventListener('watchlist.digest', (raw) => { onDigest(raw as MessageEvent<string>); });
     es.onerror = () => {
       push().onReconnecting();
       if (es.readyState === EventSource.CLOSED && !fatalLogged.current) {
@@ -160,5 +176,5 @@ export function useDigestStream(): void {
     return () => {
       es.close();
     };
-  }, [queryClient]);
+  }, [queryClient, toast]);
 }

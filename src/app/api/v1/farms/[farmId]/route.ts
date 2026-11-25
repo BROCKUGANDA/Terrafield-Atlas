@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { parseBoundaryGeoJson } from '@/lib/geo';
-import { apiHandler, jsonResponse, parseBody } from '@/lib/api/helpers';
+import {
+  apiHandler, dedupedBoundedArray, errorResponse, jsonResponse, paginationSchema,
+  parseBody, withIdempotency, writeMutationEffects,
+} from '@/lib/api/helpers';
+import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
 /**
  * GET   /api/v1/farms/{farmId}
@@ -13,45 +17,43 @@ const patchSchema = z.object({
   country: z.string().max(80).nullable().optional(),
   region: z.string().max(120).nullable().optional(),
   boundaryGeoJson: z.string().max(60_000).optional(),
-  cropHistory: z
-    .array(
-      z.object({
-        season: z.string().max(40),
-        crop: z.string().max(80),
-        family: z.string().max(80).optional(),
-      }),
-    )
-    .max(40)
-    .optional(),
+  cropHistory: dedupedBoundedArray(z.object({
+    season: z.string().max(40),
+    crop: z.string().max(80),
+    family: z.string().max(80).optional(),
+  }), 40).optional(),
   notes: z.string().max(2000).nullable().optional(),
 });
 
 type FarmCtx = { params: Promise<{ farmId: string }> };
 
-export const GET = apiHandler<{ params: Promise<{ farmId: string }> }>(async (req, { correlationId, params }) => {
+export const GET = apiHandler<FarmCtx>(async (req, { correlationId, params }) => {
   const { farmId } = await params;
+  paginationSchema(100, 50).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
   const farm = await db.farm.findUnique({
     where: { id: farmId },
     include: {
-      soilTests: { orderBy: { measuredAt: 'desc' }, take: 50 },
+      soilTests: { orderBy: [{ measuredAt: 'desc' }, { id: 'desc' }], take: 50 },
       _count: { select: { scenarios: true, trendAnalyses: true, observations: true } },
     },
   });
   if (!farm) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${farmId} not found`, correlationId } }, { status: 404, correlationId });
+    return errorResponse(404, 'NOT_FOUND', `farm ${farmId} not found`, correlationId);
   }
   return jsonResponse({ farm }, { correlationId });
 });
 
-export const PATCH = apiHandler<FarmCtx>(async (req, { correlationId, params }) => {
+export const PATCH = apiHandler<FarmCtx>((req, { correlationId, params }) => withIdempotency(req, `/api/v1/farms/${req.nextUrl.pathname.split('/').at(-1)}`, async (req, { userId }) => {
   const { farmId } = await params;
   const parsed = await parseBody(req, patchSchema);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
+  const context = await resolveTenantContext(req);
+  requirePermission(context, 'farm.write');
 
   const existing = await db.farm.findUnique({ where: { id: farmId } });
   if (!existing) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${farmId} not found`, correlationId } }, { status: 404, correlationId });
+    return errorResponse(404, 'NOT_FOUND', `farm ${farmId} not found`, correlationId);
   }
 
   const data: Record<string, unknown> = {};
@@ -60,7 +62,7 @@ export const PATCH = apiHandler<FarmCtx>(async (req, { correlationId, params }) 
   if (body.region !== undefined) data.region = body.region;
   if (body.notes !== undefined) data.notes = body.notes;
   if (body.cropHistory !== undefined) {
-    // only crop names/families are stored; family is free text, the engine uses the catalogue for rules
+    // Only crop names/families are stored; the catalogue supplies agronomic rules.
     data.cropHistory = JSON.stringify(body.cropHistory);
   }
   if (body.boundaryGeoJson !== undefined) {
@@ -68,9 +70,7 @@ export const PATCH = apiHandler<FarmCtx>(async (req, { correlationId, params }) 
       data.boundaryGeoJson = null;
     } else {
       const geo = parseBoundaryGeoJson(body.boundaryGeoJson);
-      if (!geo.ok) {
-        return jsonResponse({ error: { code: 'INVALID_BOUNDARY', message: geo.reason, correlationId } }, { status: 400, correlationId });
-      }
+      if (!geo.ok) return errorResponse(400, 'INVALID_BOUNDARY', geo.reason, correlationId);
       data.boundaryGeoJson = JSON.stringify(geo.geometry);
       data.centroidLat = geo.centroid.lat;
       data.centroidLon = geo.centroid.lon;
@@ -78,9 +78,21 @@ export const PATCH = apiHandler<FarmCtx>(async (req, { correlationId, params }) 
     }
   }
 
-  const farm = await db.farm.update({ where: { id: farmId }, data });
-  await db.auditEvent.create({
-    data: { actor: 'demo-user', action: 'farm.update', targetId: farmId, detail: `fields: ${Object.keys(data).join(',')}` },
-  });
-  return jsonResponse({ farm }, { correlationId });
-});
+  return {
+    commit: async (tx) => {
+      const farm = await tx.farm.update({ where: { id: farmId }, data });
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'farm.update',
+        targetId: farmId,
+        detail: `fields: ${Object.keys(data).join(',')}`,
+        organizationId: context.organizationId,
+        aggregateType: 'Farm',
+        aggregateId: farmId,
+        eventType: 'farm.updated',
+        payload: { farmId, ownerId: userId, fields: Object.keys(data) },
+      });
+      return jsonResponse({ farm }, { correlationId });
+    },
+  };
+}));

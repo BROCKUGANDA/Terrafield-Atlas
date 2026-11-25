@@ -1,66 +1,80 @@
 import { db } from '@/lib/db';
 
-/**
- * GET /api/v1/readyz — READINESS probe (traffic-gating contract).
- *
- * Verifies the dependencies the console needs to answer USEFUL requests:
- *   - database reachable (SELECT 1) and seed baseline present,
- *   - watchlist scheduler timer alive (when not disabled by env),
- *   - digest push channel not disabled.
- *
- * Unlike /api/v1/health this is deliberately CHEAP (no counts, no provider
- * probes) so load balancers can poll it aggressively. A 'degraded' answer
- * lists exactly which dependency is unhappy — never a bare false.
- */
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 const DEGRADED_STATUS = 503;
 
+/** Traffic gate: schema, seed, Redis, scheduler leadership and worker health. */
 export async function GET() {
   const started = Date.now();
   const checks: Record<string, { ok: boolean; detail: string }> = {};
 
-  let dbOk = false;
   try {
     await db.$queryRaw`SELECT 1`;
-    dbOk = true;
-    checks.database = { ok: true, detail: 'SELECT 1 answered' };
-    const farms = await db.farm.count();
-    checks.seedBaseline = { ok: true, detail: `${farms} farm record(s) present` };
-  } catch (err) {
-    checks.database = { ok: false, detail: err instanceof Error ? err.message.slice(0, 200) : 'database error' };
-    checks.seedBaseline = { ok: false, detail: 'skipped — database unavailable' };
+    checks.database = { ok: true, detail: 'reachable' };
+  } catch {
+    checks.database = { ok: false, detail: 'unavailable' };
   }
 
-  const schedulerOff = process.env.WATCH_SCHEDULER_OFF === '1';
-  checks.scheduler = schedulerOff
-    ? { ok: true, detail: 'disabled by WATCH_SCHEDULER_OFF=1 (on-demand evaluation only) — treated as ready' }
-    : await (async () => {
-        try {
-          const { schedulerEnabled, schedulerHeartbeat } = await import('@/lib/scheduler');
-          if (!schedulerEnabled()) return { ok: false, detail: 'scheduler timer not started yet' };
-          const beat = schedulerHeartbeat();
-          if (beat.staleSec !== null && beat.staleSec > 15 * 60) {
-            return { ok: false, detail: `scheduler timer silent for ${Math.round(beat.staleSec)}s — watchdog restart pending` };
-          }
-          return { ok: true, detail: `tick every ${beat.tickEverySec}s; last tick ${beat.staleSec === null ? 'pending' : `${Math.round(beat.staleSec)}s ago`}` };
-        } catch (err) {
-          return { ok: false, detail: err instanceof Error ? err.message : 'scheduler check failed' };
-        }
-      })();
+  try {
+    const schema = await db.$queryRaw<Array<{ watchlists: string | null; receipts: string | null }>>`
+      SELECT to_regclass('"FireWatchlist"')::text AS watchlists, to_regclass('"DeliveryReceipt"')::text AS receipts
+    `;
+    checks.schema = schema[0]?.watchlists && schema[0]?.receipts
+      ? { ok: true, detail: 'required tables present' }
+      : { ok: false, detail: 'required migrations are not deployed' };
+  } catch {
+    checks.schema = { ok: false, detail: 'schema could not be verified' };
+  }
 
-  const pushOff = process.env.DIGEST_PUSH_OFF === '1';
-  checks.digestChannel = { ok: true, detail: pushOff ? 'disabled by DIGEST_PUSH_OFF=1 (REST digests remain)' : 'SSE push channel armed' };
+  try {
+    const farms = await db.farm.count();
+    checks.seedBaseline = { ok: farms > 0, detail: farms > 0 ? 'seed records present' : 'seed baseline is empty' };
+  } catch {
+    checks.seedBaseline = { ok: false, detail: 'seed baseline could not be verified' };
+  }
 
-  const ok = Object.values(checks).every((c) => c.ok);
+  try {
+    const { redisRuntime } = await import('@/lib/redis');
+    await redisRuntime().ping();
+    checks.redis = { ok: true, detail: 'reachable' };
+  } catch {
+    checks.redis = { ok: false, detail: 'unavailable' };
+  }
+
+  if (process.env.WATCH_SCHEDULER_OFF === '1') {
+    checks.scheduler = { ok: true, detail: 'disabled by configuration' };
+  } else {
+    try {
+      const { schedulerLeaseStatus } = await import('@/lib/scheduler');
+      const lease = await schedulerLeaseStatus();
+      const heartbeatAge = lease.heartbeatAt ? Date.now() - Date.parse(lease.heartbeatAt) : Infinity;
+      checks.scheduler = lease.leader && heartbeatAge <= 90_000
+        ? { ok: true, detail: 'leadership lease and heartbeat are fresh' }
+        : { ok: false, detail: 'fresh scheduler leadership is unavailable' };
+    } catch {
+      checks.scheduler = { ok: false, detail: 'leadership could not be verified' };
+    }
+  }
+
+  if (process.env.READINESS_REQUIRE_WORKERS === '0') {
+    checks.workers = { ok: true, detail: 'worker requirement disabled by configuration' };
+  } else {
+    try {
+      const { listWorkerHeartbeats } = await import('@/lib/jobs/runtime');
+      const workers = await listWorkerHeartbeats();
+      const fresh = workers.some((worker) => worker.ageSec <= 90);
+      checks.workers = fresh ? { ok: true, detail: `${workers.length} worker heartbeat(s) visible` } : { ok: false, detail: 'no fresh worker heartbeat' };
+    } catch (error) {
+      console.error('[readyz] worker health check failed:', error instanceof Error ? error.message : error);
+      checks.workers = { ok: false, detail: 'worker health could not be verified' };
+    }
+  }
+
+  const ok = Object.values(checks).every((check) => check.ok);
   return Response.json(
-    {
-      status: ok ? 'ready' : 'degraded',
-      service: 'terrafield-atlas',
-      probe: 'readiness',
-      checks,
-      latencyMs: Date.now() - started,
-      checkedAt: new Date().toISOString(),
-    },
-    { status: ok ? 200 : DEGRADED_STATUS, headers: { 'Cache-Control': 'no-store' } },
+    { status: ok ? 'ready' : 'degraded', service: 'terrafield-atlas', probe: 'readiness', checks, latencyMs: Date.now() - started, checkedAt: new Date().toISOString() },
+    { status: ok ? 200 : DEGRADED_STATUS, headers: { 'cache-control': 'no-store' } },
   );
 }

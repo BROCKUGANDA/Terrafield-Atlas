@@ -24,8 +24,10 @@ export interface ComputedDigest {
   watchlist: ReturnType<typeof serializeWatchlist>;
   /** Full cadence-aware digest (windows, summaries, comparison, prose). */
   digest: ReturnType<typeof buildDigest>;
-  /** Trigger of the NEWEST evaluation inside the window — null when there is none. */
+  /** Trigger of the explicit triggering event, or the newest event for pull reads. */
   newestEventTrigger: 'manual' | 'backtest' | 'scheduled' | null;
+  /** Stable event identity carried through SSE/webhook/email delivery. */
+  triggeringEventId: string | null;
   /** Evaluation rows actually read (drives the `truncated` flag upstream). */
   eventRowsRead: number;
 }
@@ -44,10 +46,10 @@ export type DigestServiceResult =
  */
 export async function computeWatchlistDigest(
   id: string,
-  opts: { requestedHours?: number | null; now?: Date } = {},
+  opts: { requestedHours?: number | null; now?: Date; ownerId?: string | null; triggeringEventId?: string | null } = {},
 ): Promise<DigestServiceResult> {
   const w = await db.fireWatchlist.findUnique({ where: { id } });
-  if (!w) {
+  if (!w || (w.ownerId !== null && w.ownerId !== opts.ownerId)) {
     return { ok: false, failure: { code: 'NOT_FOUND', message: `watchlist ${id} not found` } };
   }
 
@@ -61,10 +63,12 @@ export async function computeWatchlistDigest(
   const { previous } = digestWindows(now, hours);
   const since = new Date(previous.start);
 
-  const [rawEvents, failRows] = await Promise.all([
+  const [newestEvents, failRows] = await Promise.all([
     db.fireWatchEvent.findMany({
       where: { watchlistId: id, evaluatedAt: { gte: since } },
-      orderBy: { evaluatedAt: 'asc' },
+      // Fetch newest-first BEFORE applying the cap; otherwise a busy watchlist
+      // silently summarizes the oldest rows and misses the triggering event.
+      orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }],
       take: DIGEST_EVENT_TAKE,
     }),
     db.auditEvent.findMany({
@@ -73,6 +77,9 @@ export async function computeWatchlistDigest(
       take: DIGEST_FAILURE_TAKE,
     }),
   ]);
+  const rawEvents = [...newestEvents].sort((a, b) =>
+    a.evaluatedAt.getTime() - b.evaluatedAt.getTime() || a.id.localeCompare(b.id),
+  );
 
   const digest = buildDigest({
     name: w.name,
@@ -88,16 +95,20 @@ export async function computeWatchlistDigest(
     truncated: rawEvents.length === DIGEST_EVENT_TAKE,
   });
 
-  // Rows are ordered ascending — the last one is the newest evaluation, and
-  // its serialized trigger says what kind of evaluation most recently landed.
+  // A delivery carries the exact triggering event id. Fall back to the newest
+  // event only for direct/read-only callers that do not have that identity.
   const serializedEvents = rawEvents.map(serializeEvent);
+  const triggering = opts.triggeringEventId
+    ? serializedEvents.find((event) => event.id === opts.triggeringEventId)
+    : serializedEvents[serializedEvents.length - 1];
 
   return {
     ok: true,
     result: {
       watchlist: serializeWatchlist(w),
       digest,
-      newestEventTrigger: serializedEvents.length > 0 ? serializedEvents[serializedEvents.length - 1].trigger : null,
+      newestEventTrigger: triggering?.trigger ?? null,
+      triggeringEventId: triggering?.id ?? opts.triggeringEventId ?? null,
       eventRowsRead: rawEvents.length,
     },
   };

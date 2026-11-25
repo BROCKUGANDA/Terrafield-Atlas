@@ -51,4 +51,4 @@ Allow: /
 # Machine-readable briefs for LLMs and answer engines
 # https://llmstxt.org — see /llms.txt and /llms-full.txt
 
-Sitemap: /sitemap.xml
+Sitemap: https://terrafieldatlas.us/sitemap.xml

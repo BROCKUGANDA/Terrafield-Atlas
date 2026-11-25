@@ -1,10 +1,13 @@
 'use client';
+import { AccountControls } from '@/components/account-controls';
+import { OrganizationSwitcher } from '@/components/organization-switcher';
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame,
-  FileText, Settings, ChevronRight, Activity, Menu, LogOut, Home, FlameKindling,
+  FileText, Settings, ChevronRight, Menu, LogOut, Home, FlameKindling,
+  Building2, CreditCard, BrainCircuit, Database, ShieldCheck,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
@@ -26,12 +29,17 @@ const NAV: { key: ViewKey; label: string; short: string; icon: React.ComponentTy
   { key: 'landing', label: 'Mission Overview', short: 'Overview', icon: Home, group: 'mission' },
   { key: 'dashboard', label: 'Earth Intelligence', short: 'Earth', icon: LayoutDashboard, group: 'intelligence' },
   { key: 'explorer', label: 'Geospatial Explorer', short: 'Explorer', icon: Map, group: 'intelligence' },
+  { key: 'sources', label: 'Data Catalogue', short: 'Data', icon: Database, group: 'intelligence' },
   { key: 'analysis', label: 'Environmental Analysis', short: 'Analysis', icon: LineChart, group: 'intelligence' },
   { key: 'fire', label: 'Fire Intelligence', short: 'Fire', icon: Flame, group: 'intelligence' },
   { key: 'farm', label: 'Farm Workspace', short: 'Farms', icon: Tractor, group: 'planning' },
   { key: 'rotation', label: 'Rotation Planner', short: 'Rotation', icon: Sprout, group: 'planning' },
   { key: 'reports', label: 'Field Reports', short: 'Reports', icon: FileText, group: 'planning' },
+  { key: 'organizations', label: 'Organization Workspace', short: 'Workspace', icon: Building2, group: 'enterprise' },
+  { key: 'billing', label: 'Plans & Usage', short: 'Plans', icon: CreditCard, group: 'enterprise' },
+  { key: 'intelligence', label: 'Atlas Intelligence', short: 'Intelligence', icon: BrainCircuit, group: 'enterprise' },
   { key: 'provenance', label: 'Evidence & Provenance', short: 'Provenance', icon: ScrollText, group: 'trust' },
+  { key: 'admin', label: 'Platform Administration', short: 'Admin', icon: ShieldCheck, group: 'trust' },
   { key: 'settings', label: 'System Health', short: 'Systems', icon: Settings, group: 'trust' },
 ];
 
@@ -39,6 +47,7 @@ const GROUP_LABEL: Record<string, string> = {
   mission: 'Mission',
   intelligence: 'Earth Intelligence',
   planning: 'Field Planning',
+  enterprise: 'Institution & Commerce',
   trust: 'Trust & Systems',
 };
 
@@ -127,9 +136,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useDigestStream();
 
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 120_000, retry: 1 });
+  const admin = useQuery({ queryKey: ['account-capabilities'], queryFn: api.capabilities, retry: false, staleTime: 60_000 });
   const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1 });
 
-  const groups = ['mission', 'intelligence', 'planning', 'trust'];
+  const groups = ['mission', 'intelligence', 'planning', 'enterprise', 'trust'];
   const currentLabel = NAV.find((n) => n.key === view)?.label ?? 'Console';
 
   const navContent = (
@@ -150,13 +160,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <p className="px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-mission text-faint">
             {GROUP_LABEL[g]}
           </p>
-          {NAV.filter((n) => n.group === g).map((item) => {
+          {NAV.filter((n) => n.group === g).filter((item) => item.key !== 'admin' || admin.data?.isAdmin === true).map((item) => {
             const active = view === item.key;
             const Icon = item.icon;
             return (
               <button
                 key={item.key}
                 onClick={() => {
+                  if (!operator && item.key !== 'landing') useSession.getState().login('GUEST');
                   setView(item.key);
                   setMobileOpen(false);
                 }}
@@ -207,17 +218,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const systemsNominal = health.data?.status === 'ok';
 
   return (
-    <div className="flex min-h-screen flex-col bg-void text-dim">
+    <div className="console-shell flex min-h-screen flex-col bg-void text-dim">
       <div className="flex flex-1 flex-col lg:flex-row">
         {/* Console rail (desktop) */}
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-y-auto border-r border-edge bg-sidebar lg:block">
+        <aside className="console-rail sticky top-0 hidden h-screen w-64 shrink-0 overflow-y-auto border-r border-edge bg-sidebar lg:block">
           {navContent}
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Command bar */}
-          <header className="sticky top-0 z-30 border-b border-edge bg-void/92 backdrop-blur supports-[backdrop-filter]:bg-void/85">
-            <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
+          <header className="console-header sticky top-0 z-30 border-b border-edge bg-void/92 backdrop-blur supports-[backdrop-filter]:bg-void/85">
+            <div className="console-command-bar flex min-h-14 flex-wrap items-center gap-3 px-4 py-2 sm:px-6">
               <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                 <SheetTrigger asChild>
                   <Button
@@ -229,7 +240,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <Menu className="h-5 w-5" />
                   </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="w-72 border-edge bg-sidebar p-0" aria-label="Console navigation">
+                <SheetContent side="left" className="console-mobile-nav w-72 border-edge bg-sidebar p-0" aria-label="Console navigation">
                   <SheetTitle className="sr-only">Console navigation</SheetTitle>
                   <SheetDescription className="sr-only">
                     Mission modules: overview, earth intelligence, geospatial explorer, analysis, fire intelligence, farm workspace, rotation planner, reports, provenance and system health.
@@ -251,7 +262,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="hidden truncate text-faint xl:inline xl:max-w-[18rem]">{location.label}</span>
               </div>
 
-              <div className="ml-auto flex items-center gap-3">
+              <div className="console-command-actions ml-auto flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+                <OrganizationSwitcher />
+                <AccountControls />
                 <span data-tour="hdr-clock" className="flex items-center">
                   <MissionClock />
                 </span>
@@ -322,7 +335,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     aria-label={`Sign out operator ${operator.callsign}`}
                     title={`Sign out ${operator.callsign}`}
                   >
-                    <span className="telemetry hidden text-signal sm:inline">{operator.callsign}</span>
+                    <span className="telemetry hidden max-w-24 truncate text-signal sm:inline">{operator.callsign}</span>
                     <LogOut className="h-3.5 w-3.5" aria-hidden />
                   </button>
                 )}

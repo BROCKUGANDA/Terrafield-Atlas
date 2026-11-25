@@ -1,17 +1,18 @@
 import { db } from '@/lib/db';
+import { mailTransport, sendEmail } from '@/lib/mail';
 import type { DigestPushPayload } from '@/lib/fires/digest-push';
 
 /**
- * Email digest exit — SMTP delivery of cadence-aware digests.
+ * Email digest exit — Resend HTTPS or SMTP delivery of cadence-aware digests.
  *
  * Topology note (same family as lib/scheduler.ts, digest-push.ts and
  * digest-exit-webhook.ts): the runtime is ONE Node process. SMTP is plain
  * OUTBOUND TCP to any mail host, which this topology fully supports; nothing
  * new needs to exist "in the topology" beyond credentials.
  *
- * Honesty contract (identical to the FIRMS_MAP_KEY pattern): when the SMTP
+ * Honesty contract (identical to the FIRMS_MAP_KEY pattern): when required
  * environment variables are absent, this exit reports state
- * 'credentials-not-configured', attempts ZERO sends, and says so through
+ * 'not-configured', attempts ZERO sends, and says so through
  * /api/v1/system/status. It never fabricates a "sent" outcome.
  *
  * Firing rule (deliberately narrower than the webhook exit): emails fire ONLY
@@ -21,7 +22,11 @@ import type { DigestPushPayload } from '@/lib/fires/digest-push';
  * would be noise, not a digest. The machine-to-machine facts (a cadence
  * produced a digest unattended) are the ones a mailbox cares about.
  *
- * Configuration (README documents all of it):
+ * Configuration (Resend takes precedence when its key is set):
+ *   RESEND_API_KEY — HTTPS provider credential
+ *   DIGEST_EMAIL_FROM / EMAIL_FROM — sender, falling back to DIGEST_SMTP_FROM
+ *   DIGEST_EMAIL_TO — explicit recipients, falling back to DIGEST_SMTP_TO
+ *   delivered@resend.dev is a reserved test destination, not a user mailbox.
  *   DIGEST_SMTP_HOST / _PORT (default 587) / _USER / _PASS — relay credentials
  *   DIGEST_SMTP_FROM  — envelope From (e.g. "TerraField Atlas <alerts@example.org>")
  *   DIGEST_SMTP_TO    — comma-separated recipient list
@@ -35,6 +40,7 @@ import type { DigestPushPayload } from '@/lib/fires/digest-push';
 export type EmailConfigState = 'configured' | 'not-configured' | 'disabled' | 'incomplete';
 
 export interface EmailConfig {
+  transport: 'resend' | 'smtp';
   enabled: boolean;
   state: EmailConfigState;
   host: string | null;
@@ -50,8 +56,9 @@ const REQUIRED_VARS = ['DIGEST_SMTP_HOST', 'DIGEST_SMTP_FROM', 'DIGEST_SMTP_TO']
 /** Parse + validate the email exit configuration. Pure. */
 export function parseEmailConfig(env: Record<string, string | undefined>): EmailConfig {
   const host = env.DIGEST_SMTP_HOST?.trim() || null;
-  const from = env.DIGEST_SMTP_FROM?.trim() || null;
-  const toRaw = env.DIGEST_SMTP_TO?.trim() || '';
+  const transport = mailTransport(env);
+  const from = env.DIGEST_EMAIL_FROM?.trim() || env.EMAIL_FROM?.trim() || env.DIGEST_SMTP_FROM?.trim() || null;
+  const toRaw = env.DIGEST_EMAIL_TO?.trim() || env.DIGEST_SMTP_TO?.trim() || '';
   const recipients = toRaw
     .split(',')
     .map((s) => s.trim())
@@ -61,16 +68,20 @@ export function parseEmailConfig(env: Record<string, string | undefined>): Email
     : 587;
 
   if (env.DIGEST_EMAIL_OFF === '1') {
-    return { enabled: false, state: 'disabled', host, port, from, recipients, missing: [] };
+    return { transport, enabled: false, state: 'disabled', host, port, from, recipients, missing: [] };
   }
 
-  const missing = REQUIRED_VARS.filter((v) => !env[v] || env[v]!.trim().length === 0) as string[];
+  const missing: string[] = [];
+  if (transport === 'smtp' && !host) missing.push(REQUIRED_VARS[0]);
+  if (!from) missing.push(transport === 'resend' ? 'DIGEST_EMAIL_FROM or EMAIL_FROM' : REQUIRED_VARS[1]);
+  if (!toRaw) missing.push(transport === 'resend' ? 'DIGEST_EMAIL_TO' : REQUIRED_VARS[2]);
+  if (transport === 'smtp' && Boolean(env.DIGEST_SMTP_USER?.trim()) !== Boolean(env.DIGEST_SMTP_PASS?.trim())) missing.push('DIGEST_SMTP_USER / DIGEST_SMTP_PASS');
   if (toRaw && recipients.length === 0) missing.push('DIGEST_SMTP_TO (no valid address parsed)');
   if (missing.length > 0) {
-    return { enabled: false, state: 'not-configured', host, port, from, recipients, missing };
+    return { transport, enabled: false, state: 'not-configured', host, port, from, recipients, missing };
   }
 
-  return { enabled: true, state: 'configured', host, port, from, recipients, missing: [] };
+  return { transport, enabled: true, state: 'configured', host, port, from, recipients, missing: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +135,8 @@ export function shouldEmailDigest(payload: DigestPushPayload): boolean {
 // ---------------------------------------------------------------------------
 
 export interface EmailExitStatus {
+  transport: 'resend' | 'smtp';
+  recipientMode: 'test-only' | 'configured-recipients' | 'none';
   state: EmailConfigState;
   host: string | null;
   port: number;
@@ -156,9 +169,11 @@ export function emailExitStatus(): EmailExitStatus {
   const cfg = parseEmailConfig(process.env as Record<string, string | undefined>);
   const rt = runtime();
   const base = {
+    transport: cfg.transport,
+    recipientMode: (cfg.recipients.length === 0 ? 'none' : cfg.recipients.every((r) => r.toLowerCase() === 'delivered@resend.dev') ? 'test-only' : 'configured-recipients') as EmailExitStatus['recipientMode'],
     state: cfg.state,
-    host: cfg.host,
-    port: cfg.port,
+    host: cfg.transport === 'resend' ? 'api.resend.com' : cfg.host,
+    port: cfg.transport === 'resend' ? 443 : cfg.port,
     recipients: cfg.recipients.length,
     missing: cfg.missing,
     sent: rt.sent,
@@ -170,12 +185,12 @@ export function emailExitStatus(): EmailExitStatus {
     ...base,
     note:
       cfg.state === 'configured'
-        ? 'Email digest exit ARMED: every SCHEDULER fact (completed scheduled re-evaluation or failed scheduled run) is emailed to the configured recipients; manual and backtest evaluations are console-feedback-only by design. One audit row per send or failure.'
+        ? `Email digest exit ARMED via ${cfg.transport === 'resend' ? 'Resend HTTPS' : 'SMTP'} for scheduler facts only. ${base.recipientMode === 'test-only' ? 'Reserved Resend test destination only; no user mailbox delivery.' : 'Explicitly configured recipients only.'} One audit row per send or failure. Configured does not prove delivery.`
         : cfg.state === 'disabled'
           ? 'Email digest exit disabled by DIGEST_EMAIL_OFF=1 — the SSE channel, webhook exit and on-demand digests remain available.'
           : cfg.state === 'incomplete'
             ? `Email digest exit INCOMPLETE configuration (missing: ${cfg.missing.join(', ')}) — zero sends attempted, nothing fabricated.`
-            : 'Email digest exit NOT configured (SMTP credentials absent — the same honest state as FIRMS without MAP_KEY). Zero sends attempted; set DIGEST_SMTP_HOST / _FROM / _TO to arm it.',
+            : `Email digest exit NOT configured (missing: ${cfg.missing.join(', ')}). Zero sends attempted. Set RESEND_API_KEY, DIGEST_EMAIL_FROM or EMAIL_FROM, and DIGEST_EMAIL_TO; legacy SMTP remains supported.`,
   };
 }
 
@@ -185,9 +200,8 @@ export type EmailDeliveryOutcome = {
 };
 
 /**
- * Send one digest email through the configured relay. Fire-and-forget by
- * contract — NEVER throws. Nodemailer is imported lazily so the dependency
- * only loads when the exit is actually armed.
+ * Send one digest email through the configured provider. Fire-and-forget by
+ * contract — NEVER throws. The shared sender bounds delivery to ten seconds.
  */
 export async function deliverDigestEmail(
   payload: DigestPushPayload,
@@ -204,14 +218,7 @@ export async function deliverDigestEmail(
   const rt = runtime();
   const { subject, text } = renderDigestEmail(payload);
   try {
-    const nodemailer = (await import('nodemailer')).default;
-    const transporter = nodemailer.createTransport({
-      host: cfg.host as string,
-      port: cfg.port,
-      secure: cfg.port === 465,
-      auth: process.env.DIGEST_SMTP_USER ? { user: process.env.DIGEST_SMTP_USER, pass: process.env.DIGEST_SMTP_PASS } : undefined,
-    });
-    const info = await transporter.sendMail({
+    const info = await sendEmail({
       from: cfg.from as string,
       to: cfg.recipients,
       subject,
@@ -222,8 +229,8 @@ export async function deliverDigestEmail(
     rt.lastError = null;
     await recordEmailAudit(true, payload, { subject, messageId: info.messageId, correlationId: ctx.correlationId }, ctx.now);
     return { sent: true, error: null };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+  } catch {
+    const message = `${cfg.transport === 'resend' ? 'Resend' : 'SMTP'} email delivery failed`;
     rt.failed += 1;
     rt.lastError = message;
     await recordEmailAudit(false, payload, { subject, error: message, correlationId: ctx.correlationId }, ctx.now);
@@ -252,7 +259,7 @@ async function recordEmailAudit(
         }),
       },
     });
-  } catch (err) {
-    console.error('[digest-email] audit log failed:', err instanceof Error ? err.message : err);
+  } catch {
+    console.error('[digest-email] audit log failed');
   }
 }

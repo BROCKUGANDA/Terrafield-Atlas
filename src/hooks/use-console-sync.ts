@@ -15,12 +15,12 @@ import { logEvent } from '@/components/state/log-store';
  *   #view=rotation&farm=<id>&region=nakuru
  *
  * The hash is applied once on load (view + farm immediately, region once the
- * preset catalogue resolves) and then kept in sync with history.replaceState —
- * no history pollution while the operator moves through modules.
+ * preset catalogue resolves). Module navigation creates browser history entries;
+ * coordinate and farm updates replace the current entry.
  */
 
 const VALID_VIEWS = new Set<ViewKey>([
-  'landing', 'dashboard', 'explorer', 'analysis', 'farm', 'rotation', 'provenance', 'fire', 'reports', 'settings',
+  'landing', 'dashboard', 'explorer', 'sources', 'analysis', 'farm', 'rotation', 'provenance', 'fire', 'reports', 'organizations', 'billing', 'intelligence', 'admin', 'settings',
 ]);
 
 function readHash(): URLSearchParams | null {
@@ -36,6 +36,32 @@ export function useConsoleUrlSync(enabled: boolean): void {
 
   const baseAppliedRef = useRef(false);
   const regionAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const restore = () => {
+      const params = readHash();
+      const target = params?.get('view') as ViewKey | null;
+      if (target && VALID_VIEWS.has(target)) setView(target);
+      const farm = params?.get('farm');
+      setActiveFarmId(farm && farm !== 'none' ? farm : null);
+      const region = (regions.data?.regions ?? []).find((r) => r.key === params?.get('region'));
+      if (region) {
+        setLocation({ lat: region.lat, lon: region.lon, label: region.name, country: region.country, context: region.croppingContext });
+      } else {
+        const coordinate = params?.get('at')?.split(',').map(Number);
+        if (coordinate?.length === 2 && coordinate.every(Number.isFinite) && Math.abs(coordinate[0]) <= 90 && Math.abs(coordinate[1]) <= 180) {
+          setLocation({ lat: coordinate[0], lon: coordinate[1], label: 'Custom coordinate' });
+        }
+      }
+    };
+    window.addEventListener('hashchange', restore);
+    window.addEventListener('popstate', restore);
+    return () => {
+      window.removeEventListener('hashchange', restore);
+      window.removeEventListener('popstate', restore);
+    };
+  }, [enabled, regions.data, setView, setActiveFarmId, setLocation]);
 
   // 1a. Apply view + farm from the incoming hash exactly once.
   useEffect(() => {
@@ -65,8 +91,15 @@ export function useConsoleUrlSync(enabled: boolean): void {
   useEffect(() => {
     if (!enabled || regionAppliedRef.current || !regions.isSuccess) return;
     regionAppliedRef.current = true;
-    const region = readHash()?.get('region');
-    if (!region) return;
+    const params = readHash();
+    const region = params?.get('region');
+    if (!region) {
+      const coordinate = params?.get('at')?.split(',').map(Number);
+      if (coordinate?.length === 2 && coordinate.every(Number.isFinite) && Math.abs(coordinate[0]) <= 90 && Math.abs(coordinate[1]) <= 180) {
+        setLocation({ lat: coordinate[0], lon: coordinate[1], label: 'Custom coordinate' });
+      }
+      return;
+    }
     const preset = (regions.data?.regions ?? []).find((r) => r.key === region);
     if (!preset) return;
     setLocation({
@@ -78,26 +111,29 @@ export function useConsoleUrlSync(enabled: boolean): void {
     });
   }, [enabled, regions.isSuccess]);
 
-  // 2. Mirror store state back into the URL (replace, not push).
+  // 2. Mirror current store state after incoming link effects have run.
   //    Gated until region presets settle so the mirror can never race ahead
   //    of the region-apply effect above and destroy an incoming `region=` param.
   const regionsSettled = regions.isSuccess || regions.isError;
   useEffect(() => {
     if (!enabled || !baseAppliedRef.current || !regionsSettled) return;
+    const current = useSession.getState();
     const params = new URLSearchParams();
-    if (view) params.set('view', view);
-    if (activeFarmId) params.set('farm', activeFarmId);
+    params.set('view', current.view);
+    if (current.activeFarmId) params.set('farm', current.activeFarmId);
     const preset = (regions.data?.regions ?? []).find(
-      (r) => Math.abs(r.lat - location.lat) < 0.01 && Math.abs(r.lon - location.lon) < 0.01,
+      (r) => Math.abs(r.lat - current.location.lat) < 0.000001 && Math.abs(r.lon - current.location.lon) < 0.000001,
     );
     if (preset) {
       params.set('region', preset.key);
     } else {
-      params.set('at', `${location.lat.toFixed(3)},${location.lon.toFixed(3)}`);
+      params.set('at', `${current.location.lat.toFixed(6)},${current.location.lon.toFixed(6)}`);
     }
     const hash = `#${params.toString()}`;
     if (window.location.hash !== hash) {
-      window.history.replaceState(null, '', hash);
+      const previousView = readHash()?.get('view');
+      if (previousView && previousView !== current.view) window.history.pushState(null, '', hash);
+      else window.history.replaceState(null, '', hash);
     }
-  }, [view, activeFarmId, location.lat, location.lon, regions.data, regionsSettled]);
+  }, [enabled, view, activeFarmId, location.lat, location.lon, regions.data, regionsSettled]);
 }

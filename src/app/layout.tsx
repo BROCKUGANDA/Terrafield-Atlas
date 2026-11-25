@@ -30,16 +30,16 @@ const plexMono = IBM_Plex_Mono({
  * Site URL: explicit env wins; otherwise the deployment origin is built from
  * the known preview host pattern — never a fabricated domain in prod.
  */
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, '') || 'https://terrafield-atlas.space');
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, '') || 'https://terrafieldatlas.us');
 
 const FAQ = [
   {
     q: 'What does TerraField Atlas do?',
-    a: 'It is a mission console that turns real NASA Earth observations — POWER meteorology, GIBS MODIS/VIIRS layers, SMAP moisture, EONET events and the VIIRS fire-detection stream — into evidence-supported crop-rotation guidance and live, push-delivered fire intelligence for agricultural operators.',
+    a: 'It is a mission console for NASA POWER meteorology, GIBS imagery and thermal anomalies, EONET event context, crop-rotation comparisons and fire watchlists. Quantitative SMAP/MODIS science ingestion requires separately configured Earthdata access.',
   },
   {
     q: 'Is the data real or simulated?',
-    a: 'Real. Every displayed observation is a stored NASA record attributed to its provider and retrieval. Missing data renders as no-data with a stated reason — never zero-filled and never imputed.',
+    a: 'Environmental observations are source-attributed provider records. Recent FIRMS and EONET snapshots are fetched separately from stored historical observations. Globe stations and orbital links are illustrative. Missing observations remain missing, not zero-filled.',
   },
   {
     q: 'How are trends tested?',
@@ -51,7 +51,7 @@ const FAQ = [
   },
   {
     q: 'How are digests delivered?',
-    a: 'Every evaluation event pushes a cadence-aware digest over Server-Sent Events to open consoles, exits through an HMAC-SHA256-signed webhook (timestamped signature, replay window, SSRF guard), and — for scheduler facts — SMTP email. Every attempt is logged with status, latency and a correlation ID.',
+    a: 'Public-demo evaluations can publish via SSE and configured signed webhooks; scheduler facts can send through Resend or SMTP. The deployed email recipient is a reserved Resend test inbox, and the webhook records a local signed receipt without external forwarding. Private digest broadcasting is disabled.',
   },
   {
     q: 'What are the limits?',
@@ -85,7 +85,7 @@ const JSON_LD = {
       url: SITE_URL,
       image: `${SITE_URL}/og-image.png`,
       description:
-        'Mission console for evidence-supported crop-rotation planning and live fire intelligence built on NASA POWER, GIBS MODIS/VIIRS and SMAP observations, with statistical trend detection, full data provenance and push-delivered digests.',
+        'Mission console for evidence-supported crop-rotation comparisons, NASA POWER history, GIBS imagery and fire context, with explicit provenance and availability limits.',
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       featureList: [
         '12+ years of daily NASA POWER meteorology for any coordinate',
@@ -93,7 +93,7 @@ const JSON_LD = {
         'VIIRS 375 m fire-detection stream from NASA GIBS vector tiles',
         'Regional fire watchlists on real scheduler cadences',
         'Cadence-aware digests pushed via SSE, signed webhook and email',
-        'Full data provenance for every retrieval',
+        'Provider retrieval logging with secret redaction and privacy-gated diagnostics',
       ],
     },
     {
@@ -114,7 +114,7 @@ export const metadata: Metadata = {
     template: '%s · TerraField Atlas',
   },
   description:
-    'Mission console for evidence-supported crop-rotation planning and live fire intelligence built on NASA POWER, GIBS MODIS/VIIRS and SMAP observations — statistical trend detection, VIIRS fire watchlists on real cadences, push-delivered digests, full data provenance. NASA Space Apps Challenge 2026 — Field Shift.',
+    'Explore NASA Earth observations, compare crop rotations, inspect VIIRS fire context and review evidence limits. Public demo and verified private farm records. NASA Space Apps Challenge 2026 — Field Shift.',
   keywords: [
     'NASA', 'Space Apps 2026', 'Earth observation', 'agriculture', 'crop rotation', 'NASA POWER', 'GIBS',
     'SMAP', 'VIIRS', 'FIRMS', 'fire intelligence', 'thermal anomalies', 'Mann-Kendall', 'food security',
@@ -125,7 +125,15 @@ export const metadata: Metadata = {
   publisher: 'TerraField Atlas Team',
   category: 'science',
   applicationName: 'TerraField Atlas',
-  alternates: { canonical: '/' },
+  alternates: {
+    canonical: '/',
+    languages: {
+      'en-AE': '/',
+      'en-US': '/',
+      en: '/',
+      'x-default': '/',
+    },
+  },
   openGraph: {
     type: 'website',
     url: SITE_URL,
@@ -133,7 +141,8 @@ export const metadata: Metadata = {
     title: 'TerraField Atlas — NASA Earth Intelligence for Agricultural Resilience',
     description:
       'Real NASA Earth observations, honest statistics, live fire intelligence and push-delivered digests — with full provenance for every retrieval. NASA Space Apps Challenge 2026.',
-    locale: 'en_US',
+    locale: 'en_AE',
+    alternateLocale: ['en_US', 'en_GB'],
     images: [{ url: '/og-image.png', width: 1200, height: 630, alt: 'TerraField Atlas — NASA Earth intelligence for agricultural resilience' }],
   },
   twitter: {
@@ -184,6 +193,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: '#050914',
   colorScheme: 'dark',
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({
@@ -197,6 +209,13 @@ export default function RootLayout({
         className={`${spaceGrotesk.variable} ${archivo.variable} ${plexMono.variable} font-sans antialiased bg-background text-foreground`}
       >
         <Providers>{children}</Providers>
+        <footer className="marketing-footer mx-auto max-w-7xl px-6 py-6 text-sm text-muted-foreground">
+          <a href="/about" className="underline underline-offset-4">Data sources, methodology, privacy & frequently asked questions</a>
+          <details className="mt-4">
+            <summary className="min-h-11 cursor-pointer py-3">Mission questions and evidence limits</summary>
+            {FAQ.map((entry) => <section key={entry.q} className="border-t py-4"><h2 className="font-medium text-foreground">{entry.q}</h2><p className="mt-2 leading-relaxed">{entry.a}</p></section>)}
+          </details>
+        </footer>
         <Toaster />
         {/* Structured data for search + answer engines (AEO): Organization,
             WebSite, SoftwareApplication and the mission FAQ. */}

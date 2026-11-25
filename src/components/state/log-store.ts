@@ -19,6 +19,7 @@ export type LogCategory =
   | 'AUTH'
   | 'INGEST'
   | 'ANALYSIS'
+  | 'AI'
   | 'ROTATION'
   | 'REPORT'
   | 'FIRE'

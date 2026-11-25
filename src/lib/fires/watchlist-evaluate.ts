@@ -10,30 +10,20 @@ import {
 } from '@/lib/fires/watchlist-engine';
 import { ensureCoverageForDate, storedDetections, type EnsuredDay } from '@/lib/fires/coverage';
 import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
-import { publishDigestForWatchlist } from '@/lib/fires/digest-channel';
+import { fetchFiresForDate } from '@/lib/adapters/gibsFires';
+import { withPrivateProvider } from '@/lib/ingest/provider-context';
+import {
+  acquireWatchlistEvaluationLease,
+  releaseWatchlistEvaluationLease,
+  WATCHLIST_EVALUATION_LEASE_MS,
+} from '@/lib/fires/evaluation-lease';
 
 /**
- * Shared LIVE watchlist evaluation — ONE code path for every trigger:
- *
- *  - 'manual'    → POST /evaluate with no body (operator: Evaluate now)
- *  - 'backtest'  → POST /evaluate with an explicit end date (the date picker)
- *  - 'scheduled' → in-process background scheduler (lib/scheduler.ts)
- *
- * 1. Window = [end - lookbackDays + 1, end] (end defaults to yesterday: the
- *    VIIRS archive typically lags one day).
- * 2. For every day in the window we ENSURE archive coverage: days never asked
- *    (or asked with a narrower bbox) are fetched from the real GIBS VIIRS
- *    375 m vector tiles and persisted idempotently; provider archive gaps are
- *    recorded as no-data days — never zero-filled.
- * 3. Status is computed from the STORED real detections only, via the pure
- *    watchlist engine, and one FireWatchEvent row is written per evaluation.
- *
- * No detection is ever synthesized; a provider error marks the job failed and
- * writes nothing. HTTP mapping lives in the route module; the scheduler maps
- * failures onto its audit ledger. Every COMPLETED evaluation additionally
- * pushes a fresh cadence-aware digest onto the SSE digest-stream channel
- * (fire-and-forget — delivery can never fail the evaluation, and with zero
- * open consoles it does no database work).
+ * Shared watchlist evaluation for manual, backtest, scheduled, and durable-job
+ * triggers. Provider work happens before the commit transaction. The commit
+ * atomically creates the event, audit row, digest outbox event, and—only for
+ * live evaluations—the current status after a compare-and-swap on the
+ * watchlist's monotonic evaluation version.
  */
 
 export type WatchEvalTrigger = 'manual' | 'backtest' | 'scheduled';
@@ -41,13 +31,15 @@ export type WatchEvalTrigger = 'manual' | 'backtest' | 'scheduled';
 export interface RunWatchlistEvalArgs {
   watchlistId: string;
   trigger: WatchEvalTrigger;
-  /** Explicit window end (ISO date). Absent → yesterday (live semantics). */
   end?: string;
   correlationId: string;
-  /** Audit actor: 'demo-user' for the console, 'system:scheduler' for ticks. */
   actor: string;
-  /** Injected clock (defaults to now) so callers stay deterministic. */
+  ownerId?: string | null;
+  jobId?: string;
   now?: Date;
+  /** Test/operator override; production uses a TTL longer than the job deadline. */
+  leaseTtlMs?: number;
+  leaseHolder?: string;
 }
 
 export interface WatchEvalResult {
@@ -62,7 +54,7 @@ export interface WatchEvalResult {
 }
 
 export type WatchEvalFailure = {
-  code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'PROVIDER_UNAVAILABLE';
+  code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'PROVIDER_UNAVAILABLE' | 'EVALUATION_IN_PROGRESS' | 'STALE_EVALUATION';
   message: string;
   details?: unknown;
 };
@@ -76,29 +68,35 @@ export async function runWatchlistEvaluation(
   const now = args.now ?? new Date();
   const correlationId = args.correlationId;
   const trigger = args.trigger;
+  const holder = args.leaseHolder ?? `evaluation:${args.jobId ?? crypto.randomUUID()}`;
 
   const w = await db.fireWatchlist.findUnique({ where: { id: args.watchlistId } });
-  if (!w) {
-    return {
-      ok: false,
-      failure: { code: 'NOT_FOUND', message: `watchlist ${args.watchlistId} not found`, details: { correlationId } },
-    };
+  if (!w || (w.ownerId !== null && w.ownerId !== args.ownerId)) {
+    return { ok: false, failure: { code: 'NOT_FOUND', message: `watchlist ${args.watchlistId} not found`, details: { correlationId } } };
   }
 
   const today = now.toISOString().slice(0, 10);
   const requestedEnd = args.end ?? yesterdayIso(now);
   const endError = validateEvalEnd(requestedEnd, w.lookbackDays, today);
   if (endError) {
+    return { ok: false, failure: { code: 'VALIDATION_ERROR', message: endError, details: { correlationId } } };
+  }
+
+  const leased = await acquireWatchlistEvaluationLease(
+    w.id,
+    holder,
+    args.leaseTtlMs ?? WATCHLIST_EVALUATION_LEASE_MS,
+  );
+  if (!leased) {
     return {
       ok: false,
-      failure: { code: 'VALIDATION_ERROR', message: endError, details: { correlationId } },
+      failure: { code: 'EVALUATION_IN_PROGRESS', message: 'another evaluation holds this watchlist lease', details: { correlationId } },
     };
   }
 
   const { start, end, days } = windowFor(requestedEnd, w.lookbackDays);
   const regionKey = regionKeyFor(w.lat, w.lon);
   const bbox = bboxForRadiusKm(w.lat, w.lon, w.radiusKm);
-
   const actionNote =
     trigger === 'scheduled'
       ? `scheduled re-evaluation of “${w.name}”`
@@ -106,28 +104,52 @@ export async function runWatchlistEvaluation(
         ? `backtesting “${w.name}” against ${start} → ${end}`
         : `evaluating “${w.name}”`;
 
-  const job = await db.processingJob.create({
-    data: {
-      type: 'fires-watch-eval',
-      status: 'running',
-      params: JSON.stringify({ watchlistId: w.id, trigger, requestedEnd, window: { start, end }, bbox }),
-      correlationId,
-      progressNote: `${actionNote}: ensuring ${days.length} day(s) of real VIIRS archive coverage`,
-    },
-  });
-
-  let daysFetched = 0;
-  let rowsWritten = 0;
+  let jobId = args.jobId;
   try {
+    if (jobId) {
+      await db.processingJob.update({
+        where: { id: jobId },
+        data: {
+          type: 'fires-watch-eval',
+          ownerId: w.ownerId,
+          status: 'running',
+          params: JSON.stringify({ watchlistId: w.id, trigger, requestedEnd, window: { start, end }, bbox }),
+          correlationId,
+          progressNote: `${actionNote}: ensuring ${days.length} day(s) of real VIIRS archive coverage`,
+        },
+      });
+    } else {
+      const created = await db.processingJob.create({
+        data: {
+          type: 'fires-watch-eval',
+          ownerId: w.ownerId,
+          status: 'running',
+          params: JSON.stringify({ watchlistId: w.id, trigger, requestedEnd, window: { start, end }, bbox }),
+          correlationId,
+          progressNote: `${actionNote}: ensuring ${days.length} day(s) of real VIIRS archive coverage`,
+        },
+      });
+      jobId = created.id;
+    }
+
+    let daysFetched = 0;
+    let rowsWritten = 0;
     const ensured: EnsuredDay[] = [];
+    const privateDetections: { date: string; confidence: string; frp: number | null }[] = [];
     for (const date of days) {
-      const day = await ensureCoverageForDate(regionKey, date, bbox, correlationId);
+      const live = w.ownerId ? await withPrivateProvider(() => fetchFiresForDate(date, bbox, correlationId)) : null;
+      if (live) {
+        privateDetections.push(...live.detections.map((d) => ({ date, confidence: d.confidence, frp: d.frp ?? null })));
+      }
+      const day: EnsuredDay = live
+        ? { date, checked: true, dataAvailable: live.dataAvailable, fetched: true, rowsWritten: 0 }
+        : await ensureCoverageForDate(regionKey, date, bbox, correlationId);
       if (day.fetched) daysFetched += 1;
       rowsWritten += day.rowsWritten;
       ensured.push(day);
     }
 
-    const detections = await storedDetections(regionKey, bbox, start, end);
+    const detections = w.ownerId ? privateDetections : await storedDetections(regionKey, bbox, start, end);
     const evaluation = evaluateWatchlist({
       windowStart: start,
       windowEnd: end,
@@ -138,84 +160,120 @@ export async function runWatchlistEvaluation(
       detectionThreshold: w.detectionThreshold,
     });
 
-    const event = await db.fireWatchEvent.create({
-      data: {
-        watchlistId: w.id,
-        windowStart: new Date(`${start}T00:00:00Z`),
-        windowEnd: new Date(`${end}T00:00:00Z`),
-        status: evaluation.status,
-        detectionCount: evaluation.detectionCount,
-        highConfidenceCount: evaluation.byConfidence.high,
-        nominalCount: evaluation.byConfidence.nominal,
-        lowCount: evaluation.byConfidence.low,
-        maxFrpMW: evaluation.maxFrpMW,
-        daysWithDetections: evaluation.daysWithDetections,
-        daysChecked: evaluation.daysChecked,
-        daysNoData: evaluation.daysNoData.length,
-        triggeredAlert: evaluation.status === 'alert',
-        detailJson: JSON.stringify({
-          perDay: evaluation.perDay,
-          rationale: evaluation.rationale,
-          daysNoData: evaluation.daysNoData,
-          daysUnchecked: evaluation.daysUnchecked,
-          daysFetched,
-          rowsWritten,
-          trigger,
+    const committed = await db.$transaction(async (tx) => {
+      const changed = await tx.fireWatchlist.updateMany({
+        where: { id: w.id, evaluationVersion: w.evaluationVersion },
+        data: {
+          evaluationVersion: { increment: 1 },
+          ...(trigger === 'backtest' ? {} : {
+            lastStatus: evaluation.status,
+            lastDetectionCount: evaluation.detectionCount,
+            lastEvaluatedAt: now,
+          }),
+        },
+      });
+      if (changed.count !== 1) return null;
+
+      const event = await tx.fireWatchEvent.create({
+        data: {
+          watchlistId: w.id,
+          evaluatedAt: now,
+          windowStart: new Date(`${start}T00:00:00Z`),
+          windowEnd: new Date(`${end}T00:00:00Z`),
+          status: evaluation.status,
+          detectionCount: evaluation.detectionCount,
+          highConfidenceCount: evaluation.byConfidence.high,
+          nominalCount: evaluation.byConfidence.nominal,
+          lowCount: evaluation.byConfidence.low,
+          maxFrpMW: evaluation.maxFrpMW,
+          daysWithDetections: evaluation.daysWithDetections,
+          daysChecked: evaluation.daysChecked,
+          daysNoData: evaluation.daysNoData.length,
+          triggeredAlert: evaluation.status === 'alert',
+          detailJson: JSON.stringify({
+            perDay: evaluation.perDay,
+            rationale: evaluation.rationale,
+            daysNoData: evaluation.daysNoData,
+            daysUnchecked: evaluation.daysUnchecked,
+            daysFetched,
+            rowsWritten,
+            trigger,
+            actor: args.actor,
+            evaluationVersion: w.evaluationVersion + 1,
+          }),
+          correlationId,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
           actor: args.actor,
-        }),
-        correlationId,
-      },
-    });
-    const updated = await db.fireWatchlist.update({
-      where: { id: w.id },
-      data: {
-        lastStatus: evaluation.status,
-        lastDetectionCount: evaluation.detectionCount,
-        lastEvaluatedAt: new Date(),
-      },
-    });
-    await db.processingJob.update({
-      where: { id: job.id },
-      data: {
-        status: 'succeeded',
-        progressNote: `${evaluation.status.toUpperCase()} — ${evaluation.detectionCount} qualifying detection(s) in ${start} → ${end}${trigger === 'backtest' ? ' (backtest)' : ''}`,
-        resultRef: JSON.stringify({ status: evaluation.status, detectionCount: evaluation.detectionCount, daysFetched, trigger }),
-        finishedAt: new Date(),
-      },
-    });
-    await db.auditEvent.create({
-      data: {
-        actor: args.actor,
-        action: 'watchlist.evaluate',
-        targetId: w.id,
-        detail: JSON.stringify({ status: evaluation.status, detectionCount: evaluation.detectionCount, window: { start, end }, trigger }),
-      },
-    });
+          action: 'watchlist.evaluate',
+          targetId: w.id,
+          detail: JSON.stringify({
+            eventId: event.id,
+            evaluationVersion: w.evaluationVersion + 1,
+            status: evaluation.status,
+            detectionCount: evaluation.detectionCount,
+            window: { start, end },
+            trigger,
+          }),
+        },
+      });
+      await tx.outboxEvent.create({
+        data: {
+          aggregateType: 'FireWatchlist',
+          aggregateId: w.id,
+          eventType: 'watchlist.digest',
+          payload: JSON.stringify({
+            watchlistId: w.id,
+            ownerId: w.ownerId,
+            organizationId: w.organizationId,
+            reason: 'evaluation',
+            trigger,
+            correlationId,
+            triggeredAt: now.toISOString(),
+            triggeringEventId: event.id,
+          }),
+        },
+      });
+      await tx.processingJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'succeeded',
+          progressNote: `${evaluation.status.toUpperCase()} — ${evaluation.detectionCount} qualifying detection(s) in ${start} → ${end}${trigger === 'backtest' ? ' (backtest)' : ''}`,
+          resultRef: JSON.stringify({ eventId: event.id, status: evaluation.status, detectionCount: evaluation.detectionCount, daysFetched, trigger }),
+          finishedAt: now,
+          leaseExpiresAt: null,
+          leaseHolder: null,
+          error: null,
+        },
+      });
+      return event;
+    }, { isolationLevel: 'Serializable' });
+
+    if (!committed) {
+      await db.processingJob.update({
+        where: { id: jobId },
+        data: { status: 'failed', error: 'stale evaluation completion rejected', finishedAt: now },
+      });
+      return {
+        ok: false,
+        failure: { code: 'STALE_EVALUATION', message: 'a newer evaluation committed first; stale completion rejected', details: { correlationId } },
+      };
+    }
+
+    const updated = await db.fireWatchlist.findUniqueOrThrow({ where: { id: w.id } });
     const recentEvents = await db.fireWatchEvent.findMany({
       where: { watchlistId: w.id },
       orderBy: { evaluatedAt: 'desc' },
       take: 10,
     });
-
-    // Push-style digest delivery: the event row above IS the new digest
-    // fact. Recompute the cadence-aware digest and write it onto every open
-    // console's stream. Fire-and-forget by contract — never throws, never
-    // gates this evaluation; a watchlist deleted mid-push is skipped inside.
-    void publishDigestForWatchlist(w.id, 'evaluation', {
-      correlationId,
-      triggeredAt: new Date(),
-    });
-
     return {
       ok: true,
       result: {
         watchlist: serializeWatchlist(updated),
-        evaluation: {
-          ...evaluation,
-          daysFetchedFromGibs: daysFetched,
-          rowsWritten,
-        },
-        event: serializeEvent(event),
+        evaluation: { ...evaluation, daysFetchedFromGibs: daysFetched, rowsWritten },
+        event: serializeEvent(committed),
         recentEvents: recentEvents.map(serializeEvent),
         mode: trigger === 'backtest' ? 'backtest' : 'live',
         requestedEnd,
@@ -225,7 +283,12 @@ export async function runWatchlistEvaluation(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await db.processingJob.update({ where: { id: job.id }, data: { status: 'failed', error: msg, finishedAt: new Date() } });
+    if (jobId) {
+      await db.processingJob.update({
+        where: { id: jobId },
+        data: { status: 'failed', error: msg, finishedAt: new Date() },
+      }).catch(() => undefined);
+    }
     return {
       ok: false,
       failure: {
@@ -234,5 +297,7 @@ export async function runWatchlistEvaluation(
         details: { providerMessage: msg, correlationId },
       },
     };
+  } finally {
+    await releaseWatchlistEvaluationLease(w.id, holder);
   }
 }

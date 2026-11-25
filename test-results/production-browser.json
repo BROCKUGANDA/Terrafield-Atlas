@@ -1,0 +1,44 @@
+{
+  "artifact": null,
+  "commit": null,
+  "artifactSha256": null,
+  "baseUrl": "http://127.0.0.1:13000",
+  "startedAt": "2026-11-25T11:06:20.252Z",
+  "browsers": [
+    {
+      "name": "Edge",
+      "viewports": 6,
+      "modules": 15,
+      "passed": 90,
+      "failed": 0
+    },
+    {
+      "name": "Firefox",
+      "viewports": 6,
+      "modules": 15,
+      "passed": 90,
+      "failed": 0
+    },
+    {
+      "name": "WebKit",
+      "viewports": 6,
+      "modules": 15,
+      "passed": 90,
+      "failed": 0
+    }
+  ],
+  "assertions": 1152,
+  "failures": [],
+  "skipped": [
+    {
+      "check": "physical-device certification",
+      "reason": "not executed; viewport/touch emulation only"
+    },
+    {
+      "check": "external-provider availability guarantee",
+      "reason": "not certified; controlled degradation is tested separately"
+    }
+  ],
+  "finishedAt": "2026-11-25T11:09:58.328Z",
+  "status": "passed"
+}

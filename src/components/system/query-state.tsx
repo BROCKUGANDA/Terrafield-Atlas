@@ -71,7 +71,6 @@ export function FaultPanel({
   className?: string;
 }) {
   const { message, correlationId, provider } = errorHumanization(error);
-  const selfRetry = () => window.location.reload();
   return (
     <div
       role="alert"

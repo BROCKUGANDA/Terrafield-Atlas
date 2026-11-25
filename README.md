@@ -44,52 +44,68 @@ The demo needs **no signup**:
 | Charts | Recharts | scientific series with trend overlays |
 | Validation | Zod (both directions) | every API request and response |
 | Backend | Next.js route handlers under `/api/v1/*` | typed, versioned, rate-limited, correlation IDs |
-| Data | Prisma + SQLite | provenance-first schema; migrations via `prisma db push` |
+| Data | Prisma + PostgreSQL 16 + PostGIS | durable schema; `prisma migrate deploy` |
+| Shared runtime | Redis 7 | cache, limits, circuits, pub/sub and BullMQ |
+| Jobs | Durable `ProcessingJob` ledger + BullMQ workers | leases, retries, deadlines and stale recovery |
 | Statistics | Custom TypeScript implementations of Mann-Kendall / Theil-Sen / BH-FDR | cross-checked against the R `modifiedmk` reference implementation |
 
-**Documented deviation from the suggested stack:** the deployment sandbox for this challenge runs a single Node process with SQLite and no external message broker, so the FastAPI/PostgreSQL/PostGIS/Redis/Celery topology of the original architecture brief is replaced by Next.js route handlers + Prisma/SQLite + in-process job ledger + in-memory TTL cache. The domain contracts (typed APIs, validation, provenance, retry/backoff, circuit breakers, idempotent ingestion, rate limiting) are preserved; see `docs/ARCHITECTURE.md` for the rationale and the swap path.
+**Production topology:** two stateless Next.js replicas behind Caddy, PostgreSQL/PostGIS, Redis, separate BullMQ worker/scheduler/outbox services, and private Prometheus/Grafana. The VPS remains a single failure domain; see `docs/ARCHITECTURE.md` and `docs/LIMITATIONS.md`.
 
 ## Commands
 
 ```bash
-bun run dev            # dev server (auto-run in this sandbox)
-bun run lint           # ESLint
-bun run db:push        # apply the Prisma schema
-bun test tests/            # 151 unit tests (fixtures only — no network)
-bun scripts/live-smoke.mjs   # live integration smoke tests against real NASA/ISRIC endpoints
-bash scripts/webhook-exit-e2e.sh   # arms a local receiver + nudges the scheduler; verifies the webhook digest exit end-to-end (HMAC signature, provenance + audit rows)
+bun run dev                 # local Next.js development
+bun run lint                # ESLint
+bun run typecheck           # TypeScript
+bun test tests/             # unit + focused integration suites
+bun run test:integration    # PostgreSQL/Redis integration suites
+bun run db:migrate:deploy   # production schema migration
+bun run db:seed             # idempotent production baseline
+bun run build               # production build
+
+docker compose up -d --wait  # full private Compose stack (requires .env)
+./deploy/backup.sh
+./deploy/restore-drill.sh /var/backups/terrafield/<named-artifact>.dump
 ```
 
 ## Environment variables
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | yes | SQLite file path (set by the sandbox) |
+| `DATABASE_URL` | yes | PostgreSQL connection URL; SQLite is only a legacy migration source |
+| `REDIS_URL` | yes | Redis connection URL for shared state, pub/sub and BullMQ |
+| `NEXTAUTH_SECRET` / `NEXTAUTH_URL` / `NEXT_PUBLIC_SITE_URL` | yes | verified-account session secret, canonical auth origin and public site origin |
+| `POSTGRES_PASSWORD` / `DOMAIN` / `ACME_EMAIL` | production | Compose database credential, Caddy hostname and TLS email |
+| `GRAFANA_ADMIN_PASSWORD` | production | private monitoring administrator password |
 | `FIRMS_MAP_KEY` | no | enables the FIRMS CSV adapter (free NASA registration). Without it the adapter reports `credentials-not-configured` and fire features are served from the GIBS VIIRS stream (same detections). The key is server-side only and never exposed to the client. |
-| `WATCH_SCHEDULER_OFF` | no | `=1` disables the in-process watchlist re-evaluation scheduler (on-demand evaluation remains). |
+| `WATCH_SCHEDULER_OFF` | no | web replicas set `=1`; the dedicated database-leased scheduler service sets `=0`. |
 | `DIGEST_PUSH_OFF` | no | `=1` disables the SSE digest push channel (digests remain available on demand from `GET …/digest`). |
 | `DIGEST_WEBHOOK_URL` | no | arms the **webhook digest exit**: every digest-relevant fact (evaluation or failed scheduled run) is POSTed to this http(s) URL as the identical digest payload. `DIGEST_WEBHOOK_SECRET` signs every POST per OWASP webhook guidance: `X-Terrafield-Signature: t=<unix-sec>,v1=hex(HMAC-SHA256(secret, "<t>.<exact body>"))` — timestamp-bound with a ±300 s replay window, constant-time verification (`verifyWebhookSignature`, exported for receivers), zero-downtime rotation via `DIGEST_WEBHOOK_SECRET_PREVIOUS`, and an SSRF guard that refuses loopback/RFC1918/link-local/metadata targets before any request. `DIGEST_WEBHOOK_OFF=1` disables. Transient-only retry (max 3 attempts), one provenance row per attempt, one audit row per outcome. |
 | `DIGEST_WEBHOOK_ALLOWLIST` | no | comma-separated `host` / `host:port` entries that EXPLICITLY allow a webhook target inside a refused range (loopback/RFC1918/…) — the OWASP "default deny + explicit allow" pattern for an ops relay that deliberately lives inside the private network. Exact host or host:port match; garbage entries are dropped, never broadened; the http(s)-only scheme rule and unparseable URLs can never be allowlisted. Allowlisted targets are surfaced as `ALLOWLISTED private target (operator opt-in)` in System Health. |
 | `DIGEST_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TO` | no | arms the **email digest exit** (nodemailer/SMTP): completed scheduled re-evaluations and failed scheduled runs are emailed to the `_TO` list; manual and backtest evaluations are console-feedback-only by design. Without the credentials the exit reports `credentials-not-configured` and attempts zero sends — the same honest state as FIRMS without a MAP_KEY. `DIGEST_EMAIL_OFF=1` disables. |
+| `JOB_WORKER_MODE` | no | `embedded` (default) starts the durable worker in the web process; `external` requires `bun run worker`; `off` disables job execution. |
+| `WEBHOOK_ENCRYPTION_KEY` | no | 32-byte base64url or hex key required to create organization webhooks. Signing secrets are AES-GCM encrypted at rest and shown once. |
+| `STAC_API_URL` | no | STAC search endpoint; defaults to the verified NASA MAAP public API. |
+| `RASTER_SERVICE_URL` | no | Private FastAPI/Rasterio service URL for quantitative GeoTIFF statistics. |
 
 ## Live source signs & critical infrastructure (hardening round 2)
 
 - **Live source signs** — every provider chip in the console is backed by a real reachability probe (`GET /api/v1/system/sources`, 60 s cache): the FIRMS host (`FIRMS_API`), the FIRMS detection stream via GIBS (`FIRMS_STREAM`, one real VIIRS 375 m tile — a 404 gap-day still proves the host answers), EONET, GIBS, POWER, SoilGrids. One transient failure within 5 min of a success reads as `DEGRADED`, not `UNREACHABLE`; probes never open circuits or spam the provenance ledger. `FIRMS_API` unreachable simply reflects network egress — the detection stream keeps flowing via GIBS, and the FIRMS adapter chain (MAP_KEY area API → keyless continental CSV archives) engages wherever full egress exists.
 - **Probes surface:** `/api/v1/system/sources` (per-sign state + latency + NASA EONET open wildfire events), mirrored into `/api/v1/system/status` (`providers` + `sourceSigns`) and the DataSource table.
-- **Liveness / readiness:** `GET /api/v1/healthz` (process-only), `GET /api/v1/readyz` (DB + seed baseline + scheduler heartbeat + channel) — 503 with named failing checks, never a bare false.
+- **Liveness / readiness:** `GET /api/v1/healthz` is process-only; `GET /api/v1/readyz` verifies PostgreSQL/schema/seed, Redis, fresh scheduler leadership and worker heartbeats. Public failure details are redacted.
 - **Watchdog & safety nets:** `src/instrumentation.ts` registers a 5-min watchdog that restarts a hung scheduler timer (`ensureSchedulerAlive`), logs `unhandledRejection`/`uncaughtException` (serve continues; readiness reports honestly), and closes Prisma on SIGTERM/SIGINT.
 - **Always-live degradation:** GIBS tile fetches serve the last good snapshot labeled `stale` on a total host outage; EONET serves stale snapshots with a labeled note; a hard error only ever means "no snapshot ever existed", never fabricated data.
 - **Race safety:** scheduler claims are conditional atomic updates (`updateMany` guarded on `nextReevaluateAt` — losers skip, never double-run); bulk inserts (POWER observations, fire detections) are P2002-safe (`lib/db-write.ts`): concurrent duplicate natural keys resolve row-by-row instead of failing the job.
 - **Security headers:** X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, COOP, HSTS (next.config.ts). CSP is a documented non-goal at the Next layer (inline flight scripts need a nonce strategy; a broken CSP would break serving).
-- **Transport hardening (client):** 20 s request budget, gateway HTML-502 detection (`GATEWAY_HTML` — raw HTML never leaks into a reason line), one automatic retry for idempotent GETs only (mutations never auto-retry).
+- **Transport hardening (client):** caller/timeout cancellation stays distinguishable, `Retry-After` is honored, malformed 2xx JSON rejects, GETs retry once, and every mutation carries an idempotency key without auto-retry.
 - **Error/loading UX:** themed SSR `loading.tsx` / `error.tsx` / `global-error.tsx` / `not-found.tsx`, per-module error boundaries with fault digests + copyable diagnostics, unified QueryState skeletons/fault/empty panels.
 
 ## A/B experiments (deterministic, ledger-backed)
 
 - **Assignment:** pure SHA-256 bucketing of `(experiment key, anonymous unit id)` into [0, 1000) mapped by cumulative variant weights — stable across restarts and processes, no flicker, no sticky sessions (`src/lib/experiments.ts`).
-- **Ledger:** exposures (distinct per unit — refreshes never inflate the split) and outcomes are AuditEvent rows under actor `system:experiment`, the same durable ledger the rest of the console audits into.
-- **Live experiment:** `landing-hero-v1` — full mission brief (control) vs fire-intelligence-first brief (treatment); the variant swaps the hero intro AND the primary CTA label; the outcome is the console-entry CTA (`experiment.cta_enter_console`), recorded at most once per unit per session.
-- **Surfaces:** `GET /api/v1/experiments?exp=&unit=` (assign + record exposure; unknown/paused experiments refuse with 404/409 — never a fabricated assignment), `POST /api/v1/experiments` (outcome), `experiments` section of `/api/v1/system/status` + the "A/B experiments" card in System Health (exposures, conversions, conversion rate per variant).
+- **Ledger:** assignment is public and read-only. Exposure/outcome persistence requires a verified same-origin writer and commits audit/outbox effects atomically with idempotent replay.
+- **Live experiment:** `landing-hero-v1` — full mission brief (control) vs fire-intelligence-first brief (treatment); the variant swaps the hero intro and primary CTA label.
+- **Surfaces:** `GET /api/v1/experiments?exp=&unit=` assigns without writing; `POST /api/v1/experiments` records an exposure/outcome for a verified writer; aggregate counts appear in System Health without unit identities.
 - **Privacy:** the unit id is a client-generated UUID in localStorage — a random label with no identity, location or fingerprint attached.
 
 ## Branding, SEO / GEO / AEO

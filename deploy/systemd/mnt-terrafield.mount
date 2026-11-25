@@ -1,0 +1,12 @@
+[Unit]
+Description=TerraField Atlas release block storage
+Before=terrafield.service
+
+[Mount]
+What=/dev/disk/by-label/terrafield
+Where=/mnt/terrafield
+Type=ext4
+Options=noatime
+
+[Install]
+WantedBy=multi-user.target

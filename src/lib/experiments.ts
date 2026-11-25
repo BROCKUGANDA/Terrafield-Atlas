@@ -222,7 +222,7 @@ export interface ExperimentMetric {
 export async function experimentMetrics(): Promise<ExperimentMetric[]> {
   try {
     const rows = await db.auditEvent.findMany({
-      where: { actor: 'system:experiment' },
+      where: { action: { in: ['experiment.exposure', ...EXPERIMENTS.map((experiment) => experiment.outcomeAction)] } },
       orderBy: { createdAt: 'desc' },
       take: 5000,
     });

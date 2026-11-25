@@ -4,7 +4,8 @@ import React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ApiRequestError, type WatchlistRow, type WatchConfidence, type WatchlistInput, type SchedulerRunEntry } from '@/lib/api-client';
+import { api, ApiRequestError, type WatchEvaluateResponse, type WatchlistRow, type WatchConfidence, type WatchlistInput, type SchedulerRunEntry } from '@/lib/api-client';
+import { waitForJob } from '@/lib/jobs/client';
 import { usePushChannel } from '@/components/state/push-store';
 import { minBacktestEndIso, windowFor, yesterdayIso } from '@/lib/fires/watchlist-engine';
 import { REEVALUATE_LABELS, type ReevaluateIntervalMin } from '@/lib/schedule-core';
@@ -12,7 +13,6 @@ import { logEvent } from '@/components/state/log-store';
 import { useSession } from '@/components/state/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -112,12 +112,12 @@ function Field({ label, children, className }: { label: string; children: React.
 function DayBars({ perDay }: { perDay: { date: string; total: number; qualifying: number }[] }) {
   const max = Math.max(1, ...perDay.map((d) => d.total));
   return (
-    <div className="flex items-end gap-1" role="img" aria-label="Detections per day in the evaluation window">
+    <div className="flex flex-wrap items-end gap-1" role="list" aria-label="Detections per day in the evaluation window">
       {perDay.map((d) => {
         const h = Math.max(2, Math.round((d.total / max) * 28));
         const qh = Math.max(0, Math.round((d.qualifying / max) * 28));
         return (
-          <div key={d.date} className="flex flex-col items-center gap-1" title={`${d.date}: ${d.total} detection(s), ${d.qualifying} qualifying`}>
+          <div key={d.date} role="listitem" aria-label={`${d.date}: ${d.total} detections, ${d.qualifying} qualifying`} className="flex flex-col items-center gap-1" title={`${d.date}: ${d.total} detection(s), ${d.qualifying} qualifying`}>
             <div
               className="relative w-4 overflow-hidden rounded-sm border border-edge bg-panel-2/60"
               style={{ height: 30 }}
@@ -168,7 +168,8 @@ export function FireWatchlistsSection() {
   }));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<WatchlistInput>>({});
-  const [pending, setPending] = useState<{ id: string; kind: 'live' | 'backtest' } | null>(null);
+  const [pending, setPending] = useState<Record<string, { kind: 'live' | 'backtest' }>>({});
+  const [evaluationProgress, setEvaluationProgress] = useState<Record<string, string | null>>({});
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fire-watchlists'] });
 
@@ -200,11 +201,26 @@ export function FireWatchlistsSection() {
   });
 
   const evaluate = useMutation({
-    mutationFn: ({ id, end }: { id: string; end?: string }) => {
-      setPending({ id, kind: end ? 'backtest' : 'live' });
-      return api.evaluateWatchlist(id, end);
+    mutationFn: async ({ id, end }: { id: string; end?: string }) => {
+      setPending((current) => ({ ...current, [id]: { kind: end ? 'backtest' : 'live' } }));
+      const accepted = await api.evaluateWatchlist(id, end);
+      return waitForJob<WatchEvaluateResponse>(accepted, {
+        timeoutMs: 20 * 60_000,
+        onProgress: ({ progressNote }) => setEvaluationProgress((current) => ({ ...current, [id]: progressNote })),
+      });
     },
-    onSettled: () => setPending(null),
+    onSettled: (_data, _error, vars) => {
+      setPending((current) => {
+        const next = { ...current };
+        delete next[vars.id];
+        return next;
+      });
+      setEvaluationProgress((current) => {
+        const next = { ...current };
+        delete next[vars.id];
+        return next;
+      });
+    },
     onSuccess: (res) => {
       const w = res.watchlist;
       const ev = res.evaluation;
@@ -290,7 +306,8 @@ export function FireWatchlistsSection() {
 
   const rows = watchlists.data?.watchlists ?? [];
   const summary = watchlists.data?.summary;
-  const busy = pending !== null;
+  const busy = Object.keys(pending).length > 0;
+  const firstPendingId = Object.keys(pending)[0] ?? null;
 
   return (
     <motion.section
@@ -313,7 +330,7 @@ export function FireWatchlistsSection() {
               lookback window is checked against the real GIBS VIIRS 375 m stream, then reports clear / watch / alert from
               stored detections only. Days the archive simply does not have are reported as no-data — never zero-filled.
               <span className="text-ink"> Backtest</span> replays the same rule against any historical window via the date
-              picker; watchlists with a cadence set are re-evaluated automatically by the in-process scheduler, and every
+              picker; watchlists with a cadence set are re-evaluated automatically by the database-leased scheduler, and every
               completed evaluation or scheduler failure is <span className="text-ink">pushed live</span> to the console as a
               cadence-aware digest over the digest-stream channel.
             </p>
@@ -350,7 +367,18 @@ export function FireWatchlistsSection() {
             <Button
               size="sm"
               className="h-8 font-mono text-[11px] uppercase tracking-wide-mc"
-              onClick={() => setCreating((v) => !v)}
+              onClick={() => {
+                if (!creating) {
+                  setForm((current) => ({
+                    ...current,
+                    label: location.label,
+                    lat: Number(location.lat.toFixed(4)),
+                    lon: Number(location.lon.toFixed(4)),
+                    name: current.name || `${location.country ?? 'Region'} — fire watch`,
+                  }));
+                }
+                setCreating((v) => !v);
+              }}
               aria-expanded={creating}
               aria-controls="watchlist-create-form"
             >
@@ -526,9 +554,9 @@ export function FireWatchlistsSection() {
         {/* Evaluate/backtest-in-flight banner */}
         {busy && (
           <div className="flex flex-col gap-2" role="status" aria-live="polite">
-            <SweepLoader label={pending?.kind === 'backtest' ? 'Backtesting watchlist — replaying the real VIIRS archive for the historical window' : 'Evaluating watchlist — decoding real VIIRS tiles for uncovered days'} />
+            <SweepLoader label={firstPendingId && pending[firstPendingId]?.kind === 'backtest' ? 'Backtesting watchlist — durable job replaying the real VIIRS archive' : `Evaluating ${Object.keys(pending).length} watchlist(s) — durable jobs decoding uncovered VIIRS days`} />
             <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-              gibs vector tiles in flight · archive gaps reported as no-data, never zero-filled
+              {(firstPendingId ? evaluationProgress[firstPendingId] : null) ?? 'queued · archive gaps reported as no-data, never zero-filled'}
             </p>
           </div>
         )}
@@ -556,8 +584,8 @@ export function FireWatchlistsSection() {
             <WatchlistCard
               key={w.id}
               w={w}
-              evaluating={evaluate.isPending && pending?.id === w.id}
-              pendingKind={pending?.id === w.id ? pending.kind : null}
+              evaluating={pending[w.id] !== undefined}
+              pendingKind={pending[w.id]?.kind ?? null}
               onEvaluate={() => evaluate.mutate({ id: w.id })}
               onBacktest={(end) => evaluate.mutate({ id: w.id, end })}
               editing={editingId === w.id}
@@ -566,6 +594,9 @@ export function FireWatchlistsSection() {
                 setEditingId(editingId === w.id ? null : w.id);
                 setEditForm(editingId === w.id ? {} : {
                   name: w.name,
+                  label: w.label ?? w.name,
+                  lat: w.lat,
+                  lon: w.lon,
                   radiusKm: w.radiusKm,
                   minConfidence: w.minConfidence,
                   lookbackDays: w.lookbackDays,
@@ -602,8 +633,8 @@ export function FireWatchlistsSection() {
           Watchlist states describe the last recorded evaluation only. A header alert chip appears console-wide while any
           watchlist is in ALERT. Evaluations share the stored detection pool with the detections ledger — every row is a real
           VIIRS observation with provenance in Evidence &amp; Provenance. Backtests and scheduled runs take the identical
-          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler's live state is reported
-          in System Health, and each card's <span className="text-dim">Runs</span> panel reads the scheduler's audit ledger
+          pipeline and are flagged in the event ledger (trigger=backtest / scheduled); the scheduler&apos;s live state is reported
+          in System Health, and each card&apos;s <span className="text-dim">Runs</span> panel reads the scheduler&apos;s audit ledger
           (successes joined to their evaluation event, failures listed with their errors) while
           <span className="text-dim"> Digest</span> summarizes the latest cadence window against the previous one — pulled
           on demand here, and pushed live over the digest stream whenever a new evaluation or scheduled failure lands.
@@ -648,7 +679,7 @@ function WatchlistCard({
   const btValid = btEnd >= btMin && btEnd <= today;
   const btWindow = btValid ? windowFor(btEnd, w.lookbackDays) : null;
 
-  // Scheduler-run history panel: reads the scheduler's audit ledger + matched
+  // Scheduler-run history panel: reads the scheduler&apos;s audit ledger + matched
   // evaluations on demand (open), then refreshes every 2 min while open.
   const [runsOpen, setRunsOpen] = useState(false);
   const runs = useQuery({
@@ -788,7 +819,7 @@ function WatchlistCard({
             <p className="text-[11px] leading-relaxed text-dim">
               No scheduled runs on record.{' '}
               {w.reevaluateIntervalMin === null
-                ? 'This watchlist is evaluated manually — set “Auto re-evaluate” in Edit to arm the in-process scheduler.'
+                ? 'This watchlist is evaluated manually — set “Auto re-evaluate” in Edit to arm the database-leased scheduler.'
                 : `The scheduler is armed (${REEVALUATE_LABELS[w.reevaluateIntervalMin as ReevaluateIntervalMin]}; next slot ${w.nextReevaluateAt ? utcMin(w.nextReevaluateAt) : 'pending'}) but has not completed a run for this list yet.`}
             </p>
           )}
@@ -800,7 +831,7 @@ function WatchlistCard({
             </div>
           )}
           <p className="text-[9px] leading-relaxed text-faint">
-            every scheduled run is ledgered by the in-process scheduler — successes here join their evaluation event on
+            every scheduled run is ledgered by the database-leased scheduler — successes here join their evaluation event on
             correlationId; failures appear ONLY here (they wrote no status) and retry at the next claimed slot (claim-before-run).
           </p>
         </div>
@@ -831,6 +862,24 @@ function WatchlistCard({
             </Field>
           </div>
           <div className="flex flex-wrap items-end gap-2">
+            <Field label="Center latitude">
+              <Input
+                type="number" step="0.0001" min={-90} max={90}
+                value={editForm.lat ?? w.lat}
+                onChange={(e) => onEditChange({ lat: Number(e.target.value) })}
+                className="telemetry h-8 w-28 border-edge bg-panel text-xs text-dim"
+                aria-label="Edit watchlist center latitude"
+              />
+            </Field>
+            <Field label="Center longitude">
+              <Input
+                type="number" step="0.0001" min={-180} max={180}
+                value={editForm.lon ?? w.lon}
+                onChange={(e) => onEditChange({ lon: Number(e.target.value) })}
+                className="telemetry h-8 w-28 border-edge bg-panel text-xs text-dim"
+                aria-label="Edit watchlist center longitude"
+              />
+            </Field>
             <Field label="Confidence floor">
               <Select value={editForm.minConfidence ?? w.minConfidence} onValueChange={(v) => onEditChange({ minConfidence: v as WatchConfidence })}>
                 <SelectTrigger className="h-8 w-32 border-edge bg-panel text-xs text-dim" aria-label="Edit confidence floor">
@@ -896,7 +945,7 @@ function WatchlistCard({
             <Button variant="outline" size="sm" className="h-8 font-mono text-[11px] uppercase tracking-wide-mc" onClick={onEditOpen}>
               Cancel
             </Button>
-            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified · cadence runs on the in-process scheduler (audit-trailed)</span>
+            <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">rule change → status resets to unverified · cadence runs on the database-leased scheduler (audit-trailed)</span>
           </div>
         </div>
       )}
@@ -1008,7 +1057,7 @@ function WatchlistCard({
               <div>
                 <p className="font-display text-[12px] font-bold uppercase tracking-wide-mc text-ink">Alert digest — “{w.name}”</p>
                 <p className="mt-1 text-[10px] leading-relaxed text-dim">
-                  Cadence-aware summary of this watchlist's alert activity: the window derives from its re-evaluation
+                  Cadence-aware summary of this watchlist&apos;s alert activity: the window derives from its re-evaluation
                   cadence and is compared with the equal-length window before it — status path, peak detections, alert
                   entries/exits, failed runs, archive gaps. Recorded evaluations only; nothing interpolated. On demand
                   here — and pushed live over the digest stream the moment a new fact lands.

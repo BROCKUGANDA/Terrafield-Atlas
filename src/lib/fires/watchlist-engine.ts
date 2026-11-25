@@ -182,7 +182,7 @@ export function evaluateWatchlist(args: {
   const daysChecked = days.filter((d) => d.checked).length;
   const daysNoData = days.filter((d) => d.checked && !d.dataAvailable).map((d) => d.date);
   const daysUnchecked = days.filter((d) => !d.checked).map((d) => d.date);
-  const coverageComplete = daysUnchecked.length === 0;
+  const coverageComplete = days.length === args.lookbackDays && daysUnchecked.length === 0 && daysNoData.length === 0;
   const daysWithDetections = [...perDayMap.entries()].filter(([, c]) => c.total > 0).length;
   const perDay = days.map((d) => ({ date: d.date, ...(perDayMap.get(d.date) ?? { total: 0, qualifying: 0 }) }));
 
@@ -220,7 +220,7 @@ export function evaluateWatchlist(args: {
     rationaleParts.push(
       daysChecked === 0
         ? 'UNVERIFIED: no archive coverage has been checked for this window yet — evaluate the watchlist to query the real GIBS VIIRS record.'
-        : `UNVERIFIED: ${daysUnchecked.length} of ${days.length} day(s) have never been checked against the archive; a clear status requires complete coverage.`,
+        : `UNVERIFIED: ${daysUnchecked.length} day(s) unchecked and ${daysNoData.length} day(s) with no usable archive coverage; a clear status requires complete coverage.`,
     );
   }
   if (daysNoData.length > 0) {

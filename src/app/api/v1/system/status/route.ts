@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
-import { jsonResponse } from '@/lib/api/helpers';
+import { apiHandler, errorResponse, jsonResponse, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
+import { requireAdministrator } from '@/lib/account-access';
 import { cacheStats, cacheInvalidate } from '@/lib/cache';
 import { circuitStatus } from '@/lib/http';
 import { firmsConfigured } from '@/lib/adapters/firms';
@@ -9,21 +10,18 @@ import { schedulerStatus, startScheduler } from '@/lib/scheduler';
 import { digestChannelStatus } from '@/lib/fires/digest-channel';
 import { sourceSigns } from '@/lib/source-health';
 import { experimentMetrics } from '@/lib/experiments';
+import { emailExitStatus } from '@/lib/fires/digest-exit-email';
+import { publicCacheDiagnostics, publicCircuitDiagnostics, publicDigestDiagnostics, publicEmailDiagnostics, publicExperimentDiagnostics, publicSchedulerDiagnostics } from '@/lib/public-diagnostics';
 
 /**
  * GET  /api/v1/system/status — settings & diagnostics
  * POST /api/v1/system/status — actions (cache invalidate)
  */
-export async function GET() {
+export const GET = apiHandler(async () => {
   // startScheduler is idempotent; calling it here guarantees a started timer
   // even if instrumentation bootstrapping was skipped in this environment.
   startScheduler();
   const scheduler = await schedulerStatus();
-  const failedJobs = await db.processingJob.findMany({
-    where: { status: 'failed' },
-    orderBy: { startedAt: 'desc' },
-    take: 20,
-  });
   const jobCounts = await db.processingJob.groupBy({
     by: ['status'],
     _count: { _all: true },
@@ -51,15 +49,15 @@ export async function GET() {
       fireWatchlists: watchlistCount,
       fireWatchEvents: watchEventCount,
       jobCounts: jobCounts.map((j) => ({ status: j.status, count: j._count._all })),
-      failedJobs: failedJobs.map((j) => ({
-        id: j.id, type: j.type, error: j.error, startedAt: j.startedAt,
-      })),
+      failedJobs: [],
+      jobDiagnosticsNote: 'Unattributed job identifiers and error metadata are withheld from this public diagnostic surface.',
     },
-    cache: cacheStats(),
-    circuitBreakers: circuitStatus(),
-    scheduler,
-    digestChannel: digestChannelStatus(),
-    experiments: await experimentMetrics(),
+    cache: publicCacheDiagnostics(await cacheStats()),
+    circuitBreakers: publicCircuitDiagnostics(await circuitStatus()),
+    scheduler: publicSchedulerDiagnostics(scheduler),
+    digestChannel: publicDigestDiagnostics(digestChannelStatus()),
+    digestEmail: publicEmailDiagnostics(emailExitStatus()),
+    experiments: publicExperimentDiagnostics(await experimentMetrics()),
     providers: {
       NASA_POWER: {
         status: signs.signs.find((s) => s.key === 'NASA_POWER')?.state === 'live' ? 'live' : 'unreachable',
@@ -80,8 +78,8 @@ export async function GET() {
         status: signs.signs.find((s) => s.key === 'FIRMS_API')?.state ?? 'unreachable',
         latencyMs: signs.signs.find((s) => s.key === 'FIRMS_API')?.latencyMs ?? null,
         note: firmsConfigured()
-          ? 'MAP_KEY configured. Host probed directly; wherever egress policy blocks it, the detection stream keeps flowing via GIBS (see FIRMS_STREAM).'
-          : 'No MAP_KEY configured (set FIRMS_MAP_KEY to arm the direct CSV API). Host probed directly; the FIRMS detection stream keeps flowing via GIBS either way.',
+          ? 'Direct API credential configured. Host reachability is probed; GIBS remains the detection-stream path wherever direct egress is unavailable.'
+          : 'Direct API credential not configured. Host reachability is probed; the FIRMS detection stream remains available through GIBS.',
       },
       FIRMS_STREAM: {
         status: signs.signs.find((s) => s.key === 'FIRMS_STREAM')?.state ?? 'unreachable',
@@ -111,13 +109,32 @@ export async function GET() {
         'Deterministic multi-criteria weighted scoring (weights = farmer priorities, normalized); criteria: family sequence, legume N, water (FAO I&D 33 ranges vs POWER climatology), thermal feasibility, nutrient balance, diversity, soil pH/texture, staple presence, economics-not-assessed. Missing inputs remove criteria and reduce confidence; never zero.',
     },
   });
-}
+});
 
-export async function POST(req: Request) {
-  const url = new URL(req.url);
-  if (url.searchParams.get('action') === 'invalidate-cache') {
-    const removed = cacheInvalidate('');
-    return jsonResponse({ action: 'invalidate-cache', entriesRemoved: removed });
-  }
-  return jsonResponse({ error: { code: 'UNKNOWN_ACTION', message: 'supported action: ?action=invalidate-cache' } }, { status: 400 });
-}
+export const POST = apiHandler(async (req, { correlationId }) => {
+  await requireAdministrator(req);
+  return withIdempotency(req, '/api/v1/system/status', async (req, { userId }) => {
+    const url = new URL(req.url);
+    if (url.searchParams.get('action') !== 'invalidate-cache') {
+      return errorResponse(400, 'UNKNOWN_ACTION', 'supported action: ?action=invalidate-cache', correlationId);
+    }
+    const rl = await rateLimit(`system:cache-invalidate:${userId}`, { capacity: 6, refillPerMinute: 2 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
+    const removed = await cacheInvalidate('');
+    return {
+      commit: async (tx) => {
+        await writeMutationEffects(tx, {
+          actor: `account:${userId}`,
+          action: 'system.cache.invalidate',
+          targetId: 'cache',
+          detail: `entriesRemoved=${removed}`,
+          aggregateType: 'System',
+          aggregateId: 'cache',
+          eventType: 'system.cache.invalidated',
+          payload: { entriesRemoved: removed },
+        });
+        return jsonResponse({ action: 'invalidate-cache', entriesRemoved: removed, correlationId }, { correlationId });
+      },
+    };
+  });
+});

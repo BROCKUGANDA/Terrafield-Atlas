@@ -6,12 +6,14 @@ import { REGION_PRESETS } from '@/lib/regions';
 import { MissionPatch } from '@/components/ui-mc/logo';
 import { CoordReadout } from '@/components/ui-mc/kit';
 import { cn } from '@/lib/utils';
+import { useSourceSigns } from '@/components/system/source-signs';
+import { createEventLayer, LiveGlobeEvents, locatedEvents, type LocatedEvent } from './live-globe-events';
 
 /**
  * EarthGlobe — fully procedural, dependency-free stylized mission network globe.
  *
- * NOTHING here is an imagery product: no textures, no external assets, no
- * network fetches. It is a stylized telemetry-network visualization: graticule
+ * NOTHING here is an imagery product: no textures or external assets.
+ * Polled NASA EONET event positions overlay a stylized network: graticule
  * Earth, curated real-coordinate ground stations, dashed uplink arcs and an
  * orbiting satellite. It always renders, even fully offline.
  */
@@ -99,7 +101,7 @@ const ATMO_FRAG = /* glsl */ `
   uniform vec3 uGlow;
   varying vec3 vNormalV;
   void main() {
-    float intensity = pow(0.72 - dot(normalize(vNormalV), vec3(0.0, 0.0, 1.0)), 3.0);
+    float intensity = pow(max(0.0, 0.72 - dot(normalize(vNormalV), vec3(0.0, 0.0, 1.0))), 3.0);
     intensity = clamp(intensity, 0.0, 1.0);
     gl_FragColor = vec4(uGlow * intensity, intensity);
   }
@@ -159,6 +161,15 @@ export function EarthGlobe({
   onStationHover?: (station: GlobeStation | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const liveQuery = useSourceSigns();
+  const liveData = liveQuery.data;
+  const eventLayerRef = useRef<ReturnType<typeof createEventLayer> | null>(null);
+  const eventsRef = useRef<LocatedEvent[]>([]);
+  useEffect(() => {
+    const feed = liveData?.eonet;
+    eventsRef.current = feed?.ok ? locatedEvents(feed.events) : [];
+    eventLayerRef.current?.update(eventsRef.current);
+  }, [liveData]);
   const hoverCbRef = useRef(onStationHover);
   useEffect(() => {
     hoverCbRef.current = onStationHover;
@@ -205,6 +216,10 @@ export function EarthGlobe({
     const spinGroup = new THREE.Group(); // Y rotation (drag / auto-rotate)
     tiltGroup.add(spinGroup);
     scene.add(tiltGroup);
+    const eventLayer = createEventLayer();
+    eventLayerRef.current = eventLayer;
+    eventLayer.update(eventsRef.current);
+    spinGroup.add(eventLayer.group);
 
     // Globe sphere — custom shader: deep navy base, aqua fresnel rim.
     const sphereGeo = new THREE.SphereGeometry(1, 64, 40);
@@ -589,6 +604,7 @@ export function EarthGlobe({
         trailPositions[i * 3 + 2] = p.z;
       }
       trailGeo.attributes.position.needsUpdate = true;
+      trailGeo.computeBoundingSphere();
 
       // Billboard + pulse the station rings (camera-facing).
       scene.updateMatrixWorld();
@@ -619,6 +635,8 @@ export function EarthGlobe({
       canvas.removeEventListener('pointercancel', endDrag);
       canvas.removeEventListener('pointerleave', onPointerLeave);
       canvas.removeEventListener('webglcontextlost', onContextLost);
+      eventLayerRef.current = null;
+      eventLayer.dispose();
       scene.traverse((obj) => {
         const anyObj = obj as THREE.Mesh | THREE.Line | THREE.Points;
         if (anyObj.geometry) anyObj.geometry.dispose();
@@ -627,6 +645,7 @@ export function EarthGlobe({
         else if (mat) mat.dispose();
       });
       renderer.dispose();
+      renderer.forceContextLoss();
       if (canvas.parentElement === container) container.removeChild(canvas);
       setHover(null);
     };
@@ -636,10 +655,11 @@ export function EarthGlobe({
   return (
     <div
       className={cn('relative h-full w-full overflow-hidden', className)}
-      role="img"
-      aria-label="Stylized mission network globe: graticule Earth with ground stations at demo regions and orbiting satellite"
+      role="group"
+      aria-label="Stylized mission globe with demo stations and polled NASA EONET wildfire event positions"
     >
       <div ref={containerRef} className="absolute inset-0" aria-hidden />
+      <LiveGlobeEvents failed={failed} query={liveQuery} />
 
       {/* Standalone hover chip (only when the parent does not handle hover). */}
       {!failed && hovered && !onStationHover && (

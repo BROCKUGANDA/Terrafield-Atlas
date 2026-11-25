@@ -309,12 +309,12 @@ export function FarmWorkspaceView() {
                 </Button>
               </div>
 
-              <CropHistoryEditor farmId={activeFarmId} current={farm.data.farm.cropHistory} />
+              <CropHistoryEditor key={`crop:${activeFarmId}`} farmId={activeFarmId} current={farm.data.farm.cropHistory} />
             </HudPanel>
           </motion.section>
 
           <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Soil properties">
-            <SoilSection farmId={activeFarmId} tests={farm.data.farm.soilTests} onSoilGrids={() => soilGrids.mutate(activeFarmId)} soilGridsPending={soilGrids.isPending} />
+            <SoilSection key={`soil:${activeFarmId}`} farmId={activeFarmId} tests={farm.data.farm.soilTests} onSoilGrids={() => soilGrids.mutate(activeFarmId)} soilGridsPending={soilGrids.isPending} />
           </motion.section>
         </>
       )}
@@ -336,12 +336,30 @@ export function FarmWorkspaceView() {
   );
 }
 
+export function parseCropHistory(current: string | null): { season: string; crop: string; family?: string }[] {
+  if (!current) return [];
+  try {
+    const parsed = JSON.parse(current) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const value = entry as Record<string, unknown>;
+      if (typeof value.season !== 'string' || typeof value.crop !== 'string') return [];
+      return [{
+        season: value.season.slice(0, 120),
+        crop: value.crop.slice(0, 120),
+        ...(typeof value.family === 'string' ? { family: value.family.slice(0, 120) } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 function CropHistoryEditor({ farmId, current }: { farmId: string; current: string | null }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [entries, setEntries] = useState<{ season: string; crop: string; family?: string }[]>(
-    current ? JSON.parse(current) : [],
-  );
+  const [entries, setEntries] = useState(() => parseCropHistory(current));
   const update = useMutation({
     mutationFn: () => api.updateFarm(farmId, { cropHistory: entries }),
     onSuccess: () => {

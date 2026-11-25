@@ -2,7 +2,9 @@ import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import { gunzipSync } from 'zlib';
 import { resilientFetch, ProviderUnavailableError } from '@/lib/http';
-import { cacheGet, cacheGetStale, cacheSet, stableHash } from '@/lib/cache';
+import { cacheGetStale, cacheSet, canonicalKey } from '@/lib/cache';
+import { redisRuntime } from '@/lib/redis';
+import { isPrivateProvider } from '@/lib/ingest/provider-context';
 import { createManyIdempotent } from '@/lib/db-write';
 import { db } from '@/lib/db';
 
@@ -76,6 +78,7 @@ export interface FireTileResult {
   detections: FireDetection[];
   tiles: number;
   tilesWithData: number;
+  /** True only when every requested tile was successfully decoded (including empty tiles). */
   dataAvailable: boolean;
   /** True when served from a past-TTL snapshot during a provider outage. */
   stale?: boolean;
@@ -84,32 +87,47 @@ export interface FireTileResult {
 
 /**
  * Fetch + decode all fire-detection MVT tiles for a bbox on one date.
- * A 404 on every tile means "no vector archive for that date" — returned
- * honestly as dataAvailable=false rather than as detections.
+ * A 404 may mean an empty tile or an archive gap; neither proves zero fires.
+ * Any missing tile makes coverage incomplete (dataAvailable=false).
  */
 export async function fetchFiresForDate(
   date: string,
   bbox: BBox,
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<FireTileResult> {
-  const bboxKey = `${bbox.west.toFixed(2)},${bbox.south.toFixed(2)},${bbox.east.toFixed(2)},${bbox.north.toFixed(2)}`;
-  const cacheKey = `GIBS:fires:${stableHash(`${date}|${bboxKey}`)}`;
-  const cached = cacheGet<FireTileResult>(cacheKey);
-  if (cached) return cached;
+  if (![bbox.west, bbox.south, bbox.east, bbox.north].every(Number.isFinite) ||
+      bbox.west < -180 || bbox.east > 180 || bbox.south < -90 || bbox.north > 90 || bbox.west >= bbox.east || bbox.south >= bbox.north) {
+    throw new Error('invalid fire bounding box');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('invalid fire date');
+  const cacheKey = `GIBS:fires:v3:${canonicalKey({ date, bbox })}`;
+  const refresh = () => refreshFiresForDate(date, bbox, cacheKey, correlationId, signal);
+  return isPrivateProvider() ? refresh() : redisRuntime().singleFlight(`refresh:${cacheKey}`, refresh, { ttlMs: 60_000, lockMs: 120_000 });
+}
+
+async function refreshFiresForDate(
+  date: string,
+  bbox: BBox,
+  cacheKey: string,
+  correlationId?: string,
+  signal?: AbortSignal,
+): Promise<FireTileResult> {
+  // Keep expired snapshots addressable for repeated outages.
+  const lastGood = await cacheGetStale<FireTileResult>(cacheKey);
+  if (lastGood && lastGood.staleMs === 0) return lastGood.value;
 
   // Stale-while-revalidate: when the tile fetch below fails (network or
   // provider outage), fall back to the last good snapshot — labeled stale —
   // instead of a hard failure. An operator console stays usable; the UI
   // shows the staleness honestly.
-  const lastGood = cacheGetStale<FireTileResult>(cacheKey);
-
   const tiles = tilesForBbox(bbox);
   if (tiles.length > 12) throw new Error('fire area query too large: max 12 tiles (~27° × 27°) per date');
 
   const detections: FireDetection[] = [];
   let tilesWithData = 0;
   let tiles404 = 0;
-  let tilesNetworkFail = 0;
+  let tilesFailed = 0;
 
   for (const t of tiles) {
     const url =
@@ -124,17 +142,15 @@ export async function fetchFiresForDate(
         maxAttempts: 2,
         timeoutMs: 25_000,
         correlationId,
+        signal,
       });
-    } catch (err) {
-      if (err instanceof ProviderUnavailableError) {
-        tiles404++;
-        continue;
-      }
-      tilesNetworkFail++;
+    } catch {
+      tilesFailed++;
       continue;
     }
     if (!outcome.ok) {
-      tiles404++;
+      if (outcome.status === 404) tiles404++;
+      else tilesFailed++;
       continue;
     }
     let buf: Buffer;
@@ -153,7 +169,8 @@ export async function fetchFiresForDate(
           const p = f.properties as Record<string, unknown>;
           const lat = Number(p.LATITUDE);
           const lon = Number(p.LONGITUDE);
-          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+          if (p.ACQ_DATE !== undefined && p.ACQ_DATE !== date) continue;
           // bbox filter (defensive: tile may extend beyond the farm region)
           if (lat < bbox.south || lat > bbox.north || lon < bbox.west || lon > bbox.east) continue;
           detections.push({
@@ -174,20 +191,22 @@ export async function fetchFiresForDate(
       }
       if (tileHasFeatures) tilesWithData++;
     } catch (err) {
-      // decode failure of one tile never fails the whole date
+      tilesFailed++;
       console.error(`[gibs-fires] tile decode failed row=${t.row} col=${t.col}:`, err);
     }
   }
 
-  // Total network outage of the tile host: degrade to the last good snapshot
-  // (labeled stale) instead of an empty answer that could be misread as
-  // "no fires". A 404-day is NOT an outage — it stays an honest no-data day.
-  if (tilesNetworkFail === tiles.length && tiles.length > 0 && lastGood) {
-    return {
-      ...lastGood.value,
-      stale: true,
-      staleMs: lastGood.staleMs,
-    };
+  // Never cache a partial outage or decode failure as a successful date.
+  // A 404 is missing coverage, not an outage and not zero-fire evidence.
+  if (tilesFailed > 0) {
+    if (lastGood?.value.dataAvailable) {
+      return {
+        ...lastGood.value,
+        stale: true,
+        staleMs: lastGood.staleMs,
+      };
+    }
+    throw new ProviderUnavailableError('GIBS', `${tilesFailed} of ${tiles.length} fire tiles failed retrieval or decoding`);
   }
 
   const result: FireTileResult = {
@@ -195,9 +214,9 @@ export async function fetchFiresForDate(
     detections,
     tiles: tiles.length,
     tilesWithData,
-    dataAvailable: !(tilesWithData === 0 && tiles404 === tiles.length),
+    dataAvailable: tiles.length > 0 && tiles404 === 0,
   };
-  cacheSet(cacheKey, result, 12 * 60 * 60 * 1000);
+  await cacheSet(cacheKey, result, 12 * 60 * 60 * 1000);
   return result;
 }
 
@@ -206,9 +225,10 @@ export async function fetchFiresForDate(
  * good cached tile result for this date+bbox with `stale: true`, or an
  * honest empty result when no snapshot exists. Never fabricates rows.
  */
-export function staleFireTileResult(date: string, bboxKey: string): FireTileResult {
-  const cacheKey = `GIBS:fires:${stableHash(`${date}|${bboxKey}`)}`;
-  const stale = cacheGetStale<FireTileResult>(cacheKey);
+export async function staleFireTileResult(date: string, bboxKey: string): Promise<FireTileResult> {
+  const [west, south, east, north] = bboxKey.split(',').map(Number);
+  const cacheKey = `GIBS:fires:v3:${canonicalKey({ date, bbox: { west, south, east, north } })}`;
+  const stale = await cacheGetStale<FireTileResult>(cacheKey);
   if (stale) {
     return {
       ...stale.value,

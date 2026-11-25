@@ -1,65 +1,91 @@
 import { z } from 'zod';
-import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
-import { runWatchlistEvaluation } from '@/lib/fires/watchlist-evaluate';
+import {
+  apiHandler, clientKey, errorResponse, isoDateSchema, jsonResponse, parseBody,
+  rateLimit, rateLimitResponse, withIdempotency,
+} from '@/lib/api/helpers';
+import { db } from '@/lib/db';
+import { createDurableJob, dispatchJob, jobUrl } from '@/lib/queue';
+import type { DurableJob } from '@/lib/queue';
+import { validateEvalEnd } from '@/lib/fires/watchlist-engine';
+import { canReadResource, requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { assertEntitlement } from '@/lib/commercial';
 
 /**
  * POST /api/v1/fires/watchlists/[id]/evaluate — LIVE evaluation or BACKTEST.
  *
- * Body: { end?: 'YYYY-MM-DD' }
- *  - omitted: LIVE evaluation ending on the most recent fully observed VIIRS
- *    day — the standing-alert check (the "Evaluate now" action).
- *  - any explicit end date: BACKTEST — the exact same pipeline is re-run with
- *    the window anchored to that historical date (the Evaluate date picker,
- *    which always sends `end`). The result is stored as a normal
- *    FireWatchEvent flagged trigger=backtest.
+ * The evaluation fetches real VIIRS archive coverage and decodes vector tiles,
+ * so it runs as a durable job instead of inside the request:
  *
- * All validation (future dates, archive start, full-window-inside-archive) and
- * the evaluation itself live in lib/fires/watchlist-evaluate.ts, shared with
- * the scheduled re-evaluation trigger so every path behaves identically.
+ *  - the durable job row and its outbox event are created inside the SAME
+ *    transaction as the idempotency record (one commit → one logical job),
+ *  - the queue pointer is pushed after that transaction committed,
+ *  - the client receives 202 with the durable job id and the job URL.
  */
 
 type WatchCtx = { params: Promise<{ id: string }> };
 
-const bodySchema = z.object({
-  end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-});
+const bodySchema = z.object({ end: isoDateSchema.optional() });
 
 export const POST = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
   const { id } = await params;
-  const rl = rateLimit(clientKey(req, 'watchlists:evaluate'), { capacity: 6, refillPerMinute: 3 });
-  if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
-  const parsed = await parseBody(req, bodySchema);
-  if (!parsed.ok) return parsed.res;
+  const route = `/api/v1/fires/watchlists/${id}/evaluate`;
+  const pending: { job?: DurableJob } = {};
 
-  // An explicit end date is a backtest: the trigger records the ACTION taken
-  // (the date picker always sends end), even when the chosen date happens to
-  // equal the live default.
-  const trigger = parsed.data.end ? 'backtest' : 'manual';
+  const response = await withIdempotency(req, route, async (req, { userId, key }) => {
+    const rl = await rateLimit(clientKey(req, 'watchlists:evaluate'), { capacity: 6, refillPerMinute: 3 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
+    const parsed = await parseBody(req, bodySchema);
+    if (!parsed.ok) return parsed.res;
 
-  const outcome = await runWatchlistEvaluation({
-    watchlistId: id,
-    trigger,
-    end: parsed.data.end,
-    correlationId,
-    actor: 'demo-user',
+    const watchlist = await db.fireWatchlist.findUnique({
+      where: { id },
+      select: { id: true, ownerId: true, organizationId: true, lookbackDays: true },
+    });
+    const context = await resolveTenantContext(req);
+    if (!watchlist || !canReadResource(context, watchlist)) {
+      return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
+    }
+    requirePermission(context, 'analysis.run');
+    await assertEntitlement(context, 'processing_jobs_per_month');
+
+    const end = parsed.data.end;
+    if (end) {
+      const today = new Date().toISOString().slice(0, 10);
+      const invalid = validateEvalEnd(end, watchlist.lookbackDays, today);
+      if (invalid) return errorResponse(400, 'VALIDATION_ERROR', invalid, correlationId);
+    }
+
+    const trigger = end ? 'backtest' : 'manual';
+    return {
+      commit: async (tx) => {
+        pending.job = await createDurableJob({
+          type: 'fires-watch-eval',
+          ownerId: userId,
+          organizationId: context.organizationId,
+          params: { watchlistId: id, trigger, end: end ?? null, ownerId: userId, organizationId: context.organizationId },
+          correlationId,
+          idempotencyKey: key,
+          route,
+        }, tx);
+        const url = jobUrl(pending.job.jobId);
+        return jsonResponse(
+          {
+            jobId: pending.job.jobId,
+            jobUrl: url,
+            type: pending.job.type,
+            status: pending.job.status,
+            duplicate: !pending.job.created,
+            deadlineAt: pending.job.deadlineAt,
+            trigger,
+            correlationId,
+            message: 'Watchlist evaluation is queued as a durable job. Poll the job URL for the result.',
+          },
+          { status: 202, correlationId, headers: { Location: url } },
+        );
+      },
+    };
   });
 
-  if (!outcome.ok) {
-    const failure = outcome.failure;
-    const details = failure.details as Record<string, unknown> | undefined;
-    const status = failure.code === 'NOT_FOUND' ? 404 : failure.code === 'VALIDATION_ERROR' ? 400 : 502;
-    return jsonResponse(
-      {
-        error: {
-          code: failure.code,
-          message: failure.message,
-          ...(details?.providerMessage !== undefined ? { providerMessage: details.providerMessage } : {}),
-          correlationId,
-        },
-      },
-      { status, correlationId },
-    );
-  }
-
-  return jsonResponse({ ...outcome.result, correlationId }, { status: 201, correlationId });
+  if (pending.job) await dispatchJob(pending.job.jobId);
+  return response;
 });

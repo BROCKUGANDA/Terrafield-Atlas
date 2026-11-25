@@ -1,35 +1,29 @@
-# Known limitations & deferred work
+# Known limitations
 
-Being explicit about what this product does not do is part of its engineering contract.
+TerraField Atlas reports uncertainty explicitly. Nothing in this document is hidden from the product UI.
 
-## Data & science limitations
+## Science and data
 
-1. **POWER is reanalysis, not stations.** 0.5° × 0.625° grid-cell values on LST day boundaries approximate regional climate; they are not the farm's microclimate. Heavy convective rainfall can be underestimated. Every analysis repeats this caveat.
-2. **MOD13Q1 NDVI and SMAP L4 are visualization layers here.** GIBS serves them as colormap renders; quantitative per-pixel NDVI with QA flags and SMAP m³/m³ values require Earthdata credentials (AppEEARS/LAADS/GES DISC) that this deployment does not have. The product says so wherever those layers appear, and the trend engine does not pretend to analyze them numerically. NDVI dates snap to 16-day composite starts.
-3. **SMAP's 9 km native grid** is displayed with its resolution label and is never presented as field-scale soil moisture.
-4. **FIRMS CSV API is unreachable from this deployment sandbox** (verified connection timeouts). Fire features are served from the GIBS VIIRS 375 m stream — the same detection stream — with the substitution stated openly in the UI and the source register.
-5. **SoilGrids is intermittent** (verified: sub-second and > 90 s responses within one session). It is optional, labeled as modeled, confidence-discounted, and fails with an honest 502 instead of fabricating values.
-6. **VIIRS fire detections** miss fires that start and end between the twice-daily overpasses; clouds block detection; archive gap days exist and are reported as no-data.
-7. **Rotation engine scope**: it compares documented requirements against evidence (rainfall climatology, thermal season, measured soil, sequence rules). It does not model local pest pressure, varieties, labor, input logistics or markets. Economic viability is explicitly "not assessed" rather than invented.
-8. **Trend methods**: Mann-Kendall/Theil-Sen detect monotonic change only; they can miss step changes. The Hamed-Rao lag-1 term applied to the seasonal statistic is a documented adaptation (see METHODOLOGY.md §1.8).
-9. **Correlation ≠ causation**: nowhere does the product claim an environmental association proves an agricultural cause or effect; no yield or profit prediction exists.
-10. **Fire watchlists are threshold alerts, not a fire-perimeter or real-time warning system.** Evaluations count stored VIIRS 375 m detections inside a radius around a center over a lookback window. A watch radius cannot extend past the decoded tile area; a `clear` status means “no detections in the checked window within the archive's twice-daily overpass limits”, not “no fire”; days the GIBS archive lacks are reported as no-data and a `clear` is only issued when every day of the window was actually checked. VIIRS cannot see fires that start and end between overpasses or under cloud. Watchlists re-evaluate on demand, via backtest (any historical window end inside the archive), or on an opt-in cadence (6/12/24 h) served by the in-process scheduler — a single-process timer, so alert freshness is bounded by the chosen cadence and equals the last evaluation time, which is always displayed. Scheduler-run history (per-watchlist Runs panel) is only as complete as the audit ledger it reads: entries beyond the newest 50 are summarized as counts, not listed. Alert digests are cadence-aware summaries delivered ON DEMAND (`GET …/digest`) and PUSHED live over the Server-Sent-Events channel (`GET …/digest-stream`) whenever an evaluation lands or a scheduled run fails — pushed delivery is bounded by the same facts, is not e-mail/webhook delivery, has no replay buffer (a console that was offline misses frames and must pull them), and a digest only describes evaluations that actually ran (failed runs are listed as failures, never back-filled).
+1. **POWER is reanalysis, not a farm weather station.** Its 0.5° × 0.625° grid and LST day boundaries approximate regional climate; they are not field microclimate.
+2. **GIBS NDVI and SMAP layers are visualizations.** Quantitative science products and QA flags require Earthdata credentials not configured here.
+3. **SoilGrids is modeled and supplementary.** It never silently replaces farmer or laboratory measurements.
+4. **FIRMS direct CSV access is credential- and egress-dependent.** Fire detections use the NASA GIBS VIIRS 375 m stream, the same underlying detection stream, with honest degraded states.
+5. **VIIRS is not a confirmed-fire perimeter service.** Clouds, twice-daily overpasses and archive gaps limit detection; gap days are reported as no-data.
+6. **Trend and rotation methods have bounded scope.** They detect monotonic change and compare documented requirements; they do not predict yield, profit, pests, labor or markets. Correlation is not causation.
 
-## Engineering limitations (sandbox-imposed, documented)
+## Platform
 
-1. **Single-process topology**: SQLite + in-process cache + inline job execution + in-process scheduler (watchlist re-evaluation) instead of PostgreSQL/PostGIS + Redis + Celery workers. Rationale and swap path in `docs/ARCHITECTURE.md`. Consequences: rate limiting is per-process (not cluster-wide); heavy ingestions run inside the request (the UI shows running state and the job ledger records outcomes); the scheduler lives and dies with the web process — a restart simply resumes from the claimed `nextReevaluateAt` times; no horizontal scaling.
-2. **SQLite lacks `skipDuplicates`** — idempotency is implemented with an existence-filter before insert (correct but O(existing rows) on re-ingest).
-3. **No authentication layer in the demo** (public demo route per the challenge requirement). The schema reserves `users`/owner labels and the API seams support per-farm authorization; cross-user farm access prevention is therefore *not* enforced in this deployment — documented rather than hidden.
-4. **Report PDF** is produced via the browser's print-to-PDF (print stylesheet included) rather than a server-side PDF renderer — a deliberate scope decision for the 48-hour window.
+1. **Single VPS failure domain.** Two web replicas improve application availability but do not make the VPS, PostgreSQL node or network highly available.
+2. **No physical-device certification.** Browser automation covers desktop/mobile viewport engines, not every real phone, tablet, assistive technology or network carrier.
+3. **External providers can be unavailable or slow.** The application serves honest stale/degraded/not-configured states and never fabricates missing values.
+4. **SSE is not a replay log.** Redis fans out live events across replicas; disconnected clients recover current state through REST endpoints.
+5. **Exactly-once external delivery is not possible without receiver cooperation.** Stable event IDs, idempotency headers and durable receipts provide at-least-once delivery with deduplication; receivers should deduplicate by event ID.
+6. **Backups require operator storage policy.** Automated artifacts are checksummed and restore-drilled, but off-VPS replication and retention remain deployment responsibilities.
 
-## Features deliberately deferred (honest backlog)
+## Deliberate scope exclusions
 
-- Authenticated accounts and per-user farm isolation (schema seams present).
-- Administrative-region gazetteer (replaced by curated real-region presets + free coordinate/boundary entry).
-- Farmer-uploaded raster/shapefile import; GeoJSON import of farm boundaries (export of drawn boundaries works; import parsing is next).
-- MODIS+Aqua/NOAA20 fire sensor switching in the UI (the ingestion currently uses the SNPP layer; the harmonization story is told via the register and multi-sensor-ready schema).
-- Server-side PDF generation with cover page; scheduled background **re-ingestion** of POWER/climate data (watchlist re-evaluation scheduling itself is implemented); **push delivery of alert digests** (digests are generated on demand from the recorded ledger — no e-mail/webhook channel exists in this topology); multi-language UI.
-
-## Remaining known defects
-
-- None known in the shipped flows at time of delivery (103/103 unit tests, 9/9 live smoke checks, browser-verified golden path). The product intentionally surfaces provider failures (SoilGrids slowness, FIRMS unreachability) as visible, honest degraded states — these are environmental, not defects.
+- Kubernetes, multi-region deployments, database sharding and multi-VPS HA.
+- Guaranteed scientific-provider credentials or data products.
+- Server-side PDF rendering; reports use the browser print-to-PDF path.
+- Farmer-uploaded raster/shapefile import, additional fire sensors, and multilingual UI.
+- Economic or yield forecasting.

@@ -1,12 +1,20 @@
 # TerraField Atlas
 
-> Mission console for agricultural resilience and live fire intelligence, built on real NASA Earth observations for the NASA Space Apps Challenge 2026 — Field Shift. Every number is traceable to its retrieval; missing data is reported as missing, never imputed; push-delivered digests exit the console over Server-Sent Events, a signed webhook (HMAC-SHA256, OWASP-aligned) and SMTP email.
+> Mission console for agricultural resilience and fire context using source-attributed NASA records and separately labeled recent snapshots. Missing observations remain missing. Globe stations and orbits are illustrative; EONET positions are polled, not instantaneous.
+
+## Current deployment boundaries (2026-11-19)
+
+- Verified email/password accounts isolate farm, manual soil, rotation and report records. The public callsign is not authentication. Google sign-in is disabled until an OAuth client authorizes the TerraField callback.
+- Private POWER ingestion, SoilGrids retrieval, saved analysis and watchlist evaluation/backtesting/scheduling use isolated account-owned storage. Jobs retain ownership after resource deletion. Private live digests target the owner only; global email/webhook exits never receive private payloads. Private provider calls bypass shared caches and request logs. Unattributed legacy logs and job listings remain withheld.
+- Resend delivery was verified only to its reserved delivered@resend.dev test recipient. The configured signed webhook persists an idempotent local receipt; external production forwarding is not configured.
+- Recent authenticated FIRMS observations are separate from historical GIBS ingestion/coverage statistics. SoilGrids latency and satellite archive gaps remain upstream limitations.
+- Ten server-rendered module references are linked from /about and included in /sitemap.xml. Core maps and the 3D globe require browser JavaScript.
 
 ## What it is
 
 TerraField Atlas is a single Next.js mission console (one Node process, one HTTP port, SQLite via Prisma) that serves:
 
-1. **Earth Intelligence** — 12+ years of daily NASA POWER (MERRA-2) precipitation, temperature, humidity, radiation and root-zone wetness for any coordinate; seasonal Mann-Kendall trend detection with Theil-Sen slopes, confidence intervals, autocorrelation correction and FDR control; SMAP L4 root-zone moisture and MODIS/VIIRS GIBS layers on a live globe.
+1. **Earth Intelligence** — daily NASA POWER precipitation, temperature, humidity, radiation and root-zone wetness subject to availability; seasonal Mann-Kendall trend detection with Theil-Sen slopes, confidence intervals, autocorrelation correction and FDR control. GIBS layers render in the map; quantitative SMAP/MODIS science ingestion requires Earthdata credentials.
 2. **Crop rotation planning** — deterministic multi-criteria weighted scoring (family sequence, legume N, water feasibility vs POWER climatology, thermal feasibility, nutrient balance, diversity, soil pH/texture, staple presence) over a FAO-cited crop catalogue; every score explainable; missing inputs reduce confidence, never zero.
 3. **Fire Intelligence** — the VIIRS 375 m thermal-anomaly stream (the detections NASA FIRMS distributes) decoded from NASA GIBS vector tiles; a queryable detection ledger with a fire calendar, confidence classes and radiative power; NASA EONET live wildfire events; live source-health signs for every upstream.
 4. **Fire watchlists** — regional watchlists (geography + threshold rule) evaluated by an atomic scheduler on real cadences (e.g. every 6 h); manual, backtest and scheduled runs recorded in an append-only ledger; cadence-aware digests.
@@ -29,21 +37,21 @@ TerraField Atlas is a single Next.js mission console (one Node process, one HTTP
 - `GET /api/v1/health` — liveness + per-source states.
 - `GET /api/v1/readyz` — readiness (DB, scheduler, upstreams).
 - `GET /api/v1/system/status` — engines, database counts, cache, circuit breakers, scheduler watchdog, digest channel + delivery exits, A/B experiments, provider probes, methodology notes.
-- `GET /api/v1/sources` — live source registry with probe-backed states.
+- `GET /api/v1/system/sources` — source registry with probe-backed states.
 - `GET /api/v1/regions` — 19 curated real agricultural regions (demo presets, not administrative boundaries).
 - `GET /api/v1/observations?lat=&lon=&variable=&start=&end=` — stored POWER observations.
-- `GET /api/v1/analysis/trend?lat=&lon=` — seasonal Mann-Kendall + Theil-Sen results with provenance IDs.
+- `GET/POST /api/v1/analysis/trends` — stored results / seasonal Mann-Kendall + Theil-Sen evaluation, subject to ownership gates.
 - `GET /api/v1/rotation/scenarios` · `POST /api/v1/rotation/compare` — evidence-supported rotation options and comparison.
-- `GET /api/v1/fires/detections?bbox=&since=` — decoded VIIRS detections.
+- `GET /api/v1/fires?lat=&lon=&from=&to=` — stored historical VIIRS detections; `GET /api/v1/fires/recent?lat=&lon=` fetches the separate recent FIRMS product.
 - `GET/POST /api/v1/fires/watchlists` — regional watchlists; `/[id]/runs` (history), `/[id]/digest` (cadence-aware), `/[id]/evaluate` (manual/backtest/scheduled), `/digest-stream` (SSE).
 - `GET/POST /api/v1/experiments` — A/B assignment (`?exp=&unit=`) and outcome recording.
-- `GET /api/v1/provenance` — the evidence ledger (per-request status, latency, correlation).
+- `GET /api/v1/provenance` — visible source registry and analyses; unattributed request/job records are withheld from public responses.
 
 ## Honesty contract
 
 1. **No fabrication.** Missing telemetry renders as no-data with the reason (archive gap, source unreachable, not configured). A gap is never rendered as zero.
 2. **No silent degradation.** Source-health chips probe live (60 s cache); failures are flagged on the surface that would have shown the data.
-3. **Provenance for every claim.** Each upstream request is persisted with provider, URL, status, latency and a correlation ID that threads through runs, digests, pushes and deliveries.
+3. **Provenance with privacy.** Public upstream requests persist provider, redacted URL, status, latency and correlation ID. Private provider requests are not written to shared logs/caches; owned jobs retain source and outcome metadata.
 4. **Exits never lie.** An unarmed exit reports not-configured and attempts zero sends; a failed delivery keeps its failed row; retry is transient-only (network/timeout/429/5xx) with jittered backoff, max 3 attempts.
 
 ## Statistical methodology (full)

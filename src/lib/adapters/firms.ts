@@ -64,7 +64,7 @@ export function regionFileForBbox(bbox: { west: number; south: number; east: num
   return lat > -10 ? 'Asia' : 'Australia_NewZealand';
 }
 
-function parseFirmsCsv(text: string): { rows: FirmsRow[]; invalidKey: boolean } {
+export function parseFirmsCsv(text: string): { rows: FirmsRow[]; invalidKey: boolean } {
   const lines = text.trim().split(/\r?\n/);
   if (lines[0]?.toLowerCase().includes('invalid')) return { rows: [], invalidKey: true };
   const header = (lines[0] ?? '').split(',').map((h) => h.trim());
@@ -79,12 +79,15 @@ function parseFirmsCsv(text: string): { rows: FirmsRow[]; invalidKey: boolean } 
   const iDay = idx('daynight');
   const iFrp = idx('frp');
   const iTi4 = idx('bright_ti4');
+  if ([iLat, iLon, iDate, iTime].some(index => index < 0)) throw new Error('FIRMS returned no valid CSV header');
+  const optionalNumber = (value: string | undefined) => value?.trim() && Number.isFinite(Number(value)) ? Number(value) : null;
   const rows: FirmsRow[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cells = lines[i].split(',');
     const lat = Number(cells[iLat]);
     const lon = Number(cells[iLon]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (!cells[iLat]?.trim() || !cells[iLon]?.trim() || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cells[iDate] || '') || !/^\d{4}$/.test(cells[iTime] || '')) continue;
     rows.push({
       latitude: lat,
       longitude: lon,
@@ -94,8 +97,8 @@ function parseFirmsCsv(text: string): { rows: FirmsRow[]; invalidKey: boolean } 
       instrument: cells[iInstr] ?? '',
       confidence: cells[iConf] ?? '',
       dayNight: cells[iDay] ?? '',
-      frp: Number.isFinite(Number(cells[iFrp])) ? Number(cells[iFrp]) : null,
-      brightTi4: Number.isFinite(Number(cells[iTi4])) ? Number(cells[iTi4]) : null,
+      frp: optionalNumber(cells[iFrp]),
+      brightTi4: optionalNumber(cells[iTi4]),
     });
   }
   return { rows, invalidKey: false };
@@ -154,7 +157,8 @@ export async function fetchFirmsAreaCsv(
       timeoutMs: 25_000,
     });
     if (outcome.ok) {
-      const { rows } = parseFirmsCsv(new TextDecoder().decode(outcome.body));
+      const { rows, invalidKey } = parseFirmsCsv(new TextDecoder().decode(outcome.body));
+      if (invalidKey) throw new Error('FIRMS returned an error instead of archive CSV');
       // continental file: keep only rows inside the requested bbox
       const clipped = rows.filter(
         (r) => r.latitude >= bbox.south && r.latitude <= bbox.north && r.longitude >= bbox.west && r.longitude <= bbox.east,

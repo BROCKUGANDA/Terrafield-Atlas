@@ -1,0 +1,78 @@
+name: terrafield-atlas
+
+# Overlay for the enterprise product layer. Use with:
+#   docker compose -f compose.yaml -f compose.enterprise.yml up -d
+#
+# Web requests run as terrafield_app so PostgreSQL RLS policies apply.
+# Migrations and cross-tenant workers keep the owner role and are listed explicitly.
+
+x-owner-database: &owner-database postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-terrafield}?schema=public
+x-app-database: &app-database postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-terrafield}?schema=public&options=-c%20role%3Dterrafield_app
+
+services:
+  migrate:
+    environment:
+      DATABASE_URL: *owner-database
+
+  web:
+    environment:
+      DATABASE_URL: *app-database
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:?WEBHOOK_ENCRYPTION_KEY is required}
+      STAC_API_URL: ${STAC_API_URL:-https://stac.maap-project.org/search}
+      RASTER_SERVICE_URL: http://raster:8001
+    depends_on:
+      raster:
+        condition: service_healthy
+
+  web-secondary:
+    environment:
+      DATABASE_URL: *app-database
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:?WEBHOOK_ENCRYPTION_KEY is required}
+      STAC_API_URL: ${STAC_API_URL:-https://stac.maap-project.org/search}
+      RASTER_SERVICE_URL: http://raster:8001
+    depends_on:
+      raster:
+        condition: service_healthy
+
+  worker:
+    environment:
+      DATABASE_URL: *owner-database
+
+  scheduler:
+    environment:
+      DATABASE_URL: *owner-database
+
+  outbox:
+    environment:
+      DATABASE_URL: *owner-database
+
+  raster:
+    build:
+      context: ./mini-services/raster
+      dockerfile: Dockerfile
+    image: terrafield-raster:${IMAGE_TAG:-latest}
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - raster-tmp:/tmp
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+volumes:
+  raster-tmp:

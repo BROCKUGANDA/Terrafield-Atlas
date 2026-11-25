@@ -1,14 +1,22 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
-import { analyzeTrend, aggregateAnnual } from '@/lib/stats/analyze';
 import { POWER_VARIABLES } from '@/lib/types';
-import type { ObservationPoint, VariableKey } from '@/lib/types';
+import type { VariableKey } from '@/lib/types';
+import { enqueueJob, jobUrl } from '@/lib/queue';
+import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { assertEntitlement } from '@/lib/commercial';
 
 /**
  * POST /api/v1/analysis/trends
+ *
  * Runs the trend-detection pipeline (Seasonal Mann-Kendall + Theil-Sen +
  * anomalies + FDR) over stored POWER observations for a location.
+ *
+ * The analysis is CPU-bound work over years of stored observations, so it runs
+ * as a durable job: the route commits the job row and its outbox event,
+ * pushes the queue pointer and answers 202 with the durable job id.
+ *
  * Data must already be ingested; if not, a 409 with instructions is returned
  * (never an analysis of nothing, never synthetic data).
  */
@@ -24,7 +32,7 @@ const bodySchema = z.object({
 });
 
 export const POST = apiHandler(async (req, { correlationId }) => {
-  const rl = rateLimit(clientKey(req, 'analysis:trends'), { capacity: 10, refillPerMinute: 5 });
+  const rl = await rateLimit(clientKey(req, 'analysis:trends'), { capacity: 10, refillPerMinute: 5 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, bodySchema);
   if (!parsed.ok) return parsed.res;
@@ -32,23 +40,30 @@ export const POST = apiHandler(async (req, { correlationId }) => {
 
   let lat = body.lat;
   let lon = body.lon;
-  let farmId: string | null = body.farmId ?? null;
-  if (farmId && (lat === undefined || lon === undefined)) {
-    const farm = await db.farm.findUnique({ where: { id: farmId }, select: { centroidLat: true, centroidLon: true } });
+  const farmId: string | null = body.farmId ?? null;
+  let dataOwnerId: string | null = null;
+  let dataOrganizationId: string | null = null;
+  if (farmId) {
+    const farm = await db.farm.findUnique({ where: { id: farmId }, select: { centroidLat: true, centroidLon: true, ownerId: true, organizationId: true } });
     if (!farm) return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${farmId} not found`, correlationId } }, { status: 404, correlationId });
-    lat = farm.centroidLat;
-    lon = farm.centroidLon;
+    lat ??= farm.centroidLat;
+    lon ??= farm.centroidLon;
+    dataOwnerId = farm.ownerId;
+    dataOrganizationId = farm.organizationId;
   }
   if (lat === undefined || lon === undefined) {
     return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: 'provide farmId or lat+lon', correlationId } }, { status: 400, correlationId });
   }
 
-  const rows = await db.environmentalObservation.findMany({
-    where: { lat, lon, variable: { in: body.variables } },
+  // Honest pre-flight: trends are computed on real stored observations only.
+  // The scope never widens to another tenant's observations.
+  const existing = await db.environmentalObservation.findMany({
+    where: { lat, lon, ownerId: dataOwnerId, organizationId: dataOrganizationId, variable: { in: body.variables }, ...(farmId ? { farmId } : {}) },
     orderBy: { obsDate: 'asc' },
+    take: 1,
+    select: { id: true },
   });
-
-  if (rows.length === 0) {
+  if (existing.length === 0) {
     return jsonResponse(
       {
         error: {
@@ -61,104 +76,37 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     );
   }
 
-  // Build per-variable daily series
-  const byVar = new Map<string, ObservationPoint[]>();
-  for (const r of rows) {
-    const arr = byVar.get(r.variable) ?? [];
-    arr.push({ date: r.obsDate.toISOString().slice(0, 10), value: r.value });
-    byVar.set(r.variable, arr);
-  }
+  const context = await resolveTenantContext(req);
+  requirePermission(context, 'analysis.run');
+  await assertEntitlement(context, 'processing_jobs_per_month');
+  const tenantId = context.userId ?? dataOwnerId;
+  const idempotencyKey = req.headers.get('idempotency-key')?.trim() || null;
 
-  const periodStart = rows[0].obsDate.toISOString().slice(0, 10);
-  const periodEnd = rows[rows.length - 1].obsDate.toISOString().slice(0, 10);
-
-  // First pass to collect p-values for FDR
-  const prelim = body.variables
-    .filter((v) => byVar.has(v))
-    .map((v) => {
-      const meta = POWER_VARIABLES.find((m) => m.key === v)!;
-      return analyzeTrend({
-        variable: v,
-        label: meta.label,
-        unit: meta.unit,
-        points: byVar.get(v)!,
-        periodStart,
-        periodEnd,
-      });
-    });
-  const pValues = prelim.map((r) => (r.pValue === null ? 1 : Math.min(1, Math.max(0, r.pValue))));
-  const results = prelim.map((r, i) =>
-    r.pValue === null
-      ? r
-      : analyzeTrend({
-          variable: r.variable,
-          label: r.label,
-          unit: r.unit,
-          points: byVar.get(r.variable)!,
-          periodStart,
-          periodEnd,
-          allPValues: pValues,
-          pIndex: i,
-        }),
-  );
-
-  // Persist analyses (traceable, reproducible)
-  for (const r of results) {
-    await db.trendAnalysis.create({
-      data: {
-        farmId,
-        lat,
-        lon,
-        variable: r.variable,
-        periodStart: new Date(`${periodStart}T00:00:00Z`),
-        periodEnd: new Date(`${periodEnd}T00:00:00Z`),
-        sampleCount: r.sampleCount,
-        method: r.method,
-        slopePerYear: r.slopePerYear,
-        pValue: r.pValue,
-        zValue: r.zValue,
-        direction: r.direction,
-        significant: r.significant,
-        ciLower: r.ciLower,
-        ciUpper: r.ciUpper,
-        resultJson: JSON.stringify(r),
-        ruleVersion: 'trend-engine/2026.11-r1',
-      },
-    });
-  }
-
-  const job = await db.processingJob.create({
-    data: {
-      type: 'trends',
-      status: 'succeeded',
-      params: JSON.stringify({ lat, lon, variables: body.variables, farmId }),
-      progressNote: `${results.length} variables analysed from ${rows.length} stored observations (${periodStart} → ${periodEnd})`,
-      resultRef: JSON.stringify(results.map((r) => ({ variable: r.variable, direction: r.direction, significant: r.significant }))),
-      correlationId,
-      finishedAt: new Date(),
-    },
+  const job = await enqueueJob({
+    type: 'trends',
+    ownerId: tenantId,
+    organizationId: context.organizationId ?? dataOrganizationId,
+    params: { lat, lon, variables: body.variables, farmId, ownerId: dataOwnerId, organizationId: dataOrganizationId },
+    correlationId,
+    idempotencyKey,
+    route: '/api/v1/analysis/trends',
   });
 
-  // annual series for chart overlays
-  const annual = Object.fromEntries(
-    results.map((r) => [r.variable, aggregateAnnual(r.variable, byVar.get(r.variable) ?? [])]),
-  );
-
+  const url = jobUrl(job.jobId);
   return jsonResponse(
     {
-      jobId: job.id,
-      location: { lat, lon },
-      farmId,
-      period: { start: periodStart, end: periodEnd },
-      observationCount: rows.length,
-      datasetVersions: [...new Set(rows.map((r) => r.datasetVersion))],
-      multipleTesting: {
-        method: 'Benjamini-Hochberg FDR across requested variables',
-        testedHypotheses: pValues.length,
-      },
-      results,
-      annualSeries: annual,
+      jobId: job.jobId,
+      jobUrl: url,
+      type: job.type,
+      status: job.status,
+      duplicate: !job.created,
+      enqueued: job.enqueued,
+      deadlineAt: job.deadlineAt,
+      correlationId,
+      message: job.enqueued
+        ? 'Trend analysis is queued as a durable job. Poll the job URL for the result.'
+        : 'Trend analysis is queued as a durable job; the queue pointer is pending outbox reconciliation.',
     },
-    { correlationId },
+    { status: 202, correlationId, headers: { Location: url } },
   );
 });

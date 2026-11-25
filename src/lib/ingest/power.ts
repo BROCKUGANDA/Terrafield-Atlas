@@ -2,14 +2,16 @@ import { db } from '@/lib/db';
 import { fetchPowerDaily } from '@/lib/adapters/power';
 import { createManyIdempotent } from '@/lib/db-write';
 import type { VariableKey } from '@/lib/types';
+import { AccountAccessError } from '@/lib/account-access';
+import { withPrivateProvider } from '@/lib/ingest/provider-context';
 
 /**
  * POWER ingestion orchestrator.
  *
- * - Idempotent: rows are upserted on the natural key (lat, lon, variable, date)
+ * - Idempotent: rows use the natural key (namespace, lat, lon, variable, date)
  *   so re-running an ingest never duplicates observations (request dedup).
- * - Provenance: each fetch is logged to ApiRequestLog by the resilient client
- *   with the correlation ID of the triggering request.
+ * - Provenance: public fetches are logged to ApiRequestLog by the resilient
+ *   client; private fetches bypass shared provider logs and caches.
  * - Chunking: requests are capped at 15 years; longer windows are split.
  */
 
@@ -20,7 +22,7 @@ function chunkRange(start: string, end: string, maxDays: number): { start: strin
   let s = new Date(`${start}T00:00:00Z`);
   const e = new Date(`${end}T00:00:00Z`);
   while (s < e) {
-    let c = new Date(s);
+    const c = new Date(s);
     c.setUTCDate(c.getUTCDate() + maxDays);
     const chunkEnd = c > e ? e : new Date(c.getTime() - 86_400_000);
     chunks.push({ start: s.toISOString().slice(0, 10), end: chunkEnd.toISOString().slice(0, 10) });
@@ -41,6 +43,15 @@ export interface IngestOutcome {
   firstError?: string;
 }
 
+export interface IngestOptions {
+  /** Aborts the provider request when the job deadline passes. */
+  signal?: AbortSignal;
+  /** Cooperative checkpoint executed before every provider chunk. */
+  checkpoint?: () => void | Promise<void>;
+  /** Shared organization boundary for organization-owned farms. */
+  organizationId?: string | null;
+}
+
 export async function ingestPowerForLocation(
   lat: number,
   lon: number,
@@ -48,7 +59,17 @@ export async function ingestPowerForLocation(
   variables: VariableKey[] = ['PRECTOTCORR', 'T2M', 'T2M_MAX', 'T2M_MIN', 'ALLSKY_SFC_SW_DWN', 'RH2M', 'GWETROOT'],
   farmId?: string,
   correlationId?: string,
+  options: IngestOptions = {},
 ): Promise<IngestOutcome> {
+  let ownerId: string | null = null;
+  let organizationId: string | null = options.organizationId ?? null;
+  if (farmId) {
+    const farm = await db.farm.findUnique({ where: { id: farmId }, select: { ownerId: true, organizationId: true } });
+    if (!farm) throw new AccountAccessError(404, 'NOT_FOUND', 'record not found');
+    ownerId = farm.ownerId;
+    organizationId = farm.organizationId;
+  }
+  const namespace = ownerId ? `farm:${farmId}` : 'public';
   const today = new Date();
   today.setUTCDate(today.getUTCDate() - 6);
   const end = today.toISOString().slice(0, 10);
@@ -64,10 +85,17 @@ export async function ingestPowerForLocation(
 
   for (const chunk of chunks) {
     try {
-      const res = await fetchPowerDaily({
-        lat, lon, start: chunk.start, end: chunk.end, variables, correlationId,
+      // Cooperative checkpoint: never start a new provider request after the
+      // job was cancelled or its overall deadline passed.
+      await options.checkpoint?.();
+      const fetchChunk = () => fetchPowerDaily({
+        lat, lon, start: chunk.start, end: chunk.end, variables, correlationId, signal: options.signal,
       });
+      const res = await (ownerId || organizationId ? withPrivateProvider(fetchChunk) : fetchChunk());
       const rows: {
+        ownerId: string | null;
+        organizationId: string | null;
+        namespace: string;
         farmId: string | null;
         lat: number;
         lon: number;
@@ -86,6 +114,9 @@ export async function ingestPowerForLocation(
           }
           validPoints++;
           rows.push({
+            ownerId,
+            organizationId,
+            namespace,
             farmId: farmId ?? null,
             lat,
             lon,
@@ -98,27 +129,11 @@ export async function ingestPowerForLocation(
           });
         }
       }
-      // Idempotent write on SQLite (skipDuplicates is unsupported there):
-      // fetch existing (variable, date) keys for this location/chunk once,
-      // filter in memory, then insert only genuinely new rows.
-      const chunkStart = rows.length ? rows[0].obsDate : new Date(0);
-      const chunkEnd = rows.length ? rows[rows.length - 1].obsDate : new Date(0);
-      const existing = await db.environmentalObservation.findMany({
-        where: {
-          lat,
-          lon,
-          obsDate: { gte: new Date(chunkStart.getTime() - 86_400_000 * 370), lte: new Date(chunkEnd.getTime() + 86_400_000 * 370) },
-        },
-        select: { variable: true, obsDate: true },
-      });
-      const existingKeys = new Set(existing.map((e) => `${e.variable}|${e.obsDate.toISOString().slice(0, 10)}`));
-      const fresh = rows.filter(
-        (r) => !existingKeys.has(`${r.variable}|${r.obsDate.toISOString().slice(0, 10)}`),
-      );
-      // insert in chunks of 500 — race-safe: a concurrent ingest inserting
-      // the same natural key resolves row-by-row instead of failing the job
-      for (let i = 0; i < fresh.length; i += 500) {
-        const slice = fresh.slice(i, i + 500);
+      // PostgreSQL natural-key upsert: (namespace, lat, lon, variable, date)
+      // is enforced by a unique index, so a concurrent ingest of the same
+      // observation can never duplicate or fail this chunk.
+      for (let i = 0; i < rows.length; i += 500) {
+        const slice = rows.slice(i, i + 500);
         const written = await createManyIdempotent(db.environmentalObservation, slice);
         rowsWritten += written;
       }
@@ -156,9 +171,9 @@ function quantile(sorted: number[], q: number): number {
   return sorted[lo] + (pos - lo) * (sorted[hi] - sorted[lo]);
 }
 
-export async function rainfallMonthlyStats(lat: number, lon: number): Promise<RainfallMonthlyAgg | null> {
+export async function rainfallMonthlyStats(lat: number, lon: number, farmId?: string): Promise<RainfallMonthlyAgg | null> {
   const rows = await db.environmentalObservation.findMany({
-    where: { lat, lon, variable: 'PRECTOTCORR' },
+    where: { lat, lon, variable: 'PRECTOTCORR', ...(farmId ? { farmId } : { ownerId: null }) },
     select: { obsDate: true, value: true },
     orderBy: { obsDate: 'asc' },
   });
@@ -184,9 +199,9 @@ export async function rainfallMonthlyStats(lat: number, lon: number): Promise<Ra
   return { p25, p50, p75, years: yearsSeen.size };
 }
 
-export async function thermalMonthlyStats(lat: number, lon: number): Promise<ThermalMonthlyAgg | null> {
+export async function thermalMonthlyStats(lat: number, lon: number, farmId?: string): Promise<ThermalMonthlyAgg | null> {
   const rows = await db.environmentalObservation.findMany({
-    where: { lat, lon, variable: 'T2M' },
+    where: { lat, lon, variable: 'T2M', ...(farmId ? { farmId } : { ownerId: null }) },
     select: { obsDate: true, value: true },
     orderBy: { obsDate: 'asc' },
   });

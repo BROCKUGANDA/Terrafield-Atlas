@@ -1,75 +1,56 @@
 import { db } from '@/lib/db';
-import { jsonResponse } from '@/lib/api/helpers';
+import { apiHandler, decodeCursor, encodeCursor, jsonResponse, paginationSchema } from '@/lib/api/helpers';
+import { resolveTenantContext, visibleTrendScope } from '@/lib/tenancy';
+import type { ApiRequestLog } from '@prisma/client';
 
 /**
- * GET /api/v1/provenance?analysisId=
- * The evidence ledger: every external API request the platform has made
- * (success or failure), the data-source register, and recent analyses with
- * their input references. This is what makes every number in the product
- * traceable to a source and a retrieval timestamp.
+ * GET /api/v1/provenance?analysisId=&limit=&cursor=
+ * Evidence ledger. Unattributed provider logs remain withheld because they can
+ * contain private coordinates; tenant-attributed trends are cursor paginated.
  */
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const limit = Math.min(200, Number(url.searchParams.get('limit') ?? 50) || 50);
-  const providerFilter = url.searchParams.get('provider') ?? undefined;
-
-  const logs = await db.apiRequestLog.findMany({
-    where: providerFilter ? { provider: providerFilter } : undefined,
-    orderBy: { retrievedAt: 'desc' },
-    take: limit,
-  });
-  const sources = await db.dataSource.findMany({ orderBy: { datasetName: 'asc' } });
+export const GET = apiHandler(async (req, { correlationId }) => {
+  const query = paginationSchema(100, 20).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
+  const context = await resolveTenantContext(req);
+  const logs: ApiRequestLog[] = context.organizationId
+    ? await db.apiRequestLog.findMany({ where: { organizationId: context.organizationId }, orderBy: { retrievedAt: 'desc' }, take: 100 })
+    : [];
+  const sources = await db.dataSource.findMany({ orderBy: { datasetName: 'asc' }, take: 500 });
   const recentTrends = await db.trendAnalysis.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 10,
+    where: visibleTrendScope(context),
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: query.limit + 1,
+    ...(query.cursor ? { cursor: { id: decodeCursor(query.cursor) }, skip: 1 } : {}),
     select: {
       id: true, variable: true, lat: true, lon: true, farmId: true,
       periodStart: true, periodEnd: true, sampleCount: true, method: true,
       direction: true, significant: true, ruleVersion: true, createdAt: true,
     },
   });
-  const recentJobs = await db.processingJob.findMany({
-    orderBy: { startedAt: 'desc' },
-    take: 10,
-    select: { id: true, type: true, status: true, progressNote: true, error: true, startedAt: true, finishedAt: true },
-  });
-
-  const okCount = logs.filter((l) => l.ok).length;
+  const page = recentTrends.slice(0, query.limit);
+  const nextCursor = recentTrends.length > query.limit ? encodeCursor(page[page.length - 1].id) : null;
+  const okCount = logs.filter((log) => log.ok).length;
   const byProvider: Record<string, { total: number; ok: number; failed: number; lastStatus: number | null; lastRetrievedAt: string | null }> = {};
-  for (const l of logs) {
-    const p = (byProvider[l.provider] ??= { total: 0, ok: 0, failed: 0, lastStatus: null, lastRetrievedAt: null });
-    p.total++;
-    if (l.ok) p.ok++;
-    else p.failed++;
-    p.lastStatus = l.status;
-    p.lastRetrievedAt = l.retrievedAt.toISOString();
+  for (const log of logs) {
+    const provider = (byProvider[log.provider] ??= { total: 0, ok: 0, failed: 0, lastStatus: null, lastRetrievedAt: null });
+    provider.total++;
+    if (log.ok) provider.ok++; else provider.failed++;
+    provider.lastStatus = log.status;
+    provider.lastRetrievedAt = log.retrievedAt.toISOString();
   }
 
   return jsonResponse({
-    summary: {
-      requestsLogged: logs.length,
-      ok: okCount,
-      failed: logs.length - okCount,
-      byProvider,
-    },
-    requestLog: logs.map((l) => ({
-      id: l.id,
-      provider: l.provider,
-      datasetId: l.datasetId,
-      operation: l.operation,
-      requestUrl: l.requestUrl,
-      status: l.status,
-      latencyMs: l.latencyMs,
-      responseBytes: l.responseBytes,
-      ok: l.ok,
-      errorDetail: l.errorDetail,
-      correlationId: l.correlationId,
-      retrievedAt: l.retrievedAt,
+    summary: { requestsLogged: logs.length, ok: okCount, failed: logs.length - okCount, byProvider },
+    requestLog: logs.map((log) => ({
+      id: log.id, provider: log.provider, datasetId: log.datasetId, operation: log.operation,
+      requestUrl: log.requestUrl, status: log.status, responseBytes: log.responseBytes,
+      ok: log.ok, errorDetail: log.errorDetail, correlationId: log.correlationId, retrievedAt: log.retrievedAt,
     })),
     sources,
-    recentTrendAnalyses: recentTrends,
-    recentJobs,
-    methodologyPointer:
-      'Trend methodology: seasonal Mann-Kendall (Hirsch-Slack 1984) + Theil-Sen slope with Sen-rank CI; Hamed-Rao (1998) lag-1 variance inflation when the deseasonalized series shows significant autocorrelation; Benjamini-Hochberg FDR across variables; ≥ 8 full years required before any significance claim. Full text: /api/v1/system/status → methodology.',
-  });
-}
+    privacyNote: 'Unattributed request logs and job details are withheld until tenant ownership is supported.',
+    recentTrendAnalyses: page,
+    recentJobs: [],
+    nextCursor,
+    correlationId,
+    methodologyPointer: 'Trend methodology: Seasonal Mann-Kendall + Theil-Sen slope with Sen-rank CI; Hamed-Rao correction; Benjamini-Hochberg FDR; ≥8 full years. Full text: /api/v1/system/status → methodology.',
+  }, { correlationId });
+});

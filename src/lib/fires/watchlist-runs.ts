@@ -1,7 +1,7 @@
 /**
  * Scheduler-run history for one watchlist — assembled from two ledgers.
  *
- * The in-process scheduler (lib/scheduler.ts) records EVERY run in the audit
+ * The database-leased scheduler (lib/scheduler.ts) records EVERY run in the audit
  * ledger:
  *
  *   - action 'watchlist.schedule.run'  → the run succeeded (status + count)

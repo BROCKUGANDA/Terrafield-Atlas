@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, type Variants } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useMutation } from '@tanstack/react-query';
 import { api, type ReportResponse } from '@/lib/api-client';
+import { isRequestContextCurrent, type RequestContext } from '@/lib/request-context';
 import { logEvent } from '@/components/state/log-store';
 import { downloadJson, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
@@ -12,7 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, CoordReadout } from '@/components/ui-mc/kit';
 import { EmptyState, FaultPanel } from '@/components/system/query-state';
 import { SweepLoader } from '@/components/system/skeletons';
-import { FileText, Printer, AlertTriangle, Braces } from 'lucide-react';
+import { FileText, Printer, AlertTriangle, Braces, FileDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Staggered section entrance (y:12→0, 0.35s, ~60ms stagger, once). */
@@ -31,12 +32,23 @@ const MONO_BTN = 'font-mono text-[11px] uppercase tracking-wide-mc';
 export function ReportsView() {
   const { activeFarmId, setView } = useSession();
   const { toast } = useToast();
-  const [report, setReport] = useState<ReportResponse | null>(null);
+  const [reportState, setReportState] = useState<{ farmId: string | null; data: ReportResponse } | null>(null);
+  const report = reportState?.farmId === activeFarmId ? reportState.data : null;
+  const requestContext: RequestContext = { farmId: activeFarmId };
+  const contextRef = useRef(requestContext);
+  useEffect(() => {
+    contextRef.current = { farmId: activeFarmId };
+  }, [activeFarmId]);
 
-  const generate = useMutation({
-    mutationFn: () => api.report(activeFarmId!),
-    onSuccess: (data) => {
-      setReport(data);
+  const generate = useMutation<{ submittedContext: RequestContext; data: ReportResponse }, Error, boolean>({
+    mutationFn: async (persist: boolean) => {
+      const submittedContext = contextRef.current;
+      const data = await api.report(activeFarmId!, persist);
+      return { submittedContext, data };
+    },
+    onSuccess: ({ submittedContext, data }) => {
+      if (!isRequestContextCurrent(submittedContext, contextRef.current)) return;
+      setReportState({ farmId: submittedContext.farmId, data });
       toast({ title: 'Report compiled', description: `${data.trendAnalyses.length} trend analyses · ${data.rotationScenarios.length} scenarios · ${data.provenance.length} provenance records.` });
       logEvent({
         severity: 'success',
@@ -57,6 +69,11 @@ export function ReportsView() {
       });
     },
   });
+
+  const resetGenerate = generate.reset;
+  useEffect(() => {
+    resetGenerate();
+  }, [activeFarmId, resetGenerate]);
 
   const exportReportJson = () => {
     if (!report) return;
@@ -97,7 +114,7 @@ export function ReportsView() {
           description="Compiles environmental record, trend statistics, soil information, rotation comparisons, provenance ledger and methodology — from stored real observations only. Use your browser's print dialog to save as PDF (print styles included)."
           actions={
             <div className="flex flex-wrap items-center gap-2.5">
-              <Button onClick={() => generate.mutate()} disabled={generate.isPending} data-tour="reports-generate" className={cn('uppercase', MONO_BTN)}>
+              <Button onClick={() => generate.mutate(false)} disabled={generate.isPending} data-tour="reports-generate" className={cn('uppercase', MONO_BTN)}>
                 {generate.isPending ? (
                   <>
                     <span className="anim-blink h-1.5 w-1.5 rounded-full bg-primary-foreground" aria-hidden /> Compiling…
@@ -111,6 +128,19 @@ export function ReportsView() {
                   <Button variant="outline" onClick={() => window.print()} className={cn('uppercase', MONO_BTN)}>
                     <Printer className="h-3.5 w-3.5" aria-hidden /> Print / save as PDF
                   </Button>
+                  <Button variant="outline" onClick={() => generate.mutate(true)} disabled={generate.isPending} className={cn('uppercase', MONO_BTN)}>
+                    <FileText className="h-3.5 w-3.5" aria-hidden /> Persist snapshot
+                  </Button>
+                  {report.reportId && (
+                    <>
+                      <Button variant="outline" onClick={() => { const link = document.createElement('a'); link.href = `/api/v1/reports/${report.reportId}/pdf`; link.download = `terrafield-report-${report.reportId}.pdf`; link.click(); }} className={cn('uppercase', MONO_BTN)}>
+                        <FileText className="h-3.5 w-3.5" aria-hidden /> Server PDF
+                      </Button>
+                      <Button variant="outline" onClick={() => { const link = document.createElement('a'); link.href = `/api/v1/reports/${report.reportId}/csv`; link.download = `terrafield-report-${report.reportId}.csv`; link.click(); }} className={cn('uppercase', MONO_BTN)}>
+                        <FileDown className="h-3.5 w-3.5" aria-hidden /> CSV
+                      </Button>
+                    </>
+                  )}
                   <Button
                     variant="outline"
                     onClick={exportReportJson}
@@ -136,7 +166,7 @@ export function ReportsView() {
           <FaultPanel
             error={generate.error}
             label="Report compilation"
-            onRetry={() => generate.mutate()}
+            onRetry={() => generate.mutate(false)}
             hint="The compiler reads only stored evidence; a failed build produces no partial document."
           />
         </motion.div>

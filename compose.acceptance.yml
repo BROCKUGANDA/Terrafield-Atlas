@@ -1,0 +1,7 @@
+services:
+  web:
+    ports:
+      - "13000:3000"
+  web-secondary:
+    ports:
+      - "13001:3000"

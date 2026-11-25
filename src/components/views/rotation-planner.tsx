@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, type Variants } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api, ApiRequestError, type CropDef, type RotationResult } from '@/lib/api-client';
+import { isRequestContextCurrent, requestContextKey, type RequestContext } from '@/lib/request-context';
 import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, downloadJson, timestampSlug } from '@/lib/export';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -73,15 +74,26 @@ export function RotationPlannerView() {
 
   const [selectedCrop, setSelectedCrop] = useState('maize');
   const [activeScenario, setActiveScenario] = useState(0);
+  const inputHash = JSON.stringify({ scenarios, priorities });
+  const requestContext: RequestContext = { farmId: activeFarmId, inputHash };
+  const scope = requestContextKey(requestContext);
+  const contextRef = useRef(requestContext);
+  useEffect(() => {
+    contextRef.current = { farmId: activeFarmId, inputHash };
+  }, [activeFarmId, inputHash]);
 
   const compare = useMutation({
-    mutationFn: () =>
-      api.compare({
+    mutationFn: async () => {
+      const submittedContext = contextRef.current;
+      const result = await api.compare({
         farmId: activeFarmId!,
         scenarios: scenarios.map((s) => ({ name: s.name, cropKeys: s.cropKeys })),
         priorities,
-      }),
-    onSuccess: (res) => {
+      });
+      return { submittedContext, result };
+    },
+    onSuccess: ({ submittedContext, result: res }) => {
+      if (!isRequestContextCurrent(submittedContext, contextRef.current)) return;
       toast({
         title: 'Comparison complete',
         description: `${res.results.length} alternatives scored. Environment: ${res.environmentAvailable.rainfall ? 'POWER rainfall ✓' : 'no rainfall ✗'}; soil: ${res.soilAvailable.source ?? 'none'}.`,
@@ -113,7 +125,7 @@ export function RotationPlannerView() {
   });
 
   const exportComparisonCsv = () => {
-    const d = compare.data;
+    const d = compare.data?.result;
     if (!d) return;
     const rows: unknown[][] = [];
     for (const r of d.ranking) {
@@ -154,7 +166,7 @@ export function RotationPlannerView() {
   };
 
   const exportComparisonJson = () => {
-    const d = compare.data;
+    const d = compare.data?.result;
     if (!d) return;
     downloadJson(`terrafield-rotation-comparison-${timestampSlug()}`, {
       exportedAt: new Date().toISOString(),
@@ -178,9 +190,14 @@ export function RotationPlannerView() {
     toast({ title: 'Comparison exported', description: 'Full engine output written to JSON.' });
   };
 
+  const resetCompare = compare.reset;
+  useEffect(() => {
+    resetCompare();
+  }, [scope, resetCompare]);
+
   const rainfallProfile = useQuery({
     queryKey: ['obs-profile', activeFarmId],
-    queryFn: () => api.observations(activeFarmId ? { farmId: activeFarmId } : {}),
+    queryFn: ({ signal }) => api.observations(activeFarmId ? { farmId: activeFarmId, signal } : { signal }),
     select: (data) => {
       // compute monthly median from daily rainfall points (client-side climatology)
       const pts = data.series.PRECTOTCORR?.points ?? [];
@@ -207,6 +224,8 @@ export function RotationPlannerView() {
       return { p25: byMonth.map((a) => q(a, 0.25)), p50: byMonth.map((a) => q(a, 0.5)), p75: byMonth.map((a) => q(a, 0.75)), years };
     },
   });
+
+  const comparison = compare.data?.result;
 
   if (!activeFarmId) {
     return (
@@ -449,7 +468,7 @@ export function RotationPlannerView() {
       )}
 
       {/* Results */}
-      {compare.data && (
+      {comparison && (
         <motion.section variants={RISE} custom={3} initial="hidden" whileInView="show" viewport={{ once: true }} aria-label="Comparison results">
           <HudPanel calm={false}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -462,7 +481,7 @@ export function RotationPlannerView() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="telemetry rounded-sm border border-edge bg-panel-2/60 px-2.5 py-1 text-[10px] uppercase tracking-wide-mc text-dim">
-                  rules {compare.data.results[0]?.ruleVersion ?? '—'}
+                  rules {comparison.results[0]?.ruleVersion ?? '—'}
                 </span>
                 <Button
                   variant="outline"
@@ -486,8 +505,9 @@ export function RotationPlannerView() {
             </div>
 
             <Accordion type="single" collapsible className="mt-4">
-              {compare.data.ranking.map((rank, idx) => {
-                const result = compare.data!.results.find((r) => r.scenarioName === rank.scenarioName)!;
+              {comparison.ranking.map((rank, idx) => {
+                const result = comparison.results.find((r) => r.scenarioName === rank.scenarioName);
+                if (!result) return null;
                 const rankOne = rank.rank === 1;
                 const scorePct = Math.round(rank.overallScore * 100);
                 const confPct = Math.round(rank.confidence * 100);

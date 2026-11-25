@@ -1,0 +1,34 @@
+# Release-note follow-up — 2026-11-19
+
+## Implemented and deployed
+
+- Restored strict Next production type validation; corrected promised route context, invalid route exports and nested Zod defaults. All application code and tests remain included. Standalone optional websocket examples and deployment rollback snapshots are excluded.
+- Catalogue initialization uses atomic version/crop upserts and repairs partial catalogues. Eight concurrent initialization calls pass without duplicate-crop failure.
+- Provider robustness: SoilGrids HTTP failures are rejected before parsing; missing archive coverage is distinct from outages/decode failures, partial coverage cannot claim completeness, stale real snapshots remain explicitly stale, and 404 gaps no longer open the provider-wide circuit. No generated observations or silent zero substitution.
+- Historical soil audit: one old modeled record has no populated numeric fields; no numeric units need rewriting. Laboratory records were not modified.
+- A persistent private session secret is configured; signed demo sessions survive a service restart. Demo callsigns still do not authenticate anyone.
+- Added verified email/password accounts, salted scrypt hashes, durable attempt limits, one-use hashed verification tokens, NextAuth CSRF-protected login/logout and secure HttpOnly eight-hour JWT cookies. Ownership checks protect farms, soil children, watchlists, scenarios, comparisons and reports. Account-owned drafts are not persisted to local browser storage; account transitions reset workspace caches.
+- Recent authenticated FIRMS feed and Fire Intelligence control use the provider's 24-hour product, explicitly separate from historical GIBS coverage. NASA accepted the supplied key; a sampled region returned valid CSV with zero rows, not a proof of no fires. Provenance logging redacts keys in URL paths/query parameters.
+- Resend supports account verification and public-demo scheduler digest email alongside legacy SMTP. A verified sender domain was selected from the authorized Resend account. Live test mail to the reserved `delivered@resend.dev` recipient reached provider state `delivered`.
+- Signed digest receiver validates exact bytes and timestamp, bounds request size, persists deduplicated receipts, and rejects tampering. It does not forward externally. Private digests never enter shared SSE/email/webhook destinations.
+- Ten server-rendered module references, canonical URLs, crawlable links and sitemap entries complement the client-rendered console. Privacy and crawler documentation disclose current capabilities and gates.
+- Incremental account schema migration retained existing farm/watchlist/soil row counts and passed SQLite foreign-key checks. A pre-migration SQLite backup, previous builds and source snapshots are retained on the VPS.
+
+## Verification
+
+- `bun test tests src/components/three/live-globe-events.test.ts`: 211 outer tests pass; the isolated account suite additionally exercises 18 real-database account/security cases.
+- `bun tests/workflows.integration.ts`: authenticated farm create/read/update, measured soil persistence including zero, invalid soil fractions, rotation defaults/persistence, report composition and concurrent seeding pass; fixture records are removed.
+- Strict production Next build passes compilation, TypeScript validation and static generation (41 pages, including ten module guides). Targeted ESLint and diff checks pass.
+- Live Edge/Firefox/WebKit: phone/tablet/desktop overflow, mobile Explorer, server HTML and session cookie checks pass. Sidebar navigation, Explorer canvas, invalid inputs and browser history pass.
+- Live reserved-recipient registration/verification/replay checks and browser login/private-farm creation/anonymous denial/logout pass in Edge, Firefox and WebKit. Raw cookie headers enforce SameSite=Lax, Secure and HttpOnly; cross-site image requests do not transmit the account session. WebKit's cookie-introspection enum differs, so actual header and transmission behavior are tested rather than trusting that enum. Disposable account/farm fixtures are removed.
+- Live Resend acceptance/delivery tracking, signed webhook success/idempotency/tamper rejection, authenticated recent FIRMS fetch, public health and restart-stable demo sessions pass.
+- Final live checks: all ten module references render meaningful HTML with JavaScript disabled and correct canonical/console links; the 3D canvas and sourced EONET details render without page errors; public job detail remains available and nonexistent IDs return 404. Readiness reports ready with database, seed baseline, scheduler and digest-channel checks passing. Responsive checks were rerun successfully after the final deployment.
+- One initial browser navigation timed out; diagnostic WebKit navigation and the unchanged complete browser regression suite subsequently passed. No assertions were skipped.
+
+## Remaining work and external prerequisites
+
+- **Not all notes are fully closed.** Private provider ingestion, statistical analysis, SoilGrids retrieval, watchlist evaluation/scheduling and private outbound notifications remain fail-closed until shared stores/diagnostics and delivery destinations support tenant ownership. Manual private farm/soil/rotation/report paths work. Public job detail checks referenced farm/watchlist ownership; unattributed global job lists and request logs are withheld.
+- Google client files found in the authorized local credential directory do not authorize `https://terrafieldatlas.us/api/auth/callback/google`; Google remains disabled. Approve that callback in the appropriate Google Cloud OAuth client before enabling those credentials. Email/password sign-in is live. Self-service password reset/account deletion flows are not implemented.
+- Production recipient addresses and an external webhook receiver were not supplied. Digest delivery is deliberately test-only/local-receipt-only, not certified to a real user's inbox or a third-party system. Do not treat successful reserved-recipient tests as external production delivery certification.
+- Upstream SoilGrids timeouts and satellite archive gaps cannot be repaired by this application. The globe polls reported events (browser poll and provider cache), not an instantaneous fire-detection stream; it is not an emergency service. Scientific Earthdata adapters still require their own credentials.
+- Responsive/cross-browser coverage is broader, not an exhaustive certification of every device, integration, long-running scheduling failure mode or provider dataset. No hackathon outcome or indexing/ranking guarantee is made.

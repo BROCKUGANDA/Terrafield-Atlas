@@ -186,7 +186,7 @@ export function AnomalyChart({ anomalies, height = 200 }: { anomalies: { date: s
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
           <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ ...TICK, fontSize: 9 }} stroke={AXIS_STROKE} />
+          <XAxis dataKey="date" tick={{ ...TICK, fontSize: 9 }} stroke={AXIS_STROKE} interval="preserveStartEnd" minTickGap={18} />
           <YAxis tick={TICK} stroke={AXIS_STROKE} label={{ value: 'σ', angle: -90, position: 'insideLeft', fill: FAINT, fontSize: 10 }} />
           <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={{ color: INK, fontFamily: 'var(--font-plex-mono), monospace', fontSize: 11 }} />
           <ReferenceLine y={0} stroke="rgba(151, 174, 224, 0.30)" />

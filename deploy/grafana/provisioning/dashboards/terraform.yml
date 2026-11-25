@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: terrafield
+    folder: TerraField
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

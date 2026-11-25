@@ -1,5 +1,7 @@
 import { resilientFetch } from '@/lib/http';
-import { cacheGet, cacheGetStale, cacheSet } from '@/lib/cache';
+import { cacheGet, cacheGetStale, cacheSet, canonicalKey } from '@/lib/cache';
+import { redisRuntime } from '@/lib/redis';
+import { isPrivateProvider } from '@/lib/ingest/provider-context';
 
 /**
  * NASA EONET v3 wildfire-events adapter.
@@ -65,7 +67,8 @@ function extractLatestPoint(event: EonetApiEvent): { lon: number | null; lat: nu
     const g = event.geometry[i];
     if (g.type !== 'Point') continue;
     const c = g.coordinates;
-    if (Array.isArray(c) && c.length >= 2 && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1]))) {
+    if (Array.isArray(c) && c.length >= 2 && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1])) &&
+        Number(c[1]) >= -90 && Number(c[1]) <= 90 && Number(c[0]) >= -180 && Number(c[0]) <= 180) {
       return { lon: Number(c[0]), lat: Number(c[1]), date: g.date };
     }
   }
@@ -77,8 +80,13 @@ export async function fetchEonetWildfires(
 ): Promise<EonetResult> {
   const days = Math.min(Math.max(opts.days ?? 10, 1), 30);
   const limit = Math.min(Math.max(opts.limit ?? 120, 1), 300);
-  const cacheKey = `EONET:wildfires:${days}:${limit}`;
-  const cached = cacheGet<EonetResult>(cacheKey);
+  const cacheKey = `EONET:wildfires:v2:${canonicalKey({ days, limit })}`;
+  const refresh = () => refreshEonet(days, limit, cacheKey, opts.correlationId);
+  return isPrivateProvider() ? refresh() : redisRuntime().singleFlight(`refresh:${cacheKey}`, refresh, { ttlMs: 60_000, lockMs: 30_000 });
+}
+
+async function refreshEonet(days: number, limit: number, cacheKey: string, correlationId?: string): Promise<EonetResult> {
+  const cached = await cacheGet<EonetResult>(cacheKey);
   if (cached) return { ...cached, fresh: true, staleMs: 0 };
 
   const url = `https://eonet.gsfc.nasa.gov/api/v3/events?category=wildfires&status=open&days=${days}&limit=${limit}`;
@@ -89,7 +97,7 @@ export async function fetchEonetWildfires(
       operation: 'wildfire-events',
       maxAttempts: 2,
       timeoutMs: 12_000,
-      correlationId: opts.correlationId,
+      correlationId,
     });
     if (!outcome.ok) {
       return staleOrEmpty(cacheKey, `EONET responded with HTTP ${outcome.status}.`);
@@ -118,7 +126,7 @@ export async function fetchEonetWildfires(
       events,
       note: `NASA EONET v3: ${events.length} open wildfire event(s) in the last ${days} day(s), latest known positions. Event-level curation — not per-pixel detections.`,
     };
-    cacheSet(cacheKey, result, 15 * 60 * 1000);
+    await cacheSet(cacheKey, result, 15 * 60 * 1000);
     return result;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -127,8 +135,8 @@ export async function fetchEonetWildfires(
 }
 
 /** Serve the last good snapshot labeled stale; otherwise an honest empty result. */
-function staleOrEmpty(cacheKey: string, reason: string): EonetResult {
-  const stale = cacheGetStale<EonetResult>(cacheKey);
+async function staleOrEmpty(cacheKey: string, reason: string): Promise<EonetResult> {
+  const stale = await cacheGetStale<EonetResult>(cacheKey);
   if (stale) {
     return {
       ...stale.value,

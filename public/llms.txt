@@ -1,6 +1,6 @@
 # TerraField Atlas
 
-> Mission console for agricultural resilience and live fire intelligence, built on real NASA Earth observations (POWER, GIBS MODIS/VIIRS, SMAP, EONET, FIRMS) for the NASA Space Apps Challenge 2026 — Field Shift. Every number is traceable to its retrieval; missing data is reported as missing, never imputed; push-delivered digests exit the console over Server-Sent Events, a signed webhook (HMAC-SHA256, OWASP-aligned) and SMTP email.
+> Mission console for agricultural resilience and fire context using NASA POWER, GIBS, EONET and FIRMS. Missing observations remain missing. Globe stations/orbits are illustrative; reported events are polled, not instantaneous. Quantitative Earthdata science ingestion requires separate credentials.
 
 TerraField Atlas is a Next.js mission console that answers six operator questions — observed conditions, how they changed, whether the changes are statistically meaningful, which crop rotations fit the evidence, how alternatives compare, and what the limits are — plus a full fire-intelligence module: VIIRS 375 m thermal-anomaly detections, regional watchlists on real scheduler cadences, cadence-aware digests, and signed push delivery.
 
@@ -13,14 +13,24 @@ TerraField Atlas is a Next.js mission console that answers six operator question
 - [Curated demo regions](/api/v1/regions): 19 real agricultural regions with real coordinates (curated presets, not administrative boundaries).
 - [Experiments API](/api/v1/experiments): deterministic A/B assignment + outcome ledger (no PII).
 - [Sitemap](/sitemap.xml): crawlable URL list.
+- [Module reference](/about): ten server-rendered module guides, methodology and privacy.
+- [Recent FIRMS](/api/v1/fires/recent?lat=31&lon=-89): latest provider 24-hour product, separate from historical GIBS coverage.
+- [Accounts](/account): verified email/password accounts for private farm, manual soil, rotation and report records; public-demo callsigns are not authentication.
+
+## Deployment limits
+
+- Google sign-in remains disabled until its OAuth client authorizes the TerraField callback.
+- Private provider ingestion, analysis, scheduling and global digest exits are gated pending isolated storage and per-account destinations.
+- Resend delivery is verified to the reserved `delivered@resend.dev` test inbox only. The configured signed webhook persists an idempotent local receipt; no external forwarding destination is configured.
+- SoilGrids latency and satellite archive gaps remain upstream limitations. Shared request logs/job details are withheld from public responses for privacy; operational logging remains server-side.
 
 ## Principles
 
-1. Real data only: every displayed observation is a stored, source-attributed NASA record.
+1. Source attribution: stored historical records and recent provider snapshots are distinguished; illustrative globe elements are labeled.
 2. Honest gaps: archive gaps render as no-data with a stated reason — never zero-filled, never imputed.
 3. Statistical rigor: Seasonal Mann-Kendall + Theil-Sen with autocorrelation correction and FDR control; ≥8 full years before any significance claim.
-4. Provenance: every upstream request is logged (provider, URL, status, latency, correlation ID) and auditable.
-5. Push-delivered: scheduled evaluations publish to SSE, a signed webhook and email — each delivery audited.
+4. Provenance: retrieval attempts are logged server-side with credential redaction; unattributed diagnostics are not exposed across private accounts.
+5. Delivery: configured public-demo exits are audited; configuration is not proof of delivery to a real user inbox.
 
 ## Statistical methodology (summary)
 

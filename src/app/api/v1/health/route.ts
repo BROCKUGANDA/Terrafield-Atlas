@@ -1,15 +1,17 @@
+import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { ensureSeeded } from '@/lib/seeds';
 import { cacheStats } from '@/lib/cache';
 import { circuitStatus } from '@/lib/http';
 import { firmsConfigured } from '@/lib/adapters/firms';
+import { apiHandler } from '@/lib/api/helpers';
 
 /**
  * GET /api/v1/health
  * Service health: database, seeding, data-source status, circuit breakers,
  * cache metrics, environment flags. Never calls external providers (cheap).
  */
-export async function GET() {
+export const GET = apiHandler(async () => {
   const started = Date.now();
   let dbOk = false;
   let dbError: string | null = null;
@@ -27,18 +29,18 @@ export async function GET() {
         select: { datasetName: true, provider: true, status: true, authRequired: true },
       })
     : [];
-  return Response.json({
+  return NextResponse.json({
     status: dbOk ? 'ok' : 'degraded',
     service: 'terrafield-atlas',
     checkedAt: new Date().toISOString(),
     database: { ok: dbOk, seeded, error: dbError },
     dataSources: sources,
-    circuitBreakers: circuitStatus(),
-    cache: cacheStats(),
+    circuitBreakers: await circuitStatus(),
+    cache: await cacheStats(),
     environment: {
       firmsMapKeyConfigured: firmsConfigured(),
       earthdataCredentialsConfigured: false,
     },
     latencyMs: Date.now() - started,
   });
-}
+});

@@ -1,0 +1,17 @@
+.git
+.next
+node_modules
+.output.txt
+dev.log
+server.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+tests/*.db
+tool-results
+download
+.env
+.env.*
+!.env.example
+docs/release-validation-*.md

@@ -19,17 +19,17 @@
  *      2. FIRMS_STREAM   — the VIIRS 375 m detection stream FIRMS
  *                          distributes, read via NASA GIBS vector tiles
  *                          (the path fire features actually use). One real
- *                          MVT tile over the Congo basin is requested; ANY
- *                          HTTP answer (200 or 404 gap-day) proves the
- *                          stream is reachable. A 404 is a dated archive
- *                          gap, not a network failure.
+ *                          MVT tile over the Congo basin is requested.
+ *                          A sparse-tile HTTP 404 proves the host answered but
+ *                          does not prove data availability; other errors are
+ *                          degraded.
  *  - Every probe result is mirrored into the DataSource table (status:
  *    'live' | 'degraded' | 'unreachable') best-effort, so /api/v1/health and
  *    the provenance view agree with the live signs.
  */
 
 import { db } from '@/lib/db';
-import { cacheGet, cacheSet } from '@/lib/cache';
+import { redisRuntime } from '@/lib/redis';
 
 export type SourceLiveState = 'live' | 'degraded' | 'unreachable' | 'checking';
 
@@ -75,8 +75,9 @@ async function probe(url: string, init?: RequestInit): Promise<ProbeOutcome> {
       cache: 'no-store',
       headers: { accept: '*/*', ...(init?.headers ?? {}) },
     });
-    // Any well-formed HTTP answer proves reachability of the host+path.
-    return { state: 'live', latencyMs: Date.now() - started, detail: `HTTP ${res.status} in ${Date.now() - started} ms` };
+    const latencyMs = Date.now() - started;
+    await res.body?.cancel();
+    return { state: res.ok ? 'live' : 'degraded', latencyMs, detail: `HTTP ${res.status} in ${latencyMs} ms${res.ok ? '' : ' — endpoint did not return usable data; reachability alone is not operational health'}` };
   } catch (err) {
     const latencyMs = Date.now() - started;
     const detail =
@@ -104,24 +105,27 @@ async function probeFirmsApi(): Promise<ProbeOutcome> {
   // HEAD on the FIRMS host root — proves DNS+TCP+TLS+HTTP without pulling CSVs.
   const out = await probe('https://firms.modaps.eosdis.nasa.gov/', { method: 'HEAD' });
   if (out.state === 'live') return out;
-  const msg = process.env.FIRMS_MAP_KEY
-    ? `host unreachable from this network (${out.detail}); MAP_KEY is configured — the adapter chain falls back to the live GIBS detection stream`
-    : `host unreachable from this network (${out.detail}); no MAP_KEY configured — fire detections continue via the live GIBS detection stream`;
-  return { state: 'unreachable', latencyMs: out.latencyMs, detail: msg };
+  const msg = `FIRMS host check failed (${out.detail}); MAP_KEY ${process.env.FIRMS_MAP_KEY ? 'configured' : 'not configured'}. GIBS fallback availability is reported separately.`;
+  return { state: out.state, latencyMs: out.latencyMs, detail: msg };
 }
 
 async function probeFirmsStreamViaGibs(): Promise<ProbeOutcome> {
   const out = await probe(gibsFireTileUrl());
-  return out; // 200 or 404 both mean the stream host answered
+  if (out.state === 'degraded' && out.detail.startsWith('HTTP 404')) {
+    return {
+      state: 'live',
+      latencyMs: out.latencyMs,
+      detail: `HTTP 404 in ${out.latencyMs ?? 0} ms — GIBS host responded; no data established for this sampled tile/date (not evidence of an outage or zero detections)`,
+    };
+  }
+  return out;
 }
 
 async function probeGibs(): Promise<ProbeOutcome> {
-  // A small WMTS tile from the same service the console reads. Any HTTP
-  // answer (200, or 404/400 for an unavailable layer/date) proves the host
-  // and path are reachable — heavy capabilities docs are deliberately
-  // avoided (multi-second responses flapped the probe under load).
+  // Probe imagery independently of the sparse thermal-anomaly layer.
+  const date = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
   return probe(
-    'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_SNPP_Thermal_Anomalies_375m_All/default/2026-11-13/500m/7/41/81.mvt',
+    `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${date}/250m/0/0/0.jpg`,
   );
 }
 
@@ -130,7 +134,8 @@ async function probeEonet(): Promise<ProbeOutcome> {
 }
 
 async function probePower(): Promise<ProbeOutcome> {
-  return probe('https://power.larc.nasa.gov/api/system/manager/system/stop', { method: 'GET' });
+  const date = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10).replaceAll('-', '');
+  return probe(`https://power.larc.nasa.gov/api/temporal/daily/point?parameters=T2M&community=AG&longitude=36.07&latitude=-0.28&start=${date}&end=${date}&format=JSON`);
 }
 
 async function probeSoilGrids(): Promise<ProbeOutcome> {
@@ -154,14 +159,9 @@ const PROBES: ProbeDef[] = [
   { key: 'SOILGRIDS', label: 'ISRIC SoilGrids 2.0 · soil properties', run: probeSoilGrids },
 ];
 
-const runtimeHost = globalThis as unknown as {
-  __terraSourceSigns?: { at: number; report: SourceSignsReport };
-  __terraSourceProbeMem?: Map<string, { lastLiveAt: number; lastDetail: string }>;
-};
-
-function probeMemory(): Map<string, { lastLiveAt: number; lastDetail: string }> {
-  if (!runtimeHost.__terraSourceProbeMem) runtimeHost.__terraSourceProbeMem = new Map();
-  return runtimeHost.__terraSourceProbeMem;
+interface ProbeMemory {
+  lastLiveAt: number;
+  lastDetail: string;
 }
 
 /** A failure within 5 min of a success reads as DEGRADED, not UNREACHABLE —
@@ -169,12 +169,13 @@ function probeMemory(): Map<string, { lastLiveAt: number; lastDetail: string }> 
  *  the detail names the transient failure and the age of the last success. */
 const GRACE_MS = 5 * 60_000;
 
-function classify(key: string, out: ProbeOutcome): ProbeOutcome {
-  const mem = probeMemory();
-  const prev = mem.get(key);
+async function classify(key: string, out: ProbeOutcome): Promise<ProbeOutcome> {
+  const runtime = redisRuntime();
+  const stateKey = `source-probe:${key}`;
+  const prev = await runtime.getJson<ProbeMemory>(stateKey);
   const now = Date.now();
   if (out.state === 'live') {
-    mem.set(key, { lastLiveAt: now, lastDetail: out.detail });
+    await runtime.setJson(stateKey, { lastLiveAt: now, lastDetail: out.detail }, { ttlMs: GRACE_MS });
     return out;
   }
   if (prev && now - prev.lastLiveAt < GRACE_MS) {
@@ -207,15 +208,28 @@ async function syncDataSourceStatus(sign: SourceSign): Promise<void> {
  * source is that source's state; the registry itself always answers.
  */
 export async function sourceSigns(force = false): Promise<SourceSignsReport> {
-  const rt = runtimeHost.__terraSourceSigns;
-  if (!force && rt && Date.now() - rt.at < PROBE_TTL_MS) return rt.report;
+  const runtime = redisRuntime();
+  const cacheKey = 'source-signs:report';
+  if (!force) {
+    const cached = await runtime.getJson<SourceSignsReport>(cacheKey);
+    if (cached) return cached;
+  }
+  return runtime.singleFlight(`source-signs:refresh:${force ? 'force' : 'cached'}`, async () => {
+    if (!force) {
+      const cached = await runtime.getJson<SourceSignsReport>(cacheKey);
+      if (cached) return cached;
+    }
+    return collectSourceSigns(cacheKey);
+  }, { ttlMs: PROBE_TTL_MS, lockMs: 30_000 });
+}
 
+async function collectSourceSigns(cacheKey: string): Promise<SourceSignsReport> {
   const started = Date.now();
   const settled = await Promise.all(
     PROBES.map(async (p): Promise<SourceSign> => {
       try {
         const raw = await p.run();
-        const out = classify(p.key, raw);
+        const out = await classify(p.key, raw);
         const sign: SourceSign = {
           key: p.key,
           label: p.label,
@@ -251,8 +265,8 @@ export async function sourceSigns(force = false): Promise<SourceSignsReport> {
       unreachable: settled.filter((s) => s.state === 'unreachable').length,
     },
     note:
-      'Live reachability probes (single attempt, 5 s timeout each, 60 s cache; one transient failure within 5 min of a success reads as DEGRADED, not UNREACHABLE). FIRMS_API reflects this network\u2019s real egress: wherever it is blocked, the FIRMS detection stream keeps flowing through NASA GIBS — the same VIIRS 375 m detections FIRMS distributes — and EONET adds live wildfire-event context. A 404 from the fire-tile probe is a dated archive gap, still proof the stream host is answering.',
+      'Endpoint probes (single attempt, 8 s timeout, 60 s cache). Successful HTTP responses are LIVE; the sparse FIRMS tile probe also treats HTTP 404 as host reachability only and explicitly does not establish data availability. Other HTTP errors read as DEGRADED. Network failures read as UNREACHABLE, or DEGRADED within 5 minutes of a success. FIRMS_API tests host reachability only, not authenticated ingestion. Consult each retrieval’s provenance and no-data status for data completeness.',
   };
-  runtimeHost.__terraSourceSigns = { at: Date.now(), report };
+  await redisRuntime().setJson(cacheKey, report, { ttlMs: PROBE_TTL_MS, maxBytes: 64 * 1024 });
   return report;
 }

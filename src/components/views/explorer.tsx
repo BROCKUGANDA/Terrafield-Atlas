@@ -43,8 +43,7 @@ function Reveal({ i = 0, className, children }: { i?: number; className?: string
     <motion.div
       className={className}
       initial={{ opacity: 0, y: 12 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: '-24px' }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay: i * 0.06, ease: EASE }}
     >
       {children}
@@ -63,8 +62,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /** Geospatial Explorer: map + layers + date + fire overlay + boundary drawing. */
 export function ExplorerView() {
-  const { mapDate, setMapDate, location, setLocation } = useSession();
+  const { mapDate, setMapDate, location, setLocation, activeFarmId } = useSession();
   const sources = useQuery({ queryKey: ['sources'], queryFn: api.sources });
+  const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1, staleTime: 60_000 });
+  const [maxMapDate] = React.useState(() => new Date(Date.now() - 86_400_000).toISOString().slice(0, 10));
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5">
@@ -80,9 +81,9 @@ export function ExplorerView() {
                 <Input
                   type="date"
                   value={mapDate}
-                  max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}
+                  max={maxMapDate}
                   min="2000-03-01"
-                  onChange={(e) => setMapDate(e.target.value)}
+                  onChange={(e) => { if (e.target.value && e.target.validity.valid) setMapDate(e.target.value); }}
                   className="telemetry h-9 w-44 border-edge bg-panel text-xs text-dim"
                   aria-label="Observation date for GIBS layers"
                 />
@@ -90,11 +91,11 @@ export function ExplorerView() {
               <Field label="Latitude">
                 <Input
                   type="number"
-                  step="0.01"
+                  step="any"
                   min={-90}
                   max={90}
                   value={location.lat}
-                  onChange={(e) => setLocation({ ...location, lat: Number(e.target.value) })}
+                  onChange={(e) => { if (e.target.value && e.target.validity.valid) setLocation({ ...location, lat: Number(e.target.value), label: 'Custom coordinate', country: undefined, context: undefined }); }}
                   className="telemetry h-9 w-24 border-edge bg-panel text-xs text-dim"
                   aria-label="Latitude of the target coordinate"
                 />
@@ -102,11 +103,11 @@ export function ExplorerView() {
               <Field label="Longitude">
                 <Input
                   type="number"
-                  step="0.01"
+                  step="any"
                   min={-180}
                   max={180}
                   value={location.lon}
-                  onChange={(e) => setLocation({ ...location, lon: Number(e.target.value) })}
+                  onChange={(e) => { if (e.target.value && e.target.validity.valid) setLocation({ ...location, lon: Number(e.target.value), label: 'Custom coordinate', country: undefined, context: undefined }); }}
                   className="telemetry h-9 w-24 border-edge bg-panel text-xs text-dim"
                   aria-label="Longitude of the target coordinate"
                 />
@@ -166,7 +167,14 @@ export function ExplorerView() {
           }
         >
           <div data-tour="explorer-map">
-            {sources.data ? <GibsMap layers={sources.data.mapLayers} height="72vh" /> : null}
+            {sources.data ? (
+              <GibsMap
+                layers={sources.data.mapLayers}
+                farms={farms.data?.farms ?? []}
+                activeFarmId={activeFarmId}
+                height="72vh"
+              />
+            ) : null}
           </div>
         </QueryState>
       </Reveal>
@@ -179,8 +187,12 @@ export function ExplorerView() {
             <span className="font-mono text-[11px] text-faint">{location.label}</span>
           </div>
           <p className="max-w-md text-[11px] leading-relaxed text-faint">
-            Draw a boundary directly on the map, then save it in the Farm Workspace. Layer metadata and limitations
-            are attached to every product.
+            {farms.isLoading
+              ? 'Loading accessible farm pins… '
+              : farms.isError
+                ? 'Farm pins unavailable; the satellite map remains usable. '
+                : `${farms.data?.farms.length ?? 0} accessible farm pins are shown; the active farm is highlighted. `}
+            Draw a boundary directly on the map, then save it in the Farm Workspace. Layer metadata and limitations are attached to every product.
           </p>
         </HudPanel>
       </Reveal>

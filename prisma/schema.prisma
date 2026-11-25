@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -14,74 +14,100 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Farm {
-  id             String   @id @default(cuid())
-  name           String
-  country        String?
-  region         String?
-  centroidLat    Float
-  centroidLon    Float
+  id              String        @id @default(cuid())
+  ownerId         String?
+  owner           AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  workspaceId     String?
+  workspace       Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  name            String
+  country         String?
+  region          String?
+  centroidLat     Float
+  centroidLon     Float
   boundaryGeoJson String? // GeoJSON Polygon feature as JSON string (validated server-side)
-  areaHa         Float?
-  notes          String?
-  ownerLabel     String?
-  cropHistory    String? // JSON string: [{season, crop, family}] supplied by farmer
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  areaHa          Float?
+  notes           String?
+  ownerLabel      String?
+  cropHistory     String? // JSON string: [{season, crop, family}] supplied by farmer
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  soilTests      SoilTest[]
-  scenarios      RotationScenario[]
-  trendAnalyses  TrendAnalysis[]
-  observations   EnvironmentalObservation[]
-  preferences    FarmerPreferenceProfile[]
+  soilTests     SoilTest[]
+  scenarios     RotationScenario[]
+  trendAnalyses TrendAnalysis[]
+  observations  EnvironmentalObservation[]
+  preferences   FarmerPreferenceProfile[]
+  reports       ReportRecord[]
+
+  @@index([ownerId])
+  @@index([organizationId, createdAt])
+  @@index([workspaceId])
 }
 
 model SoilTest {
-  id                String   @id @default(cuid())
-  farmId            String
-  farm              Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  farmId           String
+  farm             Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
   measuredAt       DateTime
-  source            String // 'farmer' | 'laboratory' | 'soilgrids' (clearly distinguished)
-  sourceDetail      String? // lab name or SoilGrids retrieval info
-  depthCm           Float?
-  texture           String? // sand / loam / clay / silt labels from particle fractions
-  sandPct           Float?
-  siltPct           Float?
-  clayPct           Float?
-  ph                Float?
-  organicCarbonPct  Float?
-  nitrogenMgKg      Float? // measured total N (lab), distinct from SMAP/POWER wetness
-  phosphorusMgKg    Float?
-  potassiumCmolKg   Float?
-  notes             String?
-  createdAt         DateTime @default(now())
+  source           String // 'farmer' | 'laboratory' | 'soilgrids' (clearly distinguished)
+  sourceDetail     String? // lab name or SoilGrids retrieval info
+  depthCm          Float?
+  texture          String? // sand / loam / clay / silt labels from particle fractions
+  sandPct          Float?
+  siltPct          Float?
+  clayPct          Float?
+  ph               Float?
+  organicCarbonPct Float?
+  nitrogenMgKg     Float? // measured total N (lab), distinct from SMAP/POWER wetness
+  phosphorusMgKg   Float?
+  potassiumCmolKg  Float?
+  notes            String?
+  createdAt        DateTime @default(now())
 
   @@index([farmId])
 }
 
 // Registry of external data sources: provider, identifiers, coverage, license.
 model DataSource {
-  id                  String   @id @default(cuid())
-  provider            String // e.g. "NASA Langley Research Center (LaRC) POWER"
-  datasetName         String
+  id                 String    @id @default(cuid())
+  provider           String // e.g. "NASA Langley Research Center (LaRC) POWER"
+  datasetName        String
   productId          String? // e.g. "MOD13Q1 v6.1", "SPL4SMGP.007"
-  endpointTemplate    String
-  dataFormat          String // JSON | WMTS raster | MVT vector | CSV
-  temporalCoverage    String
-  spatialResolution   String
-  units               String?
-  authRequired        Boolean  @default(false)
-  rateLimit           String?
-  license             String
-  attribution         String
-  limitations         String
-  status              String // 'operational' | 'degraded' | 'unreachable' | 'credentials-not-configured'
-  lastCheckedAt       DateTime?
-  createdAt           DateTime @default(now())
+  endpointTemplate   String
+  dataFormat         String // JSON | WMTS raster | MVT vector | CSV
+  temporalCoverage   String
+  spatialResolution  String
+  units              String?
+  authRequired       Boolean   @default(false)
+  rateLimit          String?
+  license            String
+  attribution        String
+  limitations        String
+  status             String // 'operational' | 'degraded' | 'unreachable' | 'credentials-not-configured'
+  lastCheckedAt      DateTime?
+  productVersion     String?
+  spatialCoverage    String?
+  temporalStart      DateTime?
+  temporalEnd        DateTime?
+  nativeResolutionM  Float?
+  qualityMetadata    String? // JSON: QA flags, confidence classes, known gaps
+  processingHistory  String? // JSON: transformations and algorithm versions
+  accessConditions   String?
+  apiLimits          String?
+  knownLimitations   String?
+  stacCollectionId   String?
+  stacApiUrl         String?
+  retrievalTimestamp DateTime?
+  createdAt          DateTime  @default(now())
 }
 
 // One row per external HTTP request (the provenance ledger).
 model ApiRequestLog {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   provider       String // NASA_POWER | GIBS | SOILGRIDS | FIRMS
   datasetId      String?
   operation      String // daily-point | wmts-tile | mvt-tile | point-query | area-csv
@@ -93,16 +119,21 @@ model ApiRequestLog {
   ok             Boolean
   errorDetail    String?
   correlationId  String?
-  retrievedAt    DateTime @default(now())
+  retrievedAt    DateTime      @default(now())
 
   @@index([provider, retrievedAt])
+  @@index([organizationId, retrievedAt])
 }
 
 // Real observations only. No synthetic rows are ever written here.
 model EnvironmentalObservation {
-  id             String   @id @default(cuid())
-  farmId          String?
-  farm           Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  id             String        @id @default(cuid())
+  ownerId        String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  namespace      String        @default("public")
+  farmId         String?
+  farm           Farm?         @relation(fields: [farmId], references: [id], onDelete: SetNull)
   lat            Float
   lon            Float
   variable       String // PRECTOTCORR | T2M | T2M_MAX | T2M_MIN | ALLSKY_SFC_SW_DWN | RH2M | WS2M | GWETROOT | GWETTOP
@@ -111,54 +142,56 @@ model EnvironmentalObservation {
   unit           String
   sourceProvider String
   datasetVersion String
-  retrievedAt    DateTime @default(now())
+  retrievedAt    DateTime      @default(now())
 
-  @@unique([lat, lon, variable, obsDate])
+  @@unique([namespace, lat, lon, variable, obsDate])
+  @@index([ownerId, obsDate])
+  @@index([organizationId, variable, obsDate])
   @@index([farmId, variable, obsDate])
   @@index([variable, obsDate])
 }
 
 // Crop catalogue: versioned agronomic characteristics with source citations.
 model CropCharacteristic {
-  id               String   @id @default(cuid())
-  catalogueVersion String // e.g. "2026.11"
-  cropKey          String
-  name             String
-  scientificName   String
-  family           String // botanical family (rotation grouping)
-  familyGroup      String // cereal | legume | root | oilseed | vegetable | fiber
-  growthDaysMin    Int
-  growthDaysMax    Int
-  waterReqMmMin    Int // seasonal water requirement, FAO-cited range
-  waterReqMmMax    Int
-  waterUseClass    String // low | moderate | high
-  nFixation        Boolean // biological nitrogen fixation
-  nutrientDemand  String // low | moderate | high (NPK removal class)
-  thermalClass    String // tropical | temperate | wide
-  calorieStaple   Boolean  @default(false)
-  soilPhMin        Float
-  soilPhMax        Float
+  id                 String  @id @default(cuid())
+  catalogueVersion   String // e.g. "2026.11"
+  cropKey            String
+  name               String
+  scientificName     String
+  family             String // botanical family (rotation grouping)
+  familyGroup        String // cereal | legume | root | oilseed | vegetable | fiber
+  growthDaysMin      Int
+  growthDaysMax      Int
+  waterReqMmMin      Int // seasonal water requirement, FAO-cited range
+  waterReqMmMax      Int
+  waterUseClass      String // low | moderate | high
+  nFixation          Boolean // biological nitrogen fixation
+  nutrientDemand     String // low | moderate | high (NPK removal class)
+  thermalClass       String // tropical | temperate | wide
+  calorieStaple      Boolean @default(false)
+  soilPhMin          Float
+  soilPhMax          Float
   textureSuitability String // JSON: {best:[], acceptable:[]}
-  notes            String
-  sources          String // JSON array of citation strings
-  active           Boolean  @default(true)
+  notes              String
+  sources            String // JSON array of citation strings
+  active             Boolean @default(true)
 
   @@unique([catalogueVersion, cropKey])
 }
 
 model FarmerPreferenceProfile {
-  id           String   @id @default(cuid())
-  farmId       String
-  farm         Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
-  soilHealth   Float    @default(0.2) // priority weights, normalized server-side
-  waterEfficiency Float @default(0.2)
-  seasonalAdaptability Float @default(0.15)
-  nutrientManagement Float @default(0.15)
-  cropDiversity Float  @default(0.15)
-  economics    Float    @default(0.1)
-  foodSecurity Float   @default(0.1)
-  rainfedOnly  Boolean  @default(true)
-  updatedAt    DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  farmId               String
+  farm                 Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  soilHealth           Float    @default(0.2) // priority weights, normalized server-side
+  waterEfficiency      Float    @default(0.2)
+  seasonalAdaptability Float    @default(0.15)
+  nutrientManagement   Float    @default(0.15)
+  cropDiversity        Float    @default(0.15)
+  economics            Float    @default(0.1)
+  foodSecurity         Float    @default(0.1)
+  rainfedOnly          Boolean  @default(true)
+  updatedAt            DateTime @updatedAt
 
   @@index([farmId])
 }
@@ -166,26 +199,30 @@ model FarmerPreferenceProfile {
 // Kept via farm.cropHistory JSON for simplicity; rotation history is farmer-supplied.
 
 model RotationScenario {
-  id           String   @id @default(cuid())
-  farmId       String
-  farm         Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
-  name         String
-  cropKeys     String // JSON array
-  ruleVersion  String
-  weights      String // JSON of farmer priorities used
-  scoresJson   String // full factor-level scoring output
-  overallScore Float
-  confidence   Float // 0..1, reduced by missing data
+  id               String   @id @default(cuid())
+  farmId           String
+  farm             Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name             String
+  cropKeys         String // JSON array
+  ruleVersion      String
+  weights          String // JSON of farmer priorities used
+  scoresJson       String // full factor-level scoring output
+  overallScore     Float
+  confidence       Float // 0..1, reduced by missing data
   incompatibleJson String? // JSON array of hard incompatibilities
-  createdAt    DateTime @default(now())
+  createdAt        DateTime @default(now())
 
-  @@index([farmId])
+  @@unique([farmId, name])
+  @@index([farmId, createdAt])
 }
 
 model TrendAnalysis {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
+  ownerId        String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   farmId         String?
-  farm           Farm?    @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  farm           Farm?         @relation(fields: [farmId], references: [id], onDelete: SetNull)
   lat            Float
   lon            Float
   variable       String
@@ -202,45 +239,67 @@ model TrendAnalysis {
   ciUpper        Float?
   resultJson     String // full structured result incl. explanations and caveats
   ruleVersion    String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime      @default(now())
 
+  @@index([ownerId, createdAt])
+  @@index([organizationId, variable, createdAt])
   @@index([farmId, variable])
   @@index([variable, createdAt])
 }
 
+// Durable job ledger. One row per logical unit of expensive work; the queue
+// (Redis/BullMQ) only carries the pointer. `dedupeKey` is the tenant-scoped
+// natural key that makes a repeated enqueue resolve to the SAME row instead of
+// a second job. NULL means "no idempotency key" and never collides.
 model ProcessingJob {
-  id           String   @id @default(cuid())
-  type         String // power-ingest | trends | rotation | fires-ingest
-  status       String // queued | running | succeeded | failed
-  params       String // JSON
-  progressNote String?
-  resultRef    String?
-  error        String?
-  correlationId String?
-  startedAt    DateTime  @default(now())
-  finishedAt   DateTime?
+  id              String        @id @default(cuid())
+  ownerId         String?
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  type            String // power-ingest | trends | fires-ingest | private-fires-snapshot-v1 | fires-watch-eval
+  status          String // queued | running | succeeded | failed | cancelled | dead-lettered
+  params          String // JSON
+  progressNote    String?
+  resultRef       String?
+  error           String?
+  correlationId   String?
+  idempotencyKey  String?
+  dedupeKey       String?       @unique
+  attempts        Int           @default(0)
+  maxAttempts     Int           @default(5)
+  deadlineAt      DateTime?
+  leaseExpiresAt  DateTime?
+  leaseHolder     String?
+  cancelRequested Boolean       @default(false)
+  deadLettered    Boolean       @default(false)
+  startedAt       DateTime      @default(now())
+  finishedAt      DateTime?
+  enqueuedAt      DateTime?
 
+  @@index([ownerId, type, status, startedAt])
+  @@index([organizationId, type, status, startedAt])
   @@index([type, status])
+  @@index([status, leaseExpiresAt])
 }
 
 // Cached real fire detections decoded from GIBS VIIRS thermal-anomaly MVT.
 model FireObservation {
-  id          String   @id @default(cuid())
-  regionKey   String // grid key for provenance grouping
-  obsDate     DateTime
-  latitude    Float
-  longitude   Float
-  confidence  String // l | n | h (nominal/high/low mapping documented)
-  satellite   String
-  sensor      String // VIIRS_SNPP | VIIRS_NOAA20 ...
-  dayNight    String
-  acqTime     String
-  brightTi4   Float?
-  brightTi5   Float?
-  frp         Float?
-  uid         String?
+  id             String   @id @default(cuid())
+  regionKey      String // grid key for provenance grouping
+  obsDate        DateTime
+  latitude       Float
+  longitude      Float
+  confidence     String // l | n | h (nominal/high/low mapping documented)
+  satellite      String
+  sensor         String // VIIRS_SNPP | VIIRS_NOAA20 ...
+  dayNight       String
+  acqTime        String
+  brightTi4      Float?
+  brightTi5      Float?
+  frp            Float?
+  uid            String?
   sourceProvider String
-  retrievedAt DateTime @default(now())
+  retrievedAt    DateTime @default(now())
 
   @@unique([latitude, longitude, obsDate, acqTime, uid])
   @@index([regionKey, obsDate])
@@ -254,7 +313,7 @@ model FireCoverageDay {
   regionKey      String
   obsDate        DateTime
   dataAvailable  Boolean
-  detectionCount Int      // detections decoded for this date over the recorded bbox
+  detectionCount Int // detections decoded for this date over the recorded bbox
   bboxWest       Float
   bboxSouth      Float
   bboxEast       Float
@@ -269,65 +328,522 @@ model FireCoverageDay {
 // Operator-defined regional fire watchlist: threshold rule evaluated against
 // stored REAL detections only. Status is never fabricated — see FireWatchEvent.
 model FireWatchlist {
-  id                 String    @id @default(cuid())
-  name               String
-  label              String?   // geography display label (e.g. region preset name)
-  lat                Float
-  lon                Float
-  radiusKm           Float     @default(15)
-  minConfidence      String    @default("nominal") // low | nominal | high — alert counts detections at/above this class
-  lookbackDays       Int       @default(7)   // evaluation window (3–30 days)
-  detectionThreshold Int       @default(5)   // alert when qualifying count >= threshold
-  notes              String?
-  lastStatus         String    @default("unverified") // unverified | clear | watch | alert
-  lastDetectionCount Int?
-  lastEvaluatedAt    DateTime?
-  // Scheduled re-evaluation (in-process scheduler — see lib/scheduler.ts).
+  id                    String        @id @default(cuid())
+  ownerId               String?
+  owner                 AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  organizationId        String?
+  organization          Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  name                  String
+  label                 String? // geography display label (e.g. region preset name)
+  lat                   Float
+  lon                   Float
+  radiusKm              Float         @default(15)
+  minConfidence         String        @default("nominal") // low | nominal | high — alert counts detections at/above this class
+  lookbackDays          Int           @default(7) // evaluation window (3–30 days)
+  detectionThreshold    Int           @default(5) // alert when qualifying count >= threshold
+  notes                 String?
+  lastStatus            String        @default("unverified") // unverified | clear | watch | alert
+  lastDetectionCount    Int?
+  lastEvaluatedAt       DateTime?
+  // Monotonic completion version. Evaluations compare-and-swap this value so
+  // an older provider response can never overwrite a newer committed status.
+  evaluationVersion     Int           @default(0)
+  // Scheduled re-evaluation (database-leased scheduler — see lib/scheduler.ts).
   // reevaluateIntervalMin = null → manual evaluation only. Allowed cadences:
   // 360 (6 h) | 720 (12 h) | 1440 (24 h); nextReevaluateAt is claimed ahead of
   // each run so a crash never hot-loops.
   reevaluateIntervalMin Int?
   nextReevaluateAt      DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   events FireWatchEvent[]
 
+  @@index([ownerId, createdAt])
+  @@index([organizationId, createdAt])
   @@index([lastStatus])
   @@index([nextReevaluateAt])
 }
 
 // One row per watchlist evaluation — the alert history ledger.
 model FireWatchEvent {
-  id                  String   @id @default(cuid())
+  id                  String        @id @default(cuid())
   watchlistId         String
   watchlist           FireWatchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
-  evaluatedAt         DateTime @default(now())
+  evaluatedAt         DateTime      @default(now())
   windowStart         DateTime
   windowEnd           DateTime
   status              String // unverified | clear | watch | alert
-  detectionCount      Int     // qualifying detections (confidence >= minConfidence)
+  detectionCount      Int // qualifying detections (confidence >= minConfidence)
   highConfidenceCount Int
   nominalCount        Int
   lowCount            Int
   maxFrpMW            Float?
-  daysWithDetections  Int     // days in window with >= 1 stored detection
-  daysChecked         Int     // days whose archive coverage was verified
-  daysNoData          Int     // provider archive-gap days (reported, not zero-filled)
+  daysWithDetections  Int // days in window with >= 1 stored detection
+  daysChecked         Int // days whose archive coverage was verified
+  daysNoData          Int // provider archive-gap days (reported, not zero-filled)
   triggeredAlert      Boolean
-  detailJson          String   // per-day counts, unchecked/no-data day lists, rationale
+  detailJson          String // per-day counts, unchecked/no-data day lists, rationale
   correlationId       String?
 
   @@index([watchlistId, evaluatedAt])
 }
 
 model AuditEvent {
-  id        String   @id @default(cuid())
-  actor     String // 'system' | 'demo-user'
-  action    String // farm.create, soil-test.create, scenario.create ...
-  targetId  String?
-  detail    String?
-  createdAt DateTime @default(now())
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actor          String // 'system' | 'demo-user'
+  action         String // farm.create, soil-test.create, scenario.create ...
+  targetId       String?
+  detail         String?
+  createdAt      DateTime      @default(now())
 
   @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([action, targetId, createdAt])
+}
+
+model AccountUser {
+  id                 String                   @id @default(cuid())
+  email              String                   @unique
+  name               String?
+  passwordHash       String?
+  emailVerified      DateTime?
+  isAdmin            Boolean                  @default(false)
+  createdAt          DateTime                 @default(now())
+  identities         AccountIdentity[]
+  verifications      AccountVerification[]
+  farms              Farm[]
+  watchlists         FireWatchlist[]
+  idempotencyRecords IdempotencyRecord[]
+  memberships        Membership[]
+  invitations        OrganizationInvitation[]
+  subscriptions      Subscription[]
+  apiKeys            ApiKey[]                 @relation("ApiKeyOwner")
+  createdApiKeys     ApiKey[]                 @relation("ApiKeyCreator")
+  usageEvents        UsageEvent[]
+  agentRuns          AgentRun[]
+  savedMapViews      SavedMapView[]
+  reportRecords      ReportRecord[]
+}
+
+model AccountIdentity {
+  id                String      @id @default(cuid())
+  provider          String
+  providerAccountId String
+  userId            String
+  user              AccountUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model AccountVerification {
+  tokenHash String      @id
+  userId    String
+  user      AccountUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+
+model AccountRateLimit {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime
+}
+
+// Durable request replay boundary. The owner is part of the natural key so
+// identical client keys from different tenants cannot collide.
+model IdempotencyRecord {
+  id          String      @id @default(cuid())
+  ownerId     String
+  owner       AccountUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  route       String
+  key         String
+  requestHash String
+  responseRef String
+  createdAt   DateTime    @default(now())
+
+  @@unique([ownerId, route, key])
+  @@index([ownerId, createdAt])
+}
+
+// Database-backed heartbeat lease for scheduler/worker leadership. Expired
+// rows remain durable evidence and can be reclaimed by their key.
+model JobLease {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  holder      String
+  expiresAt   DateTime
+  heartbeatAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+// Transactional notification work. Delivery state is separate from the domain
+// mutation so committed changes cannot lose their follow-up work.
+model OutboxEvent {
+  id            String    @id @default(cuid())
+  aggregateType String
+  aggregateId   String
+  eventType     String
+  payload       String
+  availableAt   DateTime  @default(now())
+  publishedAt   DateTime?
+  attempts      Int       @default(0)
+  lastError     String?
+  createdAt     DateTime  @default(now())
+
+  @@index([availableAt, publishedAt])
+  @@index([aggregateType, aggregateId, createdAt])
+  @@index([eventType, publishedAt, availableAt])
+}
+
+// Durable receiver-side deduplication for webhook/email exits. The stable
+// outbox event id is also sent to receivers as their idempotency key.
+model DeliveryReceipt {
+  id             String   @id @default(cuid())
+  channel        String
+  destinationKey String
+  eventId        String
+  deliveredAt    DateTime @default(now())
+
+  @@unique([channel, destinationKey, eventId])
+  @@index([eventId])
+}
+
+// ---------------------------------------------------------------------------
+// Enterprise tenancy, commercial operations, developer platform, and AI governance
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  country   String?
+  timezone  String   @default("Africa/Kampala")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships    Membership[]
+  invitations    OrganizationInvitation[]
+  workspaces     Workspace[]
+  farms          Farm[]
+  watchlists     FireWatchlist[]
+  observations   EnvironmentalObservation[]
+  trendAnalyses  TrendAnalysis[]
+  processingJobs ProcessingJob[]
+  auditEvents    AuditEvent[]
+  apiRequestLogs ApiRequestLog[]
+  subscriptions  Subscription[]
+  usageEvents    UsageEvent[]
+  apiKeys        ApiKey[]
+  webhooks       WebhookEndpoint[]
+  reports        ReportRecord[]
+  agentRuns      AgentRun[]
+  savedMapViews  SavedMapView[]
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           AccountUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String // owner | admin | analyst | agronomist | researcher | field_officer | viewer | api_service
+  status         String       @default("active") // active | suspended
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+  @@index([organizationId, role])
+}
+
+model OrganizationInvitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           String
+  tokenHash      String       @unique
+  invitedById    String
+  invitedBy      AccountUser  @relation(fields: [invitedById], references: [id], onDelete: Restrict)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, email])
+  @@index([email, expiresAt])
+}
+
+model Workspace {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  farms Farm[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, createdAt])
+}
+
+model Plan {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  description       String
+  monthlyPriceMinor Int
+  currency          String   @default("USD")
+  entitlementsJson  String // validated JSON limits/capabilities
+  active            Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                 String        @id @default(cuid())
+  organizationId     String?
+  organization       Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId            String?
+  owner              AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  planId             String
+  plan               Plan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  status             String        @default("trialing") // trialing | active | past_due | canceled | paused
+  paymentProvider    String?
+  providerReference  String?
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAt           DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([organizationId, status])
+  @@index([ownerId, status])
+}
+
+model UsageEvent {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  ownerId        String?
+  owner          AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  metric         String
+  quantity       Int
+  operationId    String        @unique
+  jobId          String?
+  billed         Boolean       @default(false)
+  occurredAt     DateTime      @default(now())
+
+  @@index([organizationId, metric, occurredAt])
+  @@index([ownerId, metric, occurredAt])
+  @@index([jobId])
+}
+
+model ApiKey {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String
+  owner          AccountUser   @relation("ApiKeyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      AccountUser   @relation("ApiKeyCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  name           String
+  prefix         String
+  keyHash        String        @unique
+  scopesJson     String
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, revokedAt])
+  @@index([ownerId, revokedAt])
+}
+
+model WebhookEndpoint {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  url              String
+  eventsJson       String
+  secretCiphertext String
+  secretIv         String
+  secretTag        String
+  status           String       @default("active") // active | disabled
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([organizationId, status])
+}
+
+model WebhookDelivery {
+  id            String          @id @default(cuid())
+  endpointId    String
+  endpoint      WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  eventId       String          @unique
+  eventType     String
+  payloadJson   String
+  status        String          @default("pending") // pending | delivered | failed
+  attempts      Int             @default(0)
+  lastError     String?
+  nextAttemptAt DateTime?
+  deliveredAt   DateTime?
+  createdAt     DateTime        @default(now())
+
+  @@index([endpointId, status, createdAt])
+  @@index([status, nextAttemptAt])
+}
+
+model ReportRecord {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  ownerId        String?
+  owner          AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  farmId         String?
+  farm           Farm?         @relation(fields: [farmId], references: [id], onDelete: SetNull)
+  title          String
+  format         String // pdf | csv | json
+  contentJson    String
+  provenanceJson String
+  artifactRef    String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([ownerId, createdAt])
+  @@index([farmId, createdAt])
+}
+
+model SavedMapView {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String?
+  owner          AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name           String
+  centerLat      Float
+  centerLon      Float
+  zoom           Float
+  layersJson     String
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([ownerId, createdAt])
+}
+
+model AgentRun {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  ownerId         String
+  owner           AccountUser   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  query           String
+  planJson        String
+  status          String        @default("planned") // planned | awaiting_approval | running | succeeded | failed | rejected
+  approvedAt      DateTime?
+  resultJson      String?
+  limitationsJson String?
+  createdAt       DateTime      @default(now())
+  finishedAt      DateTime?
+
+  toolExecutions ToolExecution[]
+  evidence       EvidenceReference[]
+
+  @@index([organizationId, createdAt])
+  @@index([ownerId, createdAt])
+}
+
+model ToolExecution {
+  id         String    @id @default(cuid())
+  agentRunId String
+  agentRun   AgentRun  @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  toolName   String
+  inputJson  String
+  permission String
+  status     String // allowed | denied | succeeded | failed
+  outputRef  String?
+  error      String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([agentRunId, startedAt])
+}
+
+model EvidenceReference {
+  id          String    @id @default(cuid())
+  agentRunId  String?
+  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  sourceType  String
+  sourceId    String
+  uri         String?
+  contentHash String?
+  retrievedAt DateTime  @default(now())
+
+  @@index([agentRunId])
+  @@index([sourceType, sourceId])
+}
+
+model AnalysisMethod {
+  id                String    @id @default(cuid())
+  key               String    @unique
+  version           String
+  specificationJson String
+  validatedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  validationResults ValidationResult[]
+
+  @@unique([key, version])
+}
+
+model ValidationResult {
+  id            String         @id @default(cuid())
+  methodId      String
+  method        AnalysisMethod @relation(fields: [methodId], references: [id], onDelete: Cascade)
+  dataset       String
+  splitStrategy String
+  metricsJson   String
+  createdAt     DateTime       @default(now())
+
+  @@index([methodId, createdAt])
+}
+
+model FeatureFlag {
+  key         String   @id
+  description String
+  enabled     Boolean  @default(false)
+  rolloutJson String?
+  updatedAt   DateTime @updatedAt
+}
+
+model RasterAsset {
+  id            String   @id @default(cuid())
+  ownerId       String?
+  organizationId String?
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  filename      String
+  format        String
+  sourceHash    String
+  artifactRef   String   @unique
+  artifactBytes Int
+  statsJson     String
+  lineageJson   String
+  createdAt     DateTime @default(now())
+
+  @@index([ownerId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([sourceHash])
 }

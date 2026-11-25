@@ -1,11 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
-import { api, ApiRequestError, type ObservationsResponse } from '@/lib/api-client';
+import { api, ApiRequestError, type ObservationsResponse, type TrendAnalysisResponse } from '@/lib/api-client';
+import { waitForJob } from '@/lib/jobs/client';
+import { isRequestContextCurrent, requestContextKey, type RequestContext } from '@/lib/request-context';
 import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, timestampSlug } from '@/lib/export';
 import type { ObservationPoint, TrendResult } from '@/lib/types';
@@ -58,9 +60,31 @@ export function AnalysisView() {
   const { activeFarmId, location, setView } = useSession();
   const { toast } = useToast();
 
+  const [analysisProgress, setAnalysisProgress] = useState<string | null>(null);
+  const requestContext: RequestContext = activeFarmId
+    ? { farmId: activeFarmId }
+    : { farmId: null, lat: location.lat, lon: location.lon };
+  const scope = requestContextKey(requestContext);
+  const contextRef = useRef(requestContext);
+  useEffect(() => {
+    contextRef.current = activeFarmId
+      ? { farmId: activeFarmId }
+      : { farmId: null, lat: location.lat, lon: location.lon };
+  }, [activeFarmId, location.lat, location.lon]);
+
   const trends = useMutation({
-    mutationFn: () => api.trends(activeFarmId ? { farmId: activeFarmId } : { lat: location.lat, lon: location.lon }),
-    onSuccess: (res) => {
+    mutationFn: async () => {
+      const submittedContext = contextRef.current;
+      const accepted = await api.trends(activeFarmId ? { farmId: activeFarmId } : { lat: location.lat, lon: location.lon });
+      const result = await waitForJob<TrendAnalysisResponse>(accepted, {
+        timeoutMs: 15 * 60_000,
+        onProgress: ({ progressNote }) => setAnalysisProgress(progressNote),
+      });
+      return { submittedContext, result };
+    },
+    onSuccess: ({ submittedContext, result: res }) => {
+      if (!isRequestContextCurrent(submittedContext, contextRef.current)) return;
+      setAnalysisProgress(null);
       const significant = res.results.filter((r) => r.significant);
       logEvent({
         severity: 'success',
@@ -71,6 +95,7 @@ export function AnalysisView() {
       });
     },
     onError: (err) => {
+      setAnalysisProgress(null);
       toast({
         title: 'Cannot analyse yet',
         description:
@@ -96,7 +121,7 @@ export function AnalysisView() {
   });
 
   const exportTrendStats = () => {
-    const d = trends.data;
+    const d = trends.data?.result;
     if (!d) return;
     const rows = d.results.map((r) => [
       r.variable,
@@ -129,13 +154,18 @@ export function AnalysisView() {
     toast({ title: 'Statistics exported', description: `${rows.length} variable rows written to CSV.` });
   };
 
+  const resetTrends = trends.reset;
+  useEffect(() => {
+    resetTrends();
+  }, [scope, resetTrends]);
+
   const observations = useQuery({
     queryKey: ['obs-all', activeFarmId, location.lat, location.lon, trends.isSuccess],
-    queryFn: () => api.observations(activeFarmId ? { farmId: activeFarmId } : {}),
+    queryFn: ({ signal }) => api.observations(activeFarmId ? { farmId: activeFarmId, signal } : { lat: location.lat, lon: location.lon, signal }),
     enabled: trends.isSuccess,
   });
 
-  const results = trends.data?.results ?? [];
+  const results = trends.data?.result.results ?? [];
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -166,13 +196,13 @@ export function AnalysisView() {
       </Reveal>
 
       {/* Run provenance strip + statistics export */}
-      {trends.data && (
+      {trends.data?.result && (
         <Reveal i={1}>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1">
             <p className="telemetry text-[11px] text-faint">
-              {trends.data.observationCount.toLocaleString()} observations · {trends.data.period.start} → {trends.data.period.end} ·{' '}
-              {trends.data.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
-              {trends.data.datasetVersions[0]}
+              {trends.data.result.observationCount.toLocaleString()} observations · {trends.data.result.period.start} → {trends.data.result.period.end} ·{' '}
+              {trends.data.result.multipleTesting.testedHypotheses} hypotheses tested (FDR-controlled) ·{' '}
+              {trends.data.result.datasetVersions[0]}
             </p>
             <Button
               variant="outline"
@@ -192,9 +222,9 @@ export function AnalysisView() {
       {trends.isPending && (
         <Reveal i={2}>
           <div role="status" aria-live="polite" className="flex flex-col gap-2">
-            <SweepLoader label="Computing trends" />
+            <SweepLoader label="Processing durable trend analysis" />
             <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-              seasonal Mann-Kendall · Theil-Sen · Hamed-Rao · Benjamini-Hochberg FDR
+              {analysisProgress ?? 'queued · seasonal Mann-Kendall · Theil-Sen · Hamed-Rao · Benjamini-Hochberg FDR'}
             </p>
           </div>
         </Reveal>

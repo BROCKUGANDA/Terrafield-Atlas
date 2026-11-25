@@ -79,7 +79,7 @@
   /* Typography colors */
   --ink: #eaf0fb;
   --dim: #9aaacd;
-  --faint: #627392;
+  --faint: #8294b5;
 
   /* Command accents */
   --nasa: #fc3d21;
@@ -409,10 +409,88 @@
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      animation-delay: 0ms !important;
       transition-duration: 0.01ms !important;
+      transition-delay: 0ms !important;
+      scroll-behavior: auto !important;
     }
   }
 }
+
+/* Shell chrome stays usable on narrow screens and notched devices. */
+.console-shell { --console-gutter: 1rem; min-height: 100svh; }
+@media (min-width: 640px) {
+  .console-shell { --console-gutter: 1.5rem; }
+}
+@media (min-width: 1024px) {
+  .console-shell { --console-gutter: 2rem; }
+}
+.console-rail {
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+.console-header {
+  padding-top: env(safe-area-inset-top, 0px);
+  background-color: var(--void);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .console-header {
+    background-color: rgba(5, 9, 20, 0.92);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+}
+.console-command-bar {
+  padding-left: max(var(--console-gutter), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--console-gutter), env(safe-area-inset-right, 0px));
+}
+.console-command-actions > * { max-width: 100%; }
+.console-shell main,
+.console-shell footer > div {
+  padding-left: max(var(--console-gutter), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--console-gutter), env(safe-area-inset-right, 0px));
+}
+.console-shell footer { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.console-mobile-nav {
+  max-width: 100vw;
+  height: 100%;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+.console-mobile-nav nav { height: auto; min-height: 100%; }
+.console-mobile-nav nav > div:first-child { padding-right: 2rem; }
+.console-mobile-nav > button {
+  top: max(0.5rem, env(safe-area-inset-top, 0px));
+  right: 0.5rem;
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+@media (max-width: 1279px) {
+  .console-command-actions { flex-basis: 100%; margin-left: 0; }
+}
+@media (pointer: coarse), (max-width: 1023px) {
+  .console-header button,
+  .console-shell nav button,
+  .console-shell main button,
+  .console-mobile-nav nav button {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+  }
+  body { background-attachment: scroll; }
+}
+
+/* The console shell owns its mission footer; hide the marketing footer there. */
+body:has(.console-shell) .marketing-footer { display: none; }
 
 /* ------------------------------------------------------------------ */
 /* Component-level refinements on top of shadcn primitives             */

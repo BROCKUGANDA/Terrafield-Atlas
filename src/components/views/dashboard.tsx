@@ -1,10 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ApiRequestError } from '@/lib/api-client';
+import { api, ApiRequestError, type IngestOutcome } from '@/lib/api-client';
+import { waitForJob } from '@/lib/jobs/client';
+import { isRequestContextCurrent, requestContextKey, type RequestContext } from '@/lib/request-context';
 import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
@@ -41,29 +43,52 @@ export function DashboardView() {
   const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions });
   const status = useQuery({ queryKey: ['system-status'], queryFn: api.systemStatus, refetchInterval: 60_000 });
 
+  const [ingestProgress, setIngestProgress] = useState<string | null>(null);
+  const requestContext: RequestContext = activeFarmId
+    ? { farmId: activeFarmId }
+    : { farmId: null, lat: location.lat, lon: location.lon };
+  const scope = requestContextKey(requestContext);
+  const contextRef = useRef(requestContext);
+  useEffect(() => {
+    contextRef.current = activeFarmId
+      ? { farmId: activeFarmId }
+      : { farmId: null, lat: location.lat, lon: location.lon };
+  }, [activeFarmId, location.lat, location.lon]);
+
   const ingest = useMutation({
-    mutationFn: () => api.ingest(activeFarmId ? { farmId: activeFarmId, years: 12 } : { lat: location.lat, lon: location.lon, years: 12 }),
-    onSuccess: (res) => {
-      const idempotent = res.outcome.rowsWritten === 0 && res.outcome.validPoints > 0;
+    mutationFn: async () => {
+      const submittedContext = contextRef.current;
+      const accepted = await api.ingest(activeFarmId ? { farmId: activeFarmId, years: 12 } : { lat: location.lat, lon: location.lon, years: 12 });
+      const result = await waitForJob<IngestOutcome>(accepted, {
+        timeoutMs: 20 * 60_000,
+        onProgress: ({ progressNote }) => setIngestProgress(progressNote),
+      });
+      return { submittedContext, result };
+    },
+    onSuccess: ({ submittedContext, result: res }) => {
+      if (!isRequestContextCurrent(submittedContext, contextRef.current)) return;
+      setIngestProgress(null);
+      const idempotent = res.rowsWritten === 0 && res.validPoints > 0;
       toast({
         title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
         description: idempotent
-          ? `0 new rows — all ${res.outcome.validPoints.toLocaleString()} real points for this window are already stored (idempotent upsert on variable+date). Re-verified against POWER ${res.outcome.start} → ${res.outcome.end}.`
-          : `${res.outcome.rowsWritten.toLocaleString()} real observations stored (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported.`,
+          ? `0 new rows — all ${res.validPoints.toLocaleString()} real points for this window are already stored (idempotent upsert on variable+date). Re-verified against POWER ${res.start} → ${res.end}.`
+          : `${res.rowsWritten.toLocaleString()} real observations stored (${res.start} → ${res.end}); ${res.missingPoints} missing days reported.`,
       });
       logEvent({
         severity: 'success',
         category: 'INGEST',
         title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
         detail: idempotent
-          ? `Idempotent re-ingest for ${location.label}: ${res.outcome.validPoints.toLocaleString()} real points re-verified from POWER (${res.outcome.start} → ${res.outcome.end}); 0 new rows because every variable+date is already stored. Nothing duplicated, nothing fabricated.`
-          : `${res.outcome.rowsWritten.toLocaleString()} real observations for ${location.label} (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported as missing.`,
+          ? `Idempotent re-ingest for ${location.label}: ${res.validPoints.toLocaleString()} real points re-verified from POWER (${res.start} → ${res.end}); 0 new rows because every variable+date is already stored. Nothing duplicated, nothing fabricated.`
+          : `${res.rowsWritten.toLocaleString()} real observations for ${location.label} (${res.start} → ${res.end}); ${res.missingPoints} missing days reported as missing.`,
         view: 'dashboard',
       });
       queryClient.invalidateQueries({ queryKey: ['system-status'] });
       queryClient.invalidateQueries({ queryKey: ['observations'] });
     },
     onError: (err) => {
+      setIngestProgress(null);
       toast({
         title: 'POWER ingestion failed',
         description: err instanceof ApiRequestError ? err.message : 'Unexpected error. No data fabricated.',
@@ -80,9 +105,14 @@ export function DashboardView() {
     },
   });
 
+  const resetIngest = ingest.reset;
+  useEffect(() => {
+    resetIngest();
+  }, [scope, resetIngest]);
+
   const obs = useQuery({
     queryKey: ['observations', activeFarmId, location.lat, location.lon],
-    queryFn: () => api.observations(activeFarmId ? { farmId: activeFarmId } : {}),
+    queryFn: ({ signal }) => api.observations(activeFarmId ? { farmId: activeFarmId, signal } : { lat: location.lat, lon: location.lon, signal }),
     enabled: !ingest.isPending,
   });
 
@@ -198,7 +228,7 @@ export function DashboardView() {
               {ingest.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
-                  Requesting POWER…
+                  Processing POWER…
                 </>
               ) : (
                 'Ingest 12-year record'
@@ -212,9 +242,9 @@ export function DashboardView() {
           </div>
           {ingest.isPending && (
             <div className="flex flex-col gap-2" role="status" aria-live="polite">
-              <SweepLoader label="Requesting NASA POWER" />
+              <SweepLoader label="Processing durable POWER ingestion" />
               <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-                5-year chunks in flight · 10–30 s · nothing is written until the real record returns
+                {ingestProgress ?? 'queued · 5-year chunks · progress is read from the durable job ledger'}
               </p>
             </div>
           )}
@@ -334,7 +364,7 @@ export function DashboardView() {
                       {ingest.isPending ? (
                         <>
                           <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
-                          Requesting POWER…
+                          Processing POWER…
                         </>
                       ) : (
                         'Ingest POWER record'

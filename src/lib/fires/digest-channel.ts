@@ -1,7 +1,9 @@
-import { createDigestHub, MAX_STREAM_CLIENTS, buildDigestPushPayload, type DigestHub, type DigestHubStatus, type DigestPushReason } from '@/lib/fires/digest-push';
+import { MAX_STREAM_CLIENTS, buildDigestPushPayload, type DigestHub, type DigestHubStatus, type DigestPushReason } from '@/lib/fires/digest-push';
+import { createRedisDigestHub } from '@/lib/fires/redis-digest-hub';
 import { computeWatchlistDigest } from '@/lib/fires/watchlist-digest-service';
 import { parseWebhookConfig, webhookExitStatus, deliverDigestWebhook, type WebhookExitStatus } from '@/lib/fires/digest-exit-webhook';
 import { parseEmailConfig, emailExitStatus, deliverDigestEmail, shouldEmailDigest, type EmailExitStatus } from '@/lib/fires/digest-exit-email';
+import { db } from '@/lib/db';
 
 /**
  * Digest push channel — the RUNTIME half (process-wide singleton + publish
@@ -27,7 +29,7 @@ const runtimeHost = globalThis as unknown as { __terraDigestChannel?: DigestChan
 function runtime(): DigestChannelRuntime {
   if (!runtimeHost.__terraDigestChannel) {
     runtimeHost.__terraDigestChannel = {
-      hub: createDigestHub(),
+      hub: createRedisDigestHub(),
       disabledByEnv: process.env.DIGEST_PUSH_OFF === '1',
     };
   }
@@ -56,14 +58,22 @@ export function digestChannelStatus(): DigestHubStatus & {
     maxClients: MAX_STREAM_CLIENTS,
     ...rt.hub.status(),
     exits: { webhook: webhookExitStatus(), email: emailExitStatus() },
-    note: 'Push-style digest delivery over Server-Sent Events (GET /api/v1/fires/watchlists/digest-stream) — one channel on the single exposed HTTP port, no broker or extra port. A cadence-aware digest is recomputed and pushed to every open console the moment an evaluation event lands or a scheduled run fails; with zero subscribers and no armed exits the channel does no database work. Missed events remain available from the per-watchlist digest endpoint. Additional delivery exits (env-gated): a webhook POST (DIGEST_WEBHOOK_URL) and SMTP email for scheduler facts (DIGEST_SMTP_*).',
+    note: 'Push-style digest delivery over Server-Sent Events (GET /api/v1/fires/watchlists/digest-stream) — one channel on the single exposed HTTP port, no broker or extra port. Public digests reach every open console; private digests reach only revalidated owner sessions. With zero subscribers and no armed exits the channel does no database work. Missed events remain available from the per-watchlist digest endpoint. Public-demo-only delivery exits (env-gated): a webhook POST (DIGEST_WEBHOOK_URL) and SMTP email for scheduler facts (DIGEST_SMTP_*).',
   };
+}
+
+export async function publishDigestToSse(payload: import('@/lib/fires/digest-push').DigestPushPayload, ownerId: string | null): Promise<number> {
+  const rt = runtime();
+  if (rt.disabledByEnv) return 0;
+  const hub = rt.hub;
+  if (ownerId) return (await hub.publishPrivate('watchlist.digest', payload, ownerId)).delivered;
+  return hub.publish('watchlist.digest', payload).delivered;
 }
 
 export type DigestPublishOutcome = {
   published: number; // connections the digest was written to
   skipped: boolean;
-  skipReason?: 'disabled' | 'no-subscribers' | 'watchlist-gone' | 'no-exits';
+  skipReason?: 'disabled' | 'no-subscribers' | 'watchlist-gone' | 'no-exits' | 'private-watchlist';
   /** Webhook exit result — null when the exit was not armed. */
   webhook: { delivered: boolean; attempts: number; status: number; error: string | null } | null;
   /** Email exit result — null when the exit was not armed or the fact was not scheduler activity. */
@@ -91,7 +101,7 @@ export type DigestPublishOutcome = {
 export async function publishDigestForWatchlist(
   watchlistId: string,
   reason: DigestPushReason,
-  ctx: { correlationId: string | null; triggeredAt: Date; now?: Date },
+  ctx: { correlationId: string | null; triggeredAt: Date; now?: Date; triggeringEventId?: string | null },
 ): Promise<DigestPublishOutcome> {
   try {
     const rt = runtime();
@@ -109,13 +119,23 @@ export async function publishDigestForWatchlist(
       };
     }
 
-    const computed = await computeWatchlistDigest(watchlistId, { now: ctx.now });
+    // Global webhook and SMTP destinations are public-demo exits only.
+    const watchlist = await db.fireWatchlist.findUnique({ where: { id: watchlistId }, select: { ownerId: true } });
+    if (!watchlist) return { published: 0, skipped: true, skipReason: 'watchlist-gone', webhook: null, email: null };
+    const privateOwner = watchlist.ownerId;
+    if (privateOwner !== null && !sseActive) return { published: 0, skipped: true, skipReason: 'no-subscribers', webhook: null, email: null };
+    const computed = await computeWatchlistDigest(watchlistId, {
+      now: ctx.now,
+      ownerId: privateOwner,
+      triggeringEventId: ctx.triggeringEventId,
+    });
     if (!computed.ok) {
       return { published: 0, skipped: true, skipReason: 'watchlist-gone', webhook: null, email: null };
     }
 
     const now = ctx.now ?? new Date();
     const payload = buildDigestPushPayload({
+      eventId: ctx.triggeringEventId ?? computed.result.triggeringEventId ?? `digest:${watchlistId}:${ctx.triggeredAt.toISOString()}`,
       reason,
       // After an evaluation event lands, it is the newest evaluation in the
       // window — the digest reports its trigger. Scheduled failures wrote no
@@ -130,22 +150,18 @@ export async function publishDigestForWatchlist(
       digest: computed.result.digest,
     });
 
-    let published = 0;
-    if (sseActive) {
-      const res = rt.hub.publish('watchlist.digest', payload);
-      published = res.delivered;
-    }
+    const published = sseActive ? await publishDigestToSse(payload, privateOwner) : 0;
 
     // Exit 2 — outbound webhook POST (any digest-relevant fact when armed).
     let webhook: DigestPublishOutcome['webhook'] = null;
-    if (webhookCfg.enabled) {
+    if (privateOwner === null && webhookCfg.enabled) {
       const outcome = await deliverDigestWebhook(payload, { correlationId: ctx.correlationId, now });
       webhook = { delivered: outcome.delivered, attempts: outcome.attempts, status: outcome.status, error: outcome.error };
     }
 
     // Exit 3 — SMTP email (scheduler facts only when armed).
     let email: DigestPublishOutcome['email'] = null;
-    if (emailCfg.enabled && shouldEmailDigest(payload)) {
+    if (privateOwner === null && emailCfg.enabled && shouldEmailDigest(payload)) {
       const outcome = await deliverDigestEmail(payload, { correlationId: ctx.correlationId, now });
       email = { sent: outcome.sent, error: outcome.error };
     }

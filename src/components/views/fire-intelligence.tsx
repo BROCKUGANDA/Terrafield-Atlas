@@ -5,7 +5,8 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useSession } from '@/components/state/store';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { api, ApiRequestError, type FireQueryResponse } from '@/lib/api-client';
+import { api, ApiRequestError, type FireIngestOutcome, type FireQueryResponse } from '@/lib/api-client';
+import { waitForJob } from '@/lib/jobs/client';
 import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { QueryState, FaultPanel, EmptyState } from '@/components/system/query-st
 import { SourceSignsStrip, EonetEventsPanel, useSourceSigns } from '@/components/system/source-signs';
 import { StatSkeletonRow, SkeletonPanel, SweepLoader } from '@/components/system/skeletons';
 import { FireWatchlistsSection } from '@/components/views/fire-watchlists';
+import { RecentFirms } from '@/components/recent-firms';
 import { Flame, Loader2, Download, ShieldAlert, MapPin, FileDown } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -53,34 +55,49 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /** Fire Intelligence: VIIRS 375 m detections (GIBS stream), calendar, confidence. */
 export function FireIntelligenceView() {
-  const { location, setView, setFireDetectionsGeoJson } = useSession();
+  const { location, activeFarmId, setView, setFireDetectionsGeoJson } = useSession();
   const { toast } = useToast();
 
   const [range, setRange] = useState(() => {
-    const to = new Date('2026-11-01');
+    const to = new Date(Date.now() - 2 * 86_400_000);
     const from = new Date(to.getTime() - 86_400_000 * 30);
     return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
   });
   const [confidence, setConfidence] = useState<string>('all');
   const [queryKey, setQueryKey] = useState(0);
+  const [ingestProgress, setIngestProgress] = useState<string | null>(null);
 
   const ingest = useMutation({
-    mutationFn: () => api.ingestFires({ lat: location.lat, lon: location.lon, from: range.from, to: range.to }),
+    mutationFn: async () => {
+      const accepted = await api.ingestFires(activeFarmId
+        ? { farmId: activeFarmId, from: range.from, to: range.to }
+        : { lat: location.lat, lon: location.lon, from: range.from, to: range.to });
+      return waitForJob<FireIngestOutcome>(accepted, {
+        timeoutMs: 20 * 60_000,
+        onProgress: ({ progressNote }) => setIngestProgress(progressNote),
+      });
+    },
     onSuccess: (res) => {
+      setIngestProgress(null);
+      const storageSummary = res.privateDetectionsStored === undefined
+        ? `${res.rowsWritten.toLocaleString()} new shared rows`
+        : `${res.privateDetectionsStored.toLocaleString()} detections retained in private snapshots${res.truncated ? ' (storage limit reached)' : ''}`;
+      const target = activeFarmId ? 'the selected farm' : location.label;
       toast({
         title: 'VIIRS fire record ingested',
-        description: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${res.rowsWritten.toLocaleString()} new rows)${res.noDataDays.length ? `; ${res.noDataDays.length} day(s) had no archive data (reported, not fabricated)` : ''}.`,
+        description: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${storageSummary})${res.noDataDays.length ? `; ${res.noDataDays.length} day(s) had no archive data (reported, not fabricated)` : ''}.`,
       });
       logEvent({
         severity: 'success',
         category: 'FIRE',
         title: 'VIIRS fire detections ingested',
-        detail: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${res.rowsWritten.toLocaleString()} new rows) for ${location.label}, ${range.from} → ${range.to}.${res.noDataDays.length ? ` ${res.noDataDays.length} day(s) had no archive data — reported as missing, not fabricated.` : ''}`,
+        detail: `${res.totalDetections.toLocaleString()} real detections decoded from GIBS vector tiles (${storageSummary}) for ${target}, ${range.from} → ${range.to}.${res.noDataDays.length ? ` ${res.noDataDays.length} day(s) had no archive data — reported as missing, not fabricated.` : ''}`,
         view: 'fire',
       });
       setQueryKey((k) => k + 1);
     },
     onError: (err) => {
+      setIngestProgress(null);
       toast({ title: 'Fire ingestion failed', description: err instanceof ApiRequestError ? err.message : 'error', variant: 'destructive' });
       logEvent({
         severity: 'crit',
@@ -94,8 +111,10 @@ export function FireIntelligenceView() {
   });
 
   const fires = useQuery({
-    queryKey: ['fires', location.lat, location.lon, range.from, range.to, confidence, queryKey],
-    queryFn: () => api.fires({ lat: location.lat, lon: location.lon, from: range.from, to: range.to, confidence: confidence === 'all' ? undefined : confidence }),
+    queryKey: ['fires', activeFarmId, location.lat, location.lon, range.from, range.to, confidence, queryKey],
+    queryFn: () => api.fires(activeFarmId
+      ? { farmId: activeFarmId, from: range.from, to: range.to, confidence: confidence === 'all' ? undefined : confidence }
+      : { lat: location.lat, lon: location.lon, from: range.from, to: range.to, confidence: confidence === 'all' ? undefined : confidence }),
   });
 
   const showOnMap = (data: FireQueryResponse) => {
@@ -164,6 +183,8 @@ export function FireIntelligenceView() {
         />
       </Reveal>
 
+      <RecentFirms />
+
       {/* Query controls */}
       <Reveal i={1}>
         <HudPanel calm className="flex flex-col gap-3">
@@ -173,7 +194,7 @@ export function FireIntelligenceView() {
                 type="date"
                 value={range.from}
                 min="2015-01-01"
-                max="2026-11-14"
+                max={new Date().toISOString().slice(0, 10)}
                 onChange={(e) => setRange({ ...range, from: e.target.value })}
                 className="telemetry h-9 w-40 border-edge bg-panel text-xs text-dim"
                 aria-label="Range start date"
@@ -184,7 +205,7 @@ export function FireIntelligenceView() {
                 type="date"
                 value={range.to}
                 min="2015-01-01"
-                max="2026-11-14"
+                max={new Date().toISOString().slice(0, 10)}
                 onChange={(e) => setRange({ ...range, to: e.target.value })}
                 className="telemetry h-9 w-40 border-edge bg-panel text-xs text-dim"
                 aria-label="Range end date"
@@ -212,7 +233,7 @@ export function FireIntelligenceView() {
               {ingest.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
-                  Decoding VIIRS tiles…
+                  Processing VIIRS job…
                 </>
               ) : (
                 <>
@@ -257,9 +278,9 @@ export function FireIntelligenceView() {
           </div>
           {ingest.isPending && (
             <div className="flex flex-col gap-2" role="status" aria-live="polite">
-              <SweepLoader label="Decoding VIIRS tiles" />
+              <SweepLoader label="Processing durable VIIRS ingestion" />
               <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-                gibs vector tiles in flight · archive gaps will be reported, never zero-filled
+                {ingestProgress ?? 'queued · gibs vector tiles · archive gaps will be reported, never zero-filled'}
               </p>
             </div>
           )}
@@ -298,7 +319,7 @@ export function FireIntelligenceView() {
                   {ingest.isPending ? (
                     <>
                       <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
-                      Decoding VIIRS tiles…
+                      Processing VIIRS job…
                     </>
                   ) : (
                     'Ingest this range'

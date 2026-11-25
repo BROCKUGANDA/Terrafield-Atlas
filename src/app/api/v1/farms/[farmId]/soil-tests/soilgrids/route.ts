@@ -1,44 +1,47 @@
 import { db } from '@/lib/db';
 import { fetchSoilGridsPoint } from '@/lib/adapters/soilgrids';
-import { apiHandler, clientKey, jsonResponse, rateLimit, rateLimitResponse } from '@/lib/api/helpers';
+import {
+  apiHandler, clientKey, errorResponse, jsonResponse, rateLimit, rateLimitResponse,
+  withIdempotency, writeMutationEffects,
+} from '@/lib/api/helpers';
+import { withPrivateProvider } from '@/lib/ingest/provider-context';
 
 /**
  * POST /api/v1/farms/{farmId}/soil-tests/soilgrids
- * Fetches the SUPPLEMENTARY SoilGrids v2.0 modeled profile for the farm
- * centroid and stores it as a soil test labeled source='soilgrids'.
- *
- * Honesty rules:
- * - stored with source 'soilgrids' and sourceDetail noting it is a modeled
- *   250 m grid estimate, clearly distinguishable from farmer/lab tests
- * - the rotation engine reduces confidence when only this profile is present
- * - on provider failure the route returns a structured degraded response —
- *   it NEVER substitutes fabricated values
+ * Fetches a supplementary modeled profile outside the persistence transaction.
  */
 
 type FarmCtx = { params: Promise<{ farmId: string }> };
 
-export const POST = apiHandler<FarmCtx>(async (req, { correlationId, params }) => {
+export const POST = apiHandler<FarmCtx>((req, { correlationId, params }) => withIdempotency(req, `/api/v1/farms/${req.nextUrl.pathname.split('/')[4]}/soil-tests/soilgrids`, async (req, { userId }) => {
   const { farmId } = await params;
-  const rl = rateLimit(clientKey(req, 'soilgrids'), { capacity: 6, refillPerMinute: 3 });
+  const rl = await rateLimit(clientKey(req, 'soilgrids'), { capacity: 6, refillPerMinute: 3 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
 
   const farm = await db.farm.findUnique({ where: { id: farmId } });
-  if (!farm) {
-    return jsonResponse({ error: { code: 'NOT_FOUND', message: `farm ${farmId} not found`, correlationId } }, { status: 404, correlationId });
+  if (!farm) return errorResponse(404, 'NOT_FOUND', `farm ${farmId} not found`, correlationId);
+
+  let profile: Awaited<ReturnType<typeof fetchSoilGridsPoint>>;
+  try {
+    const fetchProfile = () => fetchSoilGridsPoint(farm.centroidLat, farm.centroidLon, correlationId);
+    profile = await (farm.ownerId ? withPrivateProvider(fetchProfile) : fetchProfile());
+  } catch (err) {
+    const message = farm.ownerId ? 'private provider request failed' : err instanceof Error ? err.message : String(err);
+    return errorResponse(502, 'PROVIDER_UNAVAILABLE',
+      'SoilGrids could not be reached. No values were fabricated — enter a farmer or laboratory soil test instead.',
+      correlationId, { providerMessage: message });
   }
 
-  try {
-    const profile = await fetchSoilGridsPoint(farm.centroidLat, farm.centroidLon, correlationId);
-    const ph = profile.properties.find((p) => p.property === 'phh2o');
-    const soc = profile.properties.find((p) => p.property === 'soc');
-    const sand = profile.properties.find((p) => p.property === 'sand');
-    const clay = profile.properties.find((p) => p.property === 'clay');
-    const nitrogen = profile.properties.find((p) => p.property === 'nitrogen');
+  const ph = profile.properties.find((property) => property.property === 'phh2o');
+  const soc = profile.properties.find((property) => property.property === 'soc');
+  const sand = profile.properties.find((property) => property.property === 'sand');
+  const clay = profile.properties.find((property) => property.property === 'clay');
+  const nitrogen = profile.properties.find((property) => property.property === 'nitrogen');
+  const texture = textureFromFractions(sand?.value, clay?.value);
 
-    const texture = textureFromFractions(sand?.value, clay?.value);
-
-    const test = await db.soilTest.create({
-      data: {
+  return {
+    commit: async (tx) => {
+      const test = await tx.soilTest.create({ data: {
         farmId,
         measuredAt: new Date(),
         source: 'soilgrids',
@@ -48,40 +51,33 @@ export const POST = apiHandler<FarmCtx>(async (req, { correlationId, params }) =
         sandPct: sand ? Number(sand.value.toFixed(1)) : null,
         clayPct: clay ? Number(clay.value.toFixed(1)) : null,
         ph: ph ? Number(ph.value.toFixed(1)) : null,
-        organicCarbonPct: soc ? Number((soc.value / 10).toFixed(2)) : null, // g/kg → %
-        nitrogenMgKg: nitrogen ? Number((nitrogen.value * 10).toFixed(1)) : null, // g/kg → mg/kg
-        notes:
-          'Modeled supplementary profile. Properties actually returned: ' +
-          profile.properties.map((p) => `${p.property}=${p.value.toFixed(2)} (${p.unit})`).join(', ') +
+        organicCarbonPct: soc ? Number((soc.value / 10).toFixed(2)) : null,
+        nitrogenMgKg: nitrogen ? Number((nitrogen.value * 1000).toFixed(1)) : null,
+        notes: 'Modeled supplementary profile. Properties actually returned: ' +
+          profile.properties.map((property) => `${property.property}=${property.value.toFixed(2)} (${property.unit})`).join(', ') +
           '. A laboratory test is recommended before final agronomic decisions.',
-      },
-    });
-    return jsonResponse({ soilTest: test, retrieved: profile.properties }, { status: 201, correlationId });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return jsonResponse(
-      {
-        error: {
-          code: 'PROVIDER_UNAVAILABLE',
-          message:
-            'SoilGrids could not be reached (the service is intermittently slow or unreachable from this deployment). No values were fabricated — enter a farmer or laboratory soil test instead.',
-          providerMessage: msg,
-          correlationId,
-        },
-      },
-      { status: 502, correlationId },
-    );
-  }
-});
+      } });
+      await writeMutationEffects(tx, {
+        actor: `account:${userId}`,
+        action: 'soil-test.soilgrids',
+        targetId: test.id,
+        detail: `farm=${farmId}`,
+        aggregateType: 'SoilTest',
+        aggregateId: test.id,
+        eventType: 'soil-test.soilgrids-created',
+        payload: { soilTestId: test.id, farmId, ownerId: userId },
+      });
+      return jsonResponse({ soilTest: test, retrieved: profile.properties }, { status: 201, correlationId });
+    },
+  };
+}));
 
 function textureFromFractions(sandPct: number | undefined, clayPct: number | undefined): string | null {
   if (sandPct === undefined || clayPct === undefined) return null;
-  const sand = sandPct;
-  const clay = clayPct;
-  if (clay >= 40) return 'clay';
-  if (clay >= 27) return sand <= 45 ? 'clay loam' : 'clay';
-  if (sand >= 70) return 'sand';
-  if (sand >= 52) return 'sandy loam';
-  if (sand <= 20 && clay <= 20) return 'silt loam';
+  if (clayPct >= 40) return 'clay';
+  if (clayPct >= 27) return sandPct <= 45 ? 'clay loam' : 'clay';
+  if (sandPct >= 70) return 'sand';
+  if (sandPct >= 52) return 'sandy loam';
+  if (sandPct <= 20 && clayPct <= 20) return 'silt loam';
   return 'loam';
 }

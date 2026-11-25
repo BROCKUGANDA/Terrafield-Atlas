@@ -5,13 +5,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame, FileText,
   Settings, Home, Command, RefreshCw, ClipboardCopy, LogOut, Keyboard,
-  Download, MapPin, Search, CircleSlash, Compass,
+  Download, MapPin, Search, CircleSlash, Compass, Building2, CreditCard, BrainCircuit, Database,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { useUiStore } from '@/components/state/ui-store';
 import { useTourStore } from '@/components/state/tour-store';
 import { logEvent } from '@/components/state/log-store';
-import { api, ApiRequestError } from '@/lib/api-client';
+import { api, ApiRequestError, type IngestOutcome } from '@/lib/api-client';
+import { waitForJob } from '@/lib/jobs/client';
 import { useToast } from '@/hooks/use-toast';
 import {
   CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup,
@@ -24,11 +25,15 @@ const NAV_ITEMS: { key: ViewKey; label: string; icon: React.ComponentType<{ clas
   { key: 'landing', label: 'Mission Overview', icon: Home, shortcut: 'O', blurb: 'Mission brief & demo access' },
   { key: 'dashboard', label: 'Earth Intelligence', icon: LayoutDashboard, shortcut: 'D', blurb: 'POWER coverage & ingestion' },
   { key: 'explorer', label: 'Geospatial Explorer', icon: Map, shortcut: 'E', blurb: 'GIBS imagery & fire layers' },
+  { key: 'sources', label: 'Data Catalogue', icon: Database, shortcut: 'C', blurb: 'Source governance & STAC discovery' },
   { key: 'analysis', label: 'Environmental Analysis', icon: LineChart, shortcut: 'A', blurb: 'Mann-Kendall trend statistics' },
   { key: 'fire', label: 'Fire Intelligence', icon: Flame, shortcut: 'F', blurb: 'VIIRS active-fire detections' },
   { key: 'farm', label: 'Farm Workspace', icon: Tractor, shortcut: 'W', blurb: 'Boundaries, soil tests, notes' },
   { key: 'rotation', label: 'Rotation Planner', icon: Sprout, shortcut: 'R', blurb: 'Compare scenario scores' },
   { key: 'reports', label: 'Field Reports', icon: FileText, shortcut: 'B', blurb: 'Assembled evidence documents' },
+  { key: 'organizations', label: 'Organization Workspace', icon: Building2, shortcut: 'G', blurb: 'Teams, workspaces & invitations' },
+  { key: 'billing', label: 'Plans & Usage', icon: CreditCard, shortcut: 'U', blurb: 'Entitlements, API keys & webhooks' },
+  { key: 'intelligence', label: 'Atlas Intelligence', icon: BrainCircuit, shortcut: 'I', blurb: 'Approved evidence-grounded tool plans' },
   { key: 'provenance', label: 'Evidence & Provenance', icon: ScrollText, shortcut: 'P', blurb: 'Request ledger & licenses' },
   { key: 'settings', label: 'System Health', icon: Settings, shortcut: 'S', blurb: 'Engines, cache, breakers' },
 ];
@@ -38,7 +43,8 @@ export function CommandPaletteTrigger({ className }: { className?: string }) {
   const setPaletteOpen = useUiStore((s) => s.setPaletteOpen);
   const [isApple, setIsApple] = React.useState(false);
   React.useEffect(() => {
-    setIsApple(/Mac|iPhone|iPad/.test(navigator.userAgent));
+    const frame = requestAnimationFrame(() => setIsApple(/Mac|iPhone|iPad/.test(navigator.userAgent)));
+    return () => cancelAnimationFrame(frame);
   }, []);
   return (
     <button
@@ -80,24 +86,26 @@ export function CommandPalette() {
   const close = () => setPaletteOpen(false);
 
   const ingest = useMutation({
-    mutationFn: () =>
-      api.ingest(activeFarmId ? { farmId: activeFarmId, years: 12 } : { lat: location.lat, lon: location.lon, years: 12 }),
+    mutationFn: async () => {
+      const accepted = await api.ingest(activeFarmId ? { farmId: activeFarmId, years: 12 } : { lat: location.lat, lon: location.lon, years: 12 });
+      return waitForJob<IngestOutcome>(accepted, { timeoutMs: 20 * 60_000 });
+    },
     onSuccess: (res) => {
-      const idempotent = res.outcome.rowsWritten === 0 && res.outcome.validPoints > 0;
+      const idempotent = res.rowsWritten === 0 && res.validPoints > 0;
       logEvent({
         severity: 'success',
         category: 'INGEST',
         title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
         detail: idempotent
-          ? `Idempotent re-ingest: ${res.outcome.validPoints.toLocaleString()} real points re-verified from POWER (${res.outcome.start} → ${res.outcome.end}); 0 new rows because every variable+date is already stored.`
-          : `${res.outcome.rowsWritten.toLocaleString()} real observations (${res.outcome.start} → ${res.outcome.end}); ${res.outcome.missingPoints} missing days reported as missing.`,
+          ? `Idempotent re-ingest: ${res.validPoints.toLocaleString()} real points re-verified from POWER (${res.start} → ${res.end}); 0 new rows because every variable+date is already stored.`
+          : `${res.rowsWritten.toLocaleString()} real observations (${res.start} → ${res.end}); ${res.missingPoints} missing days reported as missing.`,
         view,
       });
       toast({
         title: idempotent ? 'POWER record already current' : 'NASA POWER record ingested',
         description: idempotent
-          ? `0 new rows — all ${res.outcome.validPoints.toLocaleString()} real points already stored; re-verified against POWER.`
-          : `${res.outcome.rowsWritten.toLocaleString()} real observations stored; ${res.outcome.missingPoints} missing days reported.`,
+          ? `0 new rows — all ${res.validPoints.toLocaleString()} real points already stored; re-verified against POWER.`
+          : `${res.rowsWritten.toLocaleString()} real observations stored; ${res.missingPoints} missing days reported.`,
       });
       queryClient.invalidateQueries({ queryKey: ['system-status'] });
       queryClient.invalidateQueries({ queryKey: ['observations'] });
@@ -388,11 +396,15 @@ export function ShortcutsHelp() {
     { keys: 'O', label: 'Mission Overview' },
     { keys: 'D', label: 'Earth Intelligence' },
     { keys: 'E', label: 'Geospatial Explorer' },
+    { keys: 'C', label: 'Data Catalogue' },
     { keys: 'A', label: 'Environmental Analysis' },
     { keys: 'F', label: 'Fire Intelligence' },
     { keys: 'W', label: 'Farm Workspace' },
     { keys: 'R', label: 'Rotation Planner' },
     { keys: 'B', label: 'Field Reports' },
+    { keys: 'G', label: 'Organization Workspace' },
+    { keys: 'U', label: 'Plans & Usage' },
+    { keys: 'I', label: 'Atlas Intelligence' },
     { keys: 'P', label: 'Evidence & Provenance' },
     { keys: 'S', label: 'System Health' },
     { keys: 'esc', label: 'Close any overlay' },

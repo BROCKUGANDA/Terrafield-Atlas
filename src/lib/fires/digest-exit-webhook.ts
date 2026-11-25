@@ -1,7 +1,9 @@
 import { db } from '@/lib/db';
 import { isTransient } from '@/lib/http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import type { DigestPushPayload } from '@/lib/fires/digest-push';
+import { classifyIpLiteral, fetchPinnedPublicUrl } from '@/lib/network-safety';
 
 /**
  * Webhook digest exit — push-style delivery to ONE configured HTTP(S) sink.
@@ -319,33 +321,35 @@ export function assertWebhookTargetSafe(
     if (webhookTargetAllowlisted(u, entries)) return rescued();
     return { ok: false, reason: `hostname ${host} is loopback/internal-only` };
   }
-  // IPv4 (incl. IPv4-mapped IPv6) private ranges
-  let v4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ? host : null;
-  const v4mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(host);
-  if (!v4 && v4mapped) v4 = v4mapped[1];
-  if (v4) {
-    const parts = v4.split('.').map(Number);
-    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return { ok: false, reason: `invalid IPv4 literal ${v4}` };
-    const [a, b] = parts;
-    const privateRanges: { a: number; bMin: number; bMax: number; fullA: boolean; label: string }[] = [
-      { a: 0, bMin: 0, bMax: 255, fullA: true, label: 'this-network (0.0.0.0/8)' },
-      { a: 10, bMin: 0, bMax: 255, fullA: true, label: 'RFC1918 10/8' },
-      { a: 127, bMin: 0, bMax: 255, fullA: true, label: 'loopback 127/8' },
-      { a: 169, bMin: 254, bMax: 254, fullA: false, label: 'link-local 169.254/16 (cloud metadata included)' },
-      { a: 172, bMin: 16, bMax: 31, fullA: false, label: 'RFC1918 172.16/12' },
-      { a: 192, bMin: 168, bMax: 168, fullA: false, label: 'RFC1918 192.168/16' },
-      { a: 100, bMin: 64, bMax: 127, fullA: false, label: 'CGNAT 100.64/10' },
-    ];
-    for (const r of privateRanges) {
-      if (a === r.a && (r.fullA || (b >= r.bMin && b <= r.bMax))) {
-        if (webhookTargetAllowlisted(u, entries)) return rescued();
-        return { ok: false, reason: `target falls in ${r.label} — refused (SSRF guard)` };
-      }
-    }
-  }
-  if (/^::1$/.test(host) || /^(f[cd])[0-9a-f]{2}:/i.test(host) || /^fe[89ab][0-9a-f]:/i.test(host)) {
+  const literalVerdict = classifyIpLiteral(host);
+  if (literalVerdict && !literalVerdict.ok) {
     if (webhookTargetAllowlisted(u, entries)) return rescued();
-    return { ok: false, reason: 'IPv6 loopback/ULA/link-local target refused (SSRF guard)' };
+    return { ok: false, reason: `${literalVerdict.reason ?? 'non-global address'} — refused (SSRF guard)` };
+  }
+  return { ok: true };
+}
+
+/** Resolve and validate every A/AAAA answer before any outbound request. */
+export async function assertResolvedWebhookTargetSafe(
+  rawUrl: string,
+  allowlist?: string | (string | WebhookAllowlistEntry)[] | null,
+): Promise<{ ok: boolean; reason?: string; allowlisted?: boolean }> {
+  const initial = assertWebhookTargetSafe(rawUrl, allowlist);
+  if (!initial.ok || initial.allowlisted) return initial;
+  const url = new URL(rawUrl);
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':')) return initial;
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(host, { all: true, verbatim: true });
+  } catch {
+    return { ok: false, reason: 'target hostname did not resolve' };
+  }
+  if (addresses.length === 0) return { ok: false, reason: 'target hostname has no addresses' };
+  for (const { address } of addresses) {
+    const literal = address.includes(':') ? `[${address}]` : address;
+    const verdict = assertWebhookTargetSafe(`${url.protocol}//${literal}`, null);
+    if (!verdict.ok) return { ok: false, reason: `resolved address refused: ${verdict.reason}` };
   }
   return { ok: true };
 }
@@ -459,7 +463,7 @@ export async function deliverDigestWebhook(
   // is refused outright unless the operator explicitly allowlisted it
   // (DIGEST_WEBHOOK_ALLOWLIST) — the status surface names the reason either
   // way. No request, no signature, no attempt budget burned on a refusal.
-  const guard = assertWebhookTargetSafe(cfg.url, process.env.DIGEST_WEBHOOK_ALLOWLIST);
+  const guard = await assertResolvedWebhookTargetSafe(cfg.url, process.env.DIGEST_WEBHOOK_ALLOWLIST);
   if (!guard.ok) {
     const rt = runtime();
     rt.failed += 1;
@@ -474,22 +478,25 @@ export async function deliverDigestWebhook(
   }
 
   const bodyText = JSON.stringify(payload);
-  const headers = buildWebhookHeaders({ secret: process.env.DIGEST_WEBHOOK_SECRET || null, bodyText });
+  const headers = {
+    ...buildWebhookHeaders({ secret: process.env.DIGEST_WEBHOOK_SECRET || null, bodyText }),
+    'idempotency-key': payload.eventId,
+    'x-terrafield-event-id': payload.eventId,
+  };
   const rt = runtime();
   let last: { ok: boolean; status: number; error: string | null } = { ok: false, status: 0, error: 'no attempt made' };
 
   for (let attempt = 1; attempt <= WEBHOOK_MAX_ATTEMPTS; attempt++) {
     const startedAt = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
     try {
-      const res = await fetch(cfg.url, {
-        method: 'POST',
-        headers,
-        body: bodyText,
-        signal: controller.signal,
-        cache: 'no-store',
-      });
+    const res = await fetchPinnedPublicUrl(cfg.url, {
+      method: 'POST',
+      headers,
+      body: bodyText,
+      timeoutMs: WEBHOOK_TIMEOUT_MS,
+      maxResponseBytes: 64 * 1024,
+      allowPrivate: cfg.targetAllowlisted === true,
+    });
       const latencyMs = Date.now() - startedAt;
       last = { ok: res.ok, status: res.status, error: res.ok ? null : `HTTP ${res.status} ${res.statusText}`.trim() };
       rt.attempts += 1;
@@ -535,8 +542,6 @@ export async function deliverDigestWebhook(
         correlationId: ctx.correlationId,
         attempt,
       });
-    } finally {
-      clearTimeout(timer);
     }
 
     // Transient-only retry, with the provider client's jittered backoff shape.
