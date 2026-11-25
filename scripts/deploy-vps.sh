@@ -48,20 +48,22 @@ set -eu
 cd "$APP_DIR"
 RELEASES=/mnt/terrafield/releases
 mkdir -p "$RELEASES"
-# Production keeps .next as a symlink into an immutable block-volume release.
-# Building in place would either fill the root disk or destroy the running tree.
+# Turbopack resolves PostCSS plugins relative to the build directory, so the
+# build must happen in the application tree where node_modules lives. The
+# finished tree is then published to the block volume and .next becomes a
+# symlink to that immutable release (the layout production already runs).
 if [ -L .next ]; then
   OLD_TARGET=$(readlink -f .next)
+  rm -f .next
 elif [ -d .next ]; then
-  OLD_TARGET="$RELEASES/legacy-$STAMP/.next"
-  mkdir -p "$RELEASES/legacy-$STAMP"
-  mv .next "$OLD_TARGET"
+  OLD_TARGET=
+  rm -rf .next
 else
   OLD_TARGET=
 fi
-NEW_TARGET="$RELEASES/$STAMP/.next"
-mkdir -p "$NEW_TARGET"
-ln -sfn "$NEW_TARGET" .next
+# Superseded 2026-11-19 rollback trees on the root disk; releases on the block
+# volume replace them.
+rm -rf .next.before-*
 
 BACKUP_DIR=/mnt/terrafield/backups
 mkdir -p "$BACKUP_DIR"
@@ -79,6 +81,7 @@ echo "deploy: backup $BACKUP ($(wc -c < "$BACKUP") bytes)"
 SUCCESS=0
 rollback() {
   echo 'deploy: restoring the previous release' >&2
+  rm -rf .next
   if [ -n "$OLD_TARGET" ] && [ -d "$OLD_TARGET" ]; then
     ln -sfn "$OLD_TARGET" .next
     sudo -n systemctl restart "$SERVICE" || true
@@ -89,8 +92,13 @@ trap on_exit EXIT
 
 /home/ubuntu/.bun/bin/bun install --frozen-lockfile
 /home/ubuntu/.bun/bin/bunx prisma generate
-/home/ubuntu/.bun/bin/bun run db:migrate:deploy
 NODE_ENV=production /home/ubuntu/.bun/bin/bun run build
+/home/ubuntu/.bun/bin/bun run db:migrate:deploy
+
+NEW_RELEASE="$RELEASES/$STAMP"
+mkdir -p "$NEW_RELEASE"
+mv .next "$NEW_RELEASE/.next"
+ln -sfn "$NEW_RELEASE/.next" .next
 
 sudo -n systemctl restart "$SERVICE"
 attempt=0

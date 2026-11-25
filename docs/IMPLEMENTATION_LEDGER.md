@@ -6,30 +6,30 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 
 | Feature | Owner | Status | Dependencies | Test evidence | Deployment | Outstanding defects / next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Public mission console | Platform | verified | Next.js, tokens | Prior browser matrix; current lint/type baseline | Existing preview/production | Refresh production-scale docs |
-| Verified accounts | Identity | verified | PostgreSQL, NextAuth | `tests/account-isolation.test.ts` | Existing production | Account deletion absent |
-| Durable job client/worker | Platform | implemented | Redis/BullMQ | `tests/jobs.integration.ts`, focused suites | Not deployed this pass | External worker deployment config |
-| POWER ingestion | Earth data | implemented | Durable worker | Provider/workflow integration tests | Not deployed this pass | Run live smoke after deployment |
-| Trend analysis | Science | implemented | Stored POWER, worker | `tests/stats.test.ts`, jobs integration | Not deployed this pass | Full browser job flow pending |
-| Fire ingestion/evaluation | Sentinel | implemented | GIBS, worker | `tests/private-fires.test.ts` | Not deployed this pass | Production-scale Task 7–11 acceptance |
-| Organizations/RBAC | Identity | implemented | Enterprise migration, tenant context | `tests/enterprise.integration.ts` | Not deployed | Database RLS still blocked |
-| Invitations/members/workspaces | Enterprise | implemented | Organizations, email | Enterprise integration + UI | Not deployed | Live email provider acceptance pending |
-| Shared farm portfolio | Enterprise | implemented | Tenancy guards | Cross-tenant/role integration tests | Not deployed | Portfolio aggregate endpoint can be deepened |
-| Plans/entitlements/usage | Commercial | implemented | Organizations, jobs | Enterprise quota tests; job metering code | Not deployed | Payment provider intentionally absent |
-| API keys/developer API | Developer platform | implemented | Tenancy, quotas | Scope/revocation integration tests | Not deployed | OAuth not implemented; bearer keys only |
-| General webhooks | Integrations | implemented | Outbox, encryption key | Signed delivery integration test | Not deployed | Configure `WEBHOOK_ENCRYPTION_KEY`; live receiver pending |
-| Intelligence/agents | AI | implemented | Tool registry, evidence | Approval/unsupported-plan integration tests | Not deployed | Deterministic planner; no generative model claimed |
-| STAC/source registry | Data governance | implemented | MAAP STAC, Redis | Adapter compile/type; live catalog verified | Not deployed | Live item-search smoke pending |
-| Admin console/feature flags | Platform | implemented | Admin guard | Enterprise admin test | Not deployed | Full operations browser flow pending |
-| Marketing/legal | Commercial | implemented | Design system | Production build includes all pages | Not deployed | Legal review pending |
-| Persisted reports | Reporting | implemented | ReportRecord, quotas | Persistence/CSV/PDF integration test | Not deployed | Browser print fallback retained |
-| Quantitative raster pipeline | Geospatial | implemented | Raster service, artifact volume | 7 Python tests pass; enterprise asset test passes | Overlay prepared | Retention policy remains operational work |
-| Database RLS | Security | implemented | RLS migration, tenant proxy | 3 RLS integration tests pass | Overlay prepared | Ensure production web role and GUC settings are deployed |
-| Runtime dependency patching | Security | verified | `bun audit` | 0 high/critical across 794 packages | Build artifact | Keep CI audit enabled |
-| CSP | Security | implemented (report-only) | Nonce middleware, report endpoint | `tests/csp.test.ts` | Deploying | Promote to enforcing after a clean violation ledger |
-| Password reset | Identity | verified | PasswordReset migration, email | `tests/account-isolation.test.ts` (request, replay, expiry, weak password) | Deploying | Account deletion still absent |
-| Provider provenance attribution | Security | verified | Provider attribution context | `tests/private-provider-context.test.ts` | Deploying | Personal (non-organization) private calls remain unlogged by design |
-| Host deploy path | SRE | implemented | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deploying | GitHub Actions deploys blocked by account billing lock |
+| Public mission console | Platform | verified | Next.js, tokens | Prior browser matrix; current lint/type baseline | Deployed 0.4.0 | Refresh production-scale docs |
+| Verified accounts | Identity | verified | PostgreSQL, NextAuth | `tests/account-isolation.test.ts` | Deployed 0.4.0 | Account deletion absent |
+| Durable job client/worker | Platform | implemented | Redis/BullMQ | `tests/jobs.integration.ts`, focused suites | Existing production | External worker deployment config |
+| POWER ingestion | Earth data | implemented | Durable worker | Provider/workflow integration tests | Existing production | Run live smoke after deployment |
+| Trend analysis | Science | implemented | Stored POWER, worker | `tests/stats.test.ts`, jobs integration | Existing production | Full browser job flow pending |
+| Fire ingestion/evaluation | Sentinel | implemented | GIBS, worker | `tests/private-fires.test.ts` | Existing production | Production-scale Task 7–11 acceptance |
+| Organizations/RBAC | Identity | implemented | Enterprise migration, tenant context | `tests/enterprise.integration.ts` | Deployed 0.4.0 | Database RLS still blocked |
+| Invitations/members/workspaces | Enterprise | implemented | Organizations, email | Enterprise integration + UI | Deployed 0.4.0 | Live email provider acceptance pending |
+| Shared farm portfolio | Enterprise | implemented | Tenancy guards | Cross-tenant/role integration tests | Deployed 0.4.0 | Portfolio aggregate endpoint can be deepened |
+| Plans/entitlements/usage | Commercial | implemented | Organizations, jobs | Enterprise quota tests; job metering code | Deployed 0.4.0 | Payment provider intentionally absent |
+| API keys/developer API | Developer platform | implemented | Tenancy, quotas | Scope/revocation integration tests | Deployed 0.4.0 | OAuth not implemented; bearer keys only |
+| General webhooks | Integrations | implemented | Outbox, encryption key | Signed delivery integration test | Deployed 0.4.0 | Configure `WEBHOOK_ENCRYPTION_KEY`; live receiver pending |
+| Intelligence/agents | AI | implemented | Tool registry, evidence | Approval/unsupported-plan integration tests | Deployed 0.4.0 | Deterministic planner; no generative model claimed |
+| STAC/source registry | Data governance | implemented | MAAP STAC, Redis | Adapter compile/type; live catalog verified | Deployed 0.4.0 | Live item-search smoke pending |
+| Admin console/feature flags | Platform | implemented | Admin guard | Enterprise admin test | Deployed 0.4.0 | Full operations browser flow pending |
+| Marketing/legal | Commercial | implemented | Design system | Production build includes all pages | Deployed 0.4.0 | Legal review pending |
+| Persisted reports | Reporting | implemented | ReportRecord, quotas | Persistence/CSV/PDF integration test | Deployed 0.4.0 | Browser print fallback retained |
+| Quantitative raster pipeline | Geospatial | implemented | Raster service, artifact volume | 7 Python tests pass; enterprise asset test passes | Deployed 0.4.0 | Retention policy remains operational work |
+| Database RLS | Security | implemented | RLS migration, tenant proxy | 3 RLS integration tests pass | Deployed 0.4.0 | Ensure production web role and GUC settings are deployed |
+| Runtime dependency patching | Security | verified | `bun audit` | 0 vulnerabilities across 794 packages | Build artifact | Keep CI audit enabled |
+| CSP | Security | implemented (report-only) | Nonce middleware, report endpoint | `tests/csp.test.ts` | Deployed 0.4.0 | Promote to enforcing after a clean violation ledger |
+| Password reset | Identity | verified | PasswordReset migration, email | `tests/account-isolation.test.ts` (request, replay, expiry, weak password) | Deployed 0.4.0 | Account deletion still absent |
+| Provider provenance attribution | Security | verified | Provider attribution context | `tests/private-provider-context.test.ts` | Deployed 0.4.0 | Personal (non-organization) private calls remain unlogged by design |
+| Host deploy path | SRE | implemented | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deployed 0.4.0 | GitHub Actions blocked by account billing lock; local script used |
 | Observability dashboards | SRE | partial | Production-scale metrics work | Concurrent session | In progress | Prometheus/Grafana acceptance pending |
 | Backup/restore drill | SRE | partial | Production-scale deploy work | Concurrent session | In progress | Required before release |
 
@@ -37,10 +37,12 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 
 ### 2026-11-27
 
+- Deployed 0.4.0 to the production VPS; validation evidence in `docs/release-validation-0.4.0.md`.
 - Added nonce-based CSP middleware in report-only mode and a bounded `/api/v1/csp-report` intake; enforcement stays off until the violation ledger is clean.
 - Added single-use, hashed, one-hour password-reset tokens (table, migration, request/confirm routes, account UI); unknown and unverified addresses get the same 202 answer.
 - Private provider calls attributed to an organization now write metadata-only provenance rows (no URL, hash, coordinates or raw error); anonymous private calls remain unlogged.
 - Replaced the stale SQLite `DATABASE_URL` override in the systemd deployment artifacts; added the production unit file and `scripts/deploy-vps.sh` (backup → build → migrate → readiness gate → automatic rollback on failure).
+- Deploy hardening from the first production runs: `prisma/migrations` is purged before extraction (a stale SQLite-era migration had blocked `migrate deploy`), the build runs in the application tree where PostCSS resolves, and the finished `.next` is published to an immutable block-volume release before the symlink switches.
 - Cleared the remaining lint warnings; underscore-prefixed unused bindings are now an explicit convention.
 
 ### 2026-11-25
