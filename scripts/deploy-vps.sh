@@ -40,7 +40,7 @@ tar -czf - -C "$ROOT" \
   --exclude='./.git' --exclude='./.next' --exclude='./node_modules' \
   --exclude='./db/*.db*' --exclude='./download' --exclude='./test-results' \
   --exclude='./tool-results' --exclude='./.env' --exclude='./*.log' \
-  . | remote "mkdir -p '$APP_DIR' && tar -xzf - -C '$APP_DIR'"
+  . | remote "mkdir -p '$APP_DIR' && rm -rf '$APP_DIR/prisma/migrations' && tar -xzf - -C '$APP_DIR'"
 
 # 2. Backup, build, migrate, swap, restart and gate readiness atomically.
 remote "APP_DIR='$APP_DIR' SERVICE='$SERVICE' READY_URL='$READY_URL' STAMP='$STAMP' sh -s" <<'REMOTE'
