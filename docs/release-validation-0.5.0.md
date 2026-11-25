@@ -1,6 +1,6 @@
 # TerraField Atlas 0.5.0 — release validation (2026-11-27)
 
-Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/terrafield/releases/20261125T174246Z`.
+Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/terrafield/releases/20261125T174757Z`.
 
 ## Local gates
 
@@ -20,10 +20,10 @@ Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/t
 ## Live verification
 
 - `/api/v1/healthz`: ok; `/api/v1/readyz`: ready (database, schema, seed, Redis, scheduler).
-- `.next` symlink → `20261125T174246Z`; `package.json` 0.5.0.
+- `.next` symlink → `20261125T174757Z`; `package.json` 0.5.0.
 - `TENANT_DATABASE_URL` present in the service environment; unit contains only `PORT` and `NODE_ENV` as `Environment=`.
 - Production migrations present: `20261128000000_oauth_invoices_markets`, `20261128010000_rls_schema_aware`, `20261128020000_org_insert_policy`, `20261128030000_org_creator`.
-- Enforced CSP header served; `/api/v1/metrics` returns **403** publicly.
+- Enforced CSP header served (Cloudflare Insights beacon explicitly allowed after the first browser check); `/api/v1/metrics` returns **403** publicly. Headless Chromium loads the Markets view with **0 console errors and 0 CSP violations**.
 - Prometheus `terrafield-web` target up; `terrafield_database_up=1` for `host.docker.internal:3011`; Grafana health 200 on 127.0.0.1:33001; both bind loopback.
 - `/api/v1/oauth/token` with bad credentials → 401 OAuth error; `/api/v1/billing/invoices` anonymous → 401; `/api/v1/markets/prices` returns provenance/licence with an honest empty state (no ingest yet in production); `/account` serves the Kiswahili switcher.
 - RLS policy check in production PostgreSQL: as `terrafield_app` without tenant context, `SELECT count(*) FROM "Farm"` equals the public-row count.
@@ -36,4 +36,4 @@ Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/t
 - en/sw localization covers navigation, account, marketing shell and landing hero; long-form and scientific copy is English.
 - Market feed is nominal survey data; production has no ingested rows until an authorized ingest runs.
 - Grafana/Prometheus are single-host and loopback-only.
-- Dependabot closure is verified after the push scan; `bun audit` is already clean.
+- Dependabot: all 7 alerts closed after the push scan (open alerts = 0); `bun audit` clean.
