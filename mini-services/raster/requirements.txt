@@ -3,7 +3,7 @@ uvicorn==0.34.0
 rasterio==1.4.3
 numpy==2.2.4
 pydantic==2.11.1
-python-multipart==0.0.20
+python-multipart==0.0.34
 xarray==2025.6.1
 netCDF4==1.7.2
 zarr==3.1.1

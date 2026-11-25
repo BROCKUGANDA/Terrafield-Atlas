@@ -11,7 +11,7 @@ import { useTourStore } from '@/components/state/tour-store';
  *  - ⌘K / Ctrl+K → command palette (works everywhere, even while typing)
  *  - ?            → shortcuts overlay
  *  - t            → start/restart the guided first-run tour
- *  - o d e c a f w r b g u i p s → jump between console modules
+ *  - o d e c a f w r m b g u i p s → jump between console modules
  *
  * Single-key jumps are suppressed while the operator is typing in any input,
  * textarea, select or contenteditable element, and whenever a modifier is
@@ -27,6 +27,7 @@ const VIEW_KEYS: Record<string, ViewKey> = {
   f: 'fire',
   w: 'farm',
   r: 'rotation',
+  m: 'markets',
   b: 'reports',
   g: 'organizations',
   u: 'billing',

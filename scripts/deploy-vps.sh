@@ -95,6 +95,18 @@ trap on_exit EXIT
 NODE_ENV=production /home/ubuntu/.bun/bin/bun run build
 /home/ubuntu/.bun/bin/bun run db:migrate:deploy
 
+# Request-scoped queries run as terrafield_app so RLS is enforced. Regenerated
+# every deploy from the current DATABASE_URL so password rotation cannot leave
+# a stale tenant role string behind.
+umask 077
+awk '{ if ($0 ~ /^DATABASE_URL=/) { v = substr($0, 14); sep = index(v, "?") ? "&" : "?"; print "TENANT_DATABASE_URL=" v sep "options=-c%20role%3Dterrafield_app" } else print }' .env > .env.tenant
+chmod 600 .env.tenant
+[ -s .env.tenant ] || { echo 'deploy: tenant database URL generation failed' >&2; exit 2; }
+
+# Keep the installed unit in sync with the repository.
+sudo -n install -m 644 deploy/systemd/terrafield.service /etc/systemd/system/terrafield.service
+sudo -n systemctl daemon-reload
+
 NEW_RELEASE="$RELEASES/$STAMP"
 mkdir -p "$NEW_RELEASE"
 mv .next "$NEW_RELEASE/.next"
@@ -107,6 +119,13 @@ while [ "$attempt" -lt 60 ]; do
   if [ "$CODE" = '200' ]; then
     curl -fsS --max-time 5 "${READY_URL%/readyz}/healthz" >/dev/null
     SUCCESS=1
+    # Host observability: loopback-only Prometheus/Grafana. A monitoring
+    # failure must not roll back a healthy application release.
+    if grep -q '^GRAFANA_ADMIN_PASSWORD=' .env; then
+      docker compose --env-file .env -f deploy/host-monitoring/compose.yaml up -d || echo 'deploy: warning: monitoring stack failed to start' >&2
+    else
+      echo 'deploy: warning: GRAFANA_ADMIN_PASSWORD is unset; monitoring not started' >&2
+    fi
     # Keep the running release plus two rollback candidates.
     ls -dt "$RELEASES"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
     echo "deploy: ready at $STAMP"

@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { encode } from 'next-auth/jwt';
 import { NextRequest } from 'next/server';
-import { createPostgresTestDatabase, deployMigrations } from './postgres-test-database';
+import { createPostgresTestDatabase, deployMigrations, enableTenantRlsTest } from './postgres-test-database';
 
 if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
   test('enterprise product integration (isolated PostgreSQL and Redis)', () => {
@@ -28,6 +28,7 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
   process.env.REDIS_KEY_PREFIX = `enterprise:${crypto.randomUUID()}:`;
   const setup = deployMigrations(database.url);
   if (setup.status !== 0) throw new Error(`${setup.stdout}\n${setup.stderr}`);
+  await enableTenantRlsTest(database.url);
 
   const { db } = await import('@/lib/db');
   const { redisRuntime } = await import('@/lib/redis');

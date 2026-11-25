@@ -6,6 +6,15 @@ import { useRouter } from 'next/navigation';
 import { getProviders, signIn, signOut, useSession } from 'next-auth/react';
 import { api } from '@/lib/api-client';
 
+const DELETE_BLOCKER_LABELS: Record<string, string> = {
+  organizationsOwned: 'Organizations you own',
+  farmsOwned: 'Farms you own',
+  soleOwnerOrganizations: 'Organizations where you are the only owner',
+  watchlistsOwned: 'Fire watchlists you own',
+  organizationInvitationsCreated: 'Organization invitations you sent',
+  apiKeysCreated: 'API keys you created',
+};
+
 export function AccountForm() {
   const { data, status } = useSession();
   const router = useRouter();
@@ -13,6 +22,8 @@ export function AccountForm() {
   const [google, setGoogle] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
+  const [deleteMessage, setDeleteMessage] = useState('');
+  const [blockers, setBlockers] = useState<Record<string, number> | null>(null);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState<string | null>(null);
   useEffect(() => { void getProviders().then(providers => setGoogle(Boolean(providers?.google))).catch(() => undefined); }, []);
@@ -48,6 +59,34 @@ export function AccountForm() {
       setMessage('Password updated. Sign in with your new password.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Account service unavailable.'); }
     finally { setPending(false); }
+  }
+  async function submitDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setDeleteMessage('');
+    setBlockers(null);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch('/api/v1/account/delete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: String(form.get('password') || ''), confirmation: String(form.get('confirmation') || '') }),
+      });
+      const data: { error?: { code?: string; message?: string; details?: Record<string, number> } } | null = await response.json().catch(() => null);
+      if (!response.ok) {
+        if (response.status === 409 && data?.error?.code === 'ACCOUNT_HAS_BLOCKERS') {
+          setBlockers(data.error.details ?? {});
+          setDeleteMessage(data.error.message ?? 'Resolve the listed resources before deleting this account.');
+          return;
+        }
+        throw new Error(data?.error?.message ?? 'Account could not be deleted.');
+      }
+      await signOut({ callbackUrl: '/account' });
+    } catch (error) {
+      setDeleteMessage(error instanceof Error ? error.message : 'Account service unavailable.');
+    } finally {
+      setPending(false);
+    }
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -93,6 +132,23 @@ export function AccountForm() {
       {inviteToken && <section className="my-6 border border-aqua/40 bg-aqua/5 p-4"><h3 className="font-medium">Organization invitation</h3><p className="mt-2 text-sm text-muted-foreground">Accept this invitation to join the organization workspace. The server verifies the token, expiry, and invited email.</p><button type="button" className="mt-3 min-h-11 border border-aqua px-4" disabled={pending} onClick={async () => { setPending(true); try { const result = await api.acceptOrganizationInvitation(inviteToken); setMessage(`Invitation accepted. Role: ${result.role}.`); setInviteToken(null); const url = new URL(window.location.href); url.searchParams.delete('organizationInvite'); window.history.replaceState({}, '', url); } catch (error) { setMessage(error instanceof Error ? error.message : 'Invitation could not be accepted.'); } finally { setPending(false); } }}>{pending ? 'Accepting…' : 'Accept invitation'}</button></section>}
       <Link href="/#view=farm" className="my-6 inline-flex min-h-11 items-center rounded border px-4">Open farm workspace →</Link>
       <button type="button" className="block min-h-11 underline underline-offset-4" onClick={() => void signOut({ callbackUrl: '/account' })}>Sign out account</button>
+      <details className="mt-8 border-t border-edge pt-5">
+        <summary className="min-h-11 cursor-pointer text-sm underline underline-offset-4">Delete account</summary>
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">Permanently erase this account and its sign-in credentials. Organizations, farms, watchlists, invitations or API keys you still own must be transferred or removed first.</p>
+        <form className="mt-4 space-y-4" onSubmit={submitDelete}>
+          <label className="block text-sm">Password<input className="mt-2 min-h-11 w-full rounded border border-edge bg-background px-3" name="password" type="password" autoComplete="current-password" maxLength={1024} required /></label>
+          <label className="block text-sm">Type DELETE to confirm<input className="mt-2 min-h-11 w-full rounded border border-edge bg-background px-3" name="confirmation" autoComplete="off" pattern="DELETE" maxLength={6} required /></label>
+          <button type="submit" disabled={pending} className="min-h-11 rounded border border-crit px-4 text-sm text-crit disabled:opacity-50">{pending ? 'Please wait…' : 'Delete account permanently'}</button>
+        </form>
+        {blockers && Object.values(blockers).some((count) => count > 0) && (
+          <ul className="mt-4 list-disc pl-5 text-sm leading-relaxed text-muted-foreground">
+            {Object.entries(blockers).filter(([, count]) => count > 0).map(([key, count]) => (
+              <li key={key}>{DELETE_BLOCKER_LABELS[key] ?? key}: {count}</li>
+            ))}
+          </ul>
+        )}
+        {deleteMessage && <p role="status" className="mt-3 text-sm leading-relaxed">{deleteMessage}</p>}
+      </details>
     </section>
   );
   return (

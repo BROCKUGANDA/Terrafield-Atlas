@@ -1,16 +1,23 @@
 import { z } from 'zod';
-import { db } from '@/lib/db';
+import { rawDb } from '@/lib/db';
 import { apiHandler, errorResponse, jsonResponse, parseBody, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
 import { normalizeEmail, tokenHash } from '@/lib/account-security';
 
 const schema = z.object({ token: z.string().min(32).max(256) });
 
+/**
+ * POST /api/v1/organizations/invitations/accept
+ *
+ * The invitee has no membership yet, so the invitation row is invisible under
+ * RLS. Acceptance is a bootstrap operation like sign-in: it runs on the owner
+ * connection after token, expiry and invited-email checks.
+ */
 export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, '/api/v1/organizations/invitations/accept', async (req, { userId }) => {
   const parsed = await parseBody(req, schema);
   if (!parsed.ok) return parsed.res;
-  const user = await db.accountUser.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
+  const user = await rawDb.accountUser.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
   return {
-    commit: async (tx) => {
+    commit: async () => rawDb.$transaction(async (tx) => {
       const claimedAt = new Date();
       const claimed = await tx.organizationInvitation.updateMany({
         where: { tokenHash: tokenHash(parsed.data.token), acceptedAt: null, expiresAt: { gt: claimedAt } },
@@ -37,6 +44,6 @@ export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, 
         payload: { userId, role: invitation.role },
       });
       return jsonResponse({ accepted: true, organizationId: invitation.organizationId, role: invitation.role }, { correlationId });
-    },
+    }),
   };
 }));

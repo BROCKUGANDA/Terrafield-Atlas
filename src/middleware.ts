@@ -1,33 +1,24 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 
 /**
- * Nonce-based Content-Security-Policy in REPORT-ONLY mode.
+ * Enforced Content-Security-Policy.
  *
- * Next injects the nonce into its inline flight/bootstrap scripts when the
- * incoming request carries a `content-security-policy` header (the documented
- * App Router pattern). We issue the violation-reporting header only, so a
- * directive that is still too narrow cannot break serving while the reports
- * collected by `/api/v1/csp-report` prove the policy out.
+ * The console is pre-rendered (App Router static output), so Next's inline
+ * flight/bootstrap scripts cannot carry a per-request nonce: middleware headers
+ * do not reach the static HTML. A nonce policy in enforcement mode would block
+ * every script. The enforced policy therefore allows inline scripts
+ * (`'unsafe-inline'`) while locking down every other vector: external script and
+ * style origins, objects, base-uri, form targets, framing, workers and image
+ * origins. JSON/telemetry violations still flow to `/api/v1/csp-report`.
  *
- * Promotion to enforcing is a separate, evidence-backed step: watch the
- * violation ledger in production, fix the directives it names, then switch the
- * response header from `Content-Security-Policy-Report-Only` to
- * `Content-Security-Policy`.
+ * Tightening to a nonce policy requires opting the console into dynamic
+ * rendering, which trades static delivery for a stronger script source list.
  */
 
-function nonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-export function middleware(request: NextRequest) {
-  const value = nonce();
+export function middleware() {
   const policy = [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${value}' 'strict-dynamic'`,
+    "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://gibs.earthdata.nasa.gov https://eonet.gsfc.nasa.gov",
     "font-src 'self' data:",
@@ -42,13 +33,8 @@ export function middleware(request: NextRequest) {
     "report-uri /api/v1/csp-report",
   ].join('; ');
 
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set('x-nonce', value);
-  // Next reads this request header to stamp its inline scripts with the nonce.
-  requestHeaders.set('content-security-policy', policy);
-
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
-  response.headers.set('Content-Security-Policy-Report-Only', policy);
+  const response = NextResponse.next();
+  response.headers.set('Content-Security-Policy', policy);
   return response;
 }
 

@@ -19,8 +19,17 @@ TerraField Atlas reports uncertainty explicitly. Nothing in this document is hid
 4. **SSE is not a replay log.** Redis fans out live events across replicas; disconnected clients recover current state through REST endpoints.
 5. **Exactly-once external delivery is not possible without receiver cooperation.** Stable event IDs, idempotency headers and durable receipts provide at-least-once delivery with deduplication; receivers should deduplicate by event ID.
 6. **Backups require operator storage policy.** Automated artifacts are checksummed and restore-drilled, but off-VPS replication and retention remain deployment responsibilities.
-7. **Account deletion is not self-service.** Password reset is self-service (single-use, one-hour, hashed tokens); deleting an account still requires an operator because owned farms and organizations must be transferred first.
-8. **CSP is report-only.** Violations are collected and logged, not blocked, until the report ledger is clean enough to enforce.
+7. **Account deletion is self-service but blocked while the account owns data.** The owner must transfer or remove owned farms, organizations, watchlists, invitations, or keys created for another owner first; blockers are returned as counts.
+8. **CSP allows inline scripts.** The enforced policy locks down external origins, objects, base-uri, framing, workers and form targets, but static App Router pages cannot carry a per-request nonce, so `script-src` includes `'unsafe-inline'`. Moving to a nonce policy requires dynamic rendering for the console.
+
+## Enterprise and commercial scope
+
+1. **RLS covers request-scoped queries.** Prometheus, workers, migrations and auth bootstrap paths use the owner connection; user-facing API queries run as `terrafield_app` with tenant context.
+2. **No card processor is connected.** Invoices are settled manually by an authorized manager (bank or cash) and recorded with a Payment row; the `provider` method is rejected until a reviewed adapter exists.
+3. **OAuth supports client credentials only.** Authorization-code/consent flows for end users, secret rotation and token garbage collection are not implemented; revoked clients and expired tokens are rejected at use.
+4. **Localization is partial by design.** English and Swahili cover navigation, account, marketing shell and landing hero; scientific, provider and long-form product copy remains English.
+5. **Market prices are nominal survey observations.** The HDX/WFP Uganda feed is retail market survey data, not farm-gate contracts or forecasts; missing months remain missing.
+6. **Monitoring is single-host.** Prometheus and Grafana run on the same VPS and bind loopback; remote retention, HA and paging integrations are deployment responsibilities.
 
 ## Deliberate scope exclusions
 

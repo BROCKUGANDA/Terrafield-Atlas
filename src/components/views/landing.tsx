@@ -19,6 +19,8 @@ import { Kicker, SectionHeader, StatusPill, TelemetryStat, CoordReadout } from '
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { StatSkeletonRow, SkeletonRows } from '@/components/system/skeletons';
 import { EarthGlobe, type GlobeStation } from '@/components/three/earth-globe';
+import { useLocale } from '@/components/locale-switcher';
+import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 /**
@@ -28,9 +30,6 @@ import { cn } from '@/lib/utils';
  * questions, capability cards, the live source registry and the honesty box.
  * Every number below is fetched live — nothing is fabricated.
  */
-
-const HERO_INTRO =
-  'Earth-observation intelligence for agricultural resilience. See what NASA satellites observe about your land — rainfall, temperature, solar radiation, root-zone moisture, vegetation and fire history — understand whether changes are statistically meaningful, and compare evidence-supported crop-rotation options with every score explainable and every observation traceable to its source.';
 
 const QUESTIONS = [
   'What are the observed environmental conditions here?',
@@ -134,6 +133,7 @@ function visitorUnitId(): string {
 }
 
 export function LandingView() {
+  const locale = useLocale();
   const operator = useSession((s) => s.operator);
   const login = useSession((s) => s.login);
   const logout = useSession((s) => s.logout);
@@ -166,8 +166,10 @@ export function LandingView() {
       cancelled = true;
     };
   }, []);
-  const heroIntro = heroCopy?.intro ?? HERO_INTRO;
-  const heroCta = heroCopy?.cta ?? 'Enter console';
+  // The A/B experiment serves English copy only; a non-English locale always
+  // uses the localized dictionary so the hero is never mixed-language.
+  const heroIntro = locale === 'en' ? (heroCopy?.intro ?? t(locale, 'landing.heroIntro')) : t(locale, 'landing.heroIntro');
+  const heroCta = locale === 'en' ? (heroCopy?.cta ?? t(locale, 'landing.cta')) : t(locale, 'landing.cta');
 
   useEffect(() => {
     if (verifiedAccount && unitIdRef.current) recordExperimentEvent(unitIdRef.current, 'experiment.exposure', 'tf_ab_exposure_key');
@@ -217,7 +219,7 @@ export function LandingView() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
             >
-              <Kicker>NASA Space Apps 2026 · Field Shift</Kicker>
+              <Kicker>{t(locale, 'landing.kicker')}</Kicker>
             </motion.div>
 
             <motion.h1
@@ -229,7 +231,7 @@ export function LandingView() {
             >
               TerraField
               <span className="block text-nasa glow-nasa">Atlas</span>
-              <span className="sr-only"> — TerraField Atlas mission console</span>
+              <span className="sr-only"> {t(locale, 'landing.heroSr')}</span>
             </motion.h1>
 
             <motion.p
@@ -253,20 +255,20 @@ export function LandingView() {
                   <div className="flex flex-wrap items-center gap-3">
                     <StatusPill status="operational" />
                     <p className="telemetry text-xs uppercase tracking-wide-mc text-dim">
-                      Access granted · <span className="text-signal glow-signal">{operator.callsign}</span>
-                      <span className="text-faint"> / mission-observer</span>
+                      {t(locale, 'landing.accessGranted')} · <span className="text-signal glow-signal">{operator.callsign}</span>
+                      <span className="text-faint"> {t(locale, 'landing.missionObserver')}</span>
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2.5">
                     <Button onClick={() => setView('dashboard')} className="bg-nasa text-white hover:bg-nasa/90">
-                      Return to console <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
+                      {t(locale, 'landing.returnToConsole')} <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
                     </Button>
                     <Button variant="ghost" onClick={logout} className="text-dim hover:text-crit">
-                      <LogOut className="mr-1.5 h-4 w-4" aria-hidden /> Sign out
+                      <LogOut className="mr-1.5 h-4 w-4" aria-hidden /> {t(locale, 'landing.signOut')}
                     </Button>
                   </div>
                   <p className="font-mono text-[10px] leading-relaxed tracking-wide text-faint">
-                    Session identifier stays on this device. No credentials, no password, nothing transmitted.
+                    {t(locale, 'landing.sessionNote')}
                   </p>
                 </div>
               ) : (
@@ -279,17 +281,17 @@ export function LandingView() {
                   }}
                 >
                   <p className="font-mono text-[10px] font-semibold uppercase tracking-mission text-aqua">
-                    Console access — open demo
+                    {t(locale, 'landing.consoleAccess')}
                   </p>
                   <div className="flex flex-col gap-2.5 sm:flex-row">
                     <label htmlFor="callsign-input" className="sr-only">
-                      Operator callsign (optional)
+                      {t(locale, 'landing.callsignLabel')}
                     </label>
                     <Input
                       id="callsign-input"
                       value={callsign}
                       onChange={(e) => setCallsign(e.target.value)}
-                      placeholder="e.g. MKUL-7"
+                      placeholder={t(locale, 'landing.callsignPlaceholder')}
                       autoComplete="off"
                       spellCheck={false}
                       className="h-10 w-full border-edge bg-panel-2 font-mono text-sm tracking-wide text-ink sm:max-w-[16rem]"
@@ -300,10 +302,10 @@ export function LandingView() {
                     </Button>
                   </div>
                   <Button type="button" variant="ghost" onClick={() => { recordEnterOutcome(); login('GUEST'); }} className="h-9 w-fit text-dim hover:text-ink">
-                    Continue as guest
+                    {t(locale, 'landing.continueAsGuest')}
                   </Button>
                   <p id="access-note" className="font-mono text-[10px] leading-relaxed tracking-wide text-faint">
-                    Open demo — session identifier stays on this device. No credentials, no password, nothing transmitted.
+                    {t(locale, 'landing.accessNote')}
                   </p>
                 </form>
               )}
@@ -319,10 +321,10 @@ export function LandingView() {
           >
             <div className="hud scanlines relative h-[320px] overflow-hidden md:h-[min(420px,52vh)]">
               <p className="pointer-events-none absolute left-3 top-2.5 z-10 font-mono text-[10px] font-semibold uppercase tracking-mission text-aqua">
-                Live telemetry network
+                {t(locale, 'landing.liveTelemetry')}
               </p>
               <p className="pointer-events-none absolute right-3 top-2.5 z-10 font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-                stylized · not imagery
+                {t(locale, 'landing.stylizedNotImagery')}
               </p>
 
               {globeReady ? (
@@ -331,7 +333,7 @@ export function LandingView() {
                 <div className="grid-bg absolute inset-0 flex flex-col items-center justify-center gap-2">
                   <span className="anim-blink h-2 w-2 rounded-full bg-aqua" aria-hidden />
                   <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-                    initializing telemetry renderer…
+                    {t(locale, 'landing.initializing')}
                   </p>
                 </div>
               )}
@@ -344,13 +346,13 @@ export function LandingView() {
                   </p>
                   <p className="mt-0.5 flex items-center gap-2">
                     <CoordReadout lat={hoveredStation.lat} lon={hoveredStation.lon} />
-                    <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">demo preset</span>
+                    <span className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">{t(locale, 'landing.demoPreset')}</span>
                   </p>
                 </div>
               )}
 
               <p className="pointer-events-none absolute bottom-2.5 left-3 z-10 font-mono text-[9px] uppercase leading-relaxed tracking-wide-mc text-faint">
-                stylized telemetry network — not an imagery product
+                {t(locale, 'landing.stylizedNote')}
               </p>
             </div>
 
@@ -366,7 +368,7 @@ export function LandingView() {
                 <FaultPanel
                   error={sources.error}
                   onRetry={() => sources.refetch()}
-                  label="Source registry"
+                  label={t(locale, 'landing.sourceRegistry')}
                   className="p-3 sm:p-3.5"
                 />
               ) : (
@@ -407,7 +409,7 @@ export function LandingView() {
             <FaultPanel
               error={status.error}
               onRetry={() => status.refetch()}
-              label="System status"
+              label={t(locale, 'landing.systemStatus')}
             />
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">

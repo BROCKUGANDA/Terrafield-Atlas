@@ -159,6 +159,23 @@ const DATA_SOURCES = [
     limitations: 'STAC discovery does not grant asset access or imply unrestricted commercial licensing. No global dataset download is performed.',
     status: 'operational',
   },
+  {
+    provider: 'HDX — United Nations OCHA (Humanitarian Data Exchange)',
+    datasetName: 'Uganda - Food Prices (WFP VAM)',
+    productId: 'wfp-food-prices-for-uganda',
+    endpointTemplate: 'https://data.humdata.org/api/3/action/package_show?id=wfp-food-prices-for-uganda',
+    dataFormat: 'CSV (latest CSV resource in the CKAN package)',
+    temporalCoverage: '2006-01 → present, monthly; ingestion retains the most recent 24 months',
+    spatialResolution: 'Market-level survey observations (admin1/admin2, named market)',
+    units: 'Nominal local currency per stated unit (mostly UGX/kg); retail observations',
+    authRequired: false,
+    rateLimit: 'Public HDX CKAN and object-storage download; one package query + one CSV per ingest',
+    license: 'CC BY-IGO (Creative Commons Attribution for Intergovernmental Organisations)',
+    attribution: 'WFP VAM, FIT Uganda and partners via HDX (data.humdata.org)',
+    limitations:
+      'Market-survey observations, not farm-gate, contract or forecast prices. Retail and wholesale price types are never blended; only Retail rows are ingested when the feed labels them. Different commodities use different units, so cross-commodity averages are not meaningful. Missing market-months are not zero.',
+    status: 'operational',
+  },
 ];
 
 const SOURCE_GOVERNANCE: Record<string, Record<string, unknown>> = {
@@ -207,6 +224,20 @@ const SOURCE_GOVERNANCE: Record<string, Record<string, unknown>> = {
     processingHistory: JSON.stringify([{ step: 'stac-discovery', version: 'stac-adapter/2026.11' }]),
     accessConditions: 'Metadata public; assets may require authentication',
     apiLimits: '50 items maximum; five optional asset probes', knownLimitations: 'Discovery does not grant data access.', stacApiUrl: 'https://stac.maap-project.org/',
+  },
+  'Uganda - Food Prices (WFP VAM)': {
+    productVersion: 'WFP VAM market prices (HDX resource, latest CSV)', spatialCoverage: 'Uganda — surveyed markets', nativeResolutionM: null,
+    qualityMetadata: JSON.stringify({ observationType: 'market survey', priceTypePolicy: 'retail-only-when-labelled', windowMonths: 24, rowCap: 50_000 }),
+    processingHistory: JSON.stringify([
+      { step: 'ckan-package-show', version: 'markets-adapter/2026.11' },
+      { step: 'rfc4180-csv-parse', version: 'markets-adapter/2026.11' },
+      { step: 'positive-price-filter', windowMonths: 24 },
+      { step: 'natural-key-upsert', key: 'provider+market+commodity+date+unit+currency' },
+    ]),
+    accessConditions: 'Public HDX CKAN metadata and CSV download; attribution required',
+    apiLimits: 'One package query plus one CSV download per ingest; 60 s ingest deadline',
+    knownLimitations: 'Market-survey observations only; no forecast, farm-gate contract price or yield claim. Retail/wholesale never blended.',
+    stacApiUrl: null,
   },
 };
 

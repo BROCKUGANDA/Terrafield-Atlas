@@ -1,0 +1,36 @@
+{
+	admin off
+	email admin@svalley.tech
+	http_port 8090
+	https_port 8460
+}
+
+# Host deployment edge. Mirrors /etc/caddy/terrafield/Caddyfile on the VPS:
+# Cloudflare terminates public TLS and forwards to Caddy; Caddy also carries the
+# certificates for direct HTTPS. /api/v1/metrics is never public.
+terrafieldatlas.us, www.terrafieldatlas.us {
+	tls /etc/caddy/certs/terrafieldatlas.us.pem /etc/caddy/certs/terrafieldatlas.us.key
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	@metrics path /api/v1/metrics
+	respond @metrics 403
+	reverse_proxy 127.0.0.1:3011 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+}
+
+http://terrafieldatlas.us, http://www.terrafieldatlas.us {
+	@metrics path /api/v1/metrics
+	respond @metrics 403
+	reverse_proxy 127.0.0.1:3011 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+}

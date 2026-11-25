@@ -70,7 +70,7 @@ Long-running ingestion, trends, fire snapshots and watchlist evaluation return `
 ## Security and operations
 
 - Caddy exposes fixed upstreams only; no query-controlled proxy target remains.
-- A nonce-based CSP ships report-only from `src/middleware.ts`; violations go to the bounded `/api/v1/csp-report` intake and are logged, not stored.
+- An enforced CSP ships from `src/middleware.ts` (static pages keep `'unsafe-inline'` scripts); violations go to the bounded `/api/v1/csp-report` intake and are logged, not stored.
 - Production runs the standalone server under `terrafield.service` from the 600-mode `.env`; `scripts/deploy-vps.sh` ships, backs up, migrates, builds, restarts and gates readiness with automatic restore of the previous build.
 - Database, Redis, Prometheus and Grafana publish no host ports.
 - Containers use JSON logging with rotation, restart policies and resource limits.

@@ -88,3 +88,31 @@ export function deployMigrations(databaseUrl: string): ReturnType<typeof spawnSy
     timeout: 300_000,
   });
 }
+
+/**
+ * Derive the app-role URL used by the tenant Prisma proxy. Set
+ * TENANT_RLS_TEST=1 in a suite to exercise real PostgreSQL RLS coverage.
+ */
+export function tenantRoleUrl(databaseUrl: string): string {
+  const separator = databaseUrl.includes('?') ? '&' : '?';
+  return `${databaseUrl}${separator}options=-c%20role%3Dterrafield_app`;
+}
+
+export async function enableTenantRlsTest(databaseUrl: string): Promise<void> {
+  if (process.env.TENANT_RLS_TEST !== '1') return;
+  process.env.TENANT_DATABASE_URL = tenantRoleUrl(databaseUrl);
+  // Schema-scoped test databases are not covered by the migration's
+  // `public`-schema grants; give the app role access to the active schema.
+  const client = new PrismaClient({ datasourceUrl: databaseUrl });
+  try {
+    await client.$executeRawUnsafe(`DO $$
+      DECLARE s text := current_schema();
+      BEGIN
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO terrafield_app', s);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO terrafield_app', s);
+        EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO terrafield_app', s);
+      END $$;`);
+  } finally {
+    await client.$disconnect();
+  }
+}

@@ -81,4 +81,26 @@ describe('private Compose deployment', () => {
     expect(deploy).toContain('systemctl restart');
     expect(deploy).toContain('--frozen-lockfile');
   });
+
+  test('production web requests run under the RLS app role', () => {
+    const unit = read('deploy/systemd/terrafield.service');
+    expect(unit).toContain('EnvironmentFile=-/home/ubuntu/ai-azimara-terrafield/.env.tenant');
+    const deploy = read('scripts/deploy-vps.sh');
+    expect(deploy).toContain('TENANT_DATABASE_URL=');
+    expect(deploy).toContain('role%3Dterrafield_app');
+    expect(deploy).toContain('install -m 644 deploy/systemd/terrafield.service');
+  });
+
+  test('host observability binds loopback and scrapes the systemd app', () => {
+    const compose = read('deploy/host-monitoring/compose.yaml');
+    expect(compose).toContain('prom/prometheus');
+    expect(compose).toContain('grafana/grafana');
+    expect(compose).toContain('127.0.0.1:9090:9090');
+    expect(compose).toContain('127.0.0.1:3001:3000');
+    const scrape = read('deploy/host-monitoring/prometheus.yml');
+    expect(scrape).toContain('host.docker.internal:3011');
+    expect(scrape).toContain('/api/v1/metrics');
+    const deploy = read('scripts/deploy-vps.sh');
+    expect(deploy).toContain('deploy/host-monitoring/compose.yaml');
+  });
 });

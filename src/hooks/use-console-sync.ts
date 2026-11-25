@@ -20,7 +20,7 @@ import { logEvent } from '@/components/state/log-store';
  */
 
 const VALID_VIEWS = new Set<ViewKey>([
-  'landing', 'dashboard', 'explorer', 'sources', 'analysis', 'farm', 'rotation', 'provenance', 'fire', 'reports', 'organizations', 'billing', 'intelligence', 'admin', 'settings',
+  'landing', 'dashboard', 'explorer', 'sources', 'analysis', 'farm', 'rotation', 'markets', 'provenance', 'fire', 'reports', 'organizations', 'billing', 'intelligence', 'admin', 'settings',
 ]);
 
 function readHash(): URLSearchParams | null {

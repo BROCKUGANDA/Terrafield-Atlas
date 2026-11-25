@@ -1,13 +1,15 @@
 'use client';
 import { AccountControls } from '@/components/account-controls';
 import { OrganizationSwitcher } from '@/components/organization-switcher';
+import { LocaleSwitcher, useLocale } from '@/components/locale-switcher';
+import { t } from '@/lib/i18n';
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame,
   FileText, Settings, ChevronRight, Menu, LogOut, Home, FlameKindling,
-  Building2, CreditCard, BrainCircuit, Database, ShieldCheck,
+  Building2, CreditCard, BrainCircuit, Database, ShieldCheck, ShoppingBasket,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { api } from '@/lib/api-client';
@@ -34,6 +36,7 @@ const NAV: { key: ViewKey; label: string; short: string; icon: React.ComponentTy
   { key: 'fire', label: 'Fire Intelligence', short: 'Fire', icon: Flame, group: 'intelligence' },
   { key: 'farm', label: 'Farm Workspace', short: 'Farms', icon: Tractor, group: 'planning' },
   { key: 'rotation', label: 'Rotation Planner', short: 'Rotation', icon: Sprout, group: 'planning' },
+  { key: 'markets', label: 'Market Prices', short: 'Markets', icon: ShoppingBasket, group: 'planning' },
   { key: 'reports', label: 'Field Reports', short: 'Reports', icon: FileText, group: 'planning' },
   { key: 'organizations', label: 'Organization Workspace', short: 'Workspace', icon: Building2, group: 'enterprise' },
   { key: 'billing', label: 'Plans & Usage', short: 'Plans', icon: CreditCard, group: 'enterprise' },
@@ -127,6 +130,7 @@ function FireWatchAlerts() {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const locale = useLocale();
   const { view, setView, location, activeFarmId, setActiveFarmId, operator, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
   useConsoleHotkeys(!!operator);
@@ -140,7 +144,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const farms = useQuery({ queryKey: ['farms'], queryFn: api.farms, retry: 1 });
 
   const groups = ['mission', 'intelligence', 'planning', 'enterprise', 'trust'];
-  const currentLabel = NAV.find((n) => n.key === view)?.label ?? 'Console';
+  const navLabel = (key: ViewKey) => t(locale, `nav.${key}` as Parameters<typeof t>[1]);
+  const currentLabel = (() => { const key = NAV.find((n) => n.key === view)?.key; return key ? navLabel(key) : 'Console'; })();
 
   const navContent = (
     <nav aria-label="Console navigation" data-tour="nav-rail" className="flex h-full flex-col gap-4 px-3 py-4">
@@ -189,7 +194,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   className={cn('h-4 w-4 shrink-0', active ? 'text-nasa' : 'text-faint group-hover:text-dim')}
                   aria-hidden
                 />
-                <span className="truncate">{item.label}</span>
+                <span className="truncate">{navLabel(item.key)}</span>
                 {active && <ChevronRight className="ml-auto h-3 w-3 text-nasa/70" aria-hidden />}
               </button>
             );
@@ -265,6 +270,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="console-command-actions ml-auto flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
                 <OrganizationSwitcher />
                 <AccountControls />
+                <LocaleSwitcher />
                 <span data-tour="hdr-clock" className="flex items-center">
                   <MissionClock />
                 </span>
@@ -361,12 +367,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <footer className="mt-auto border-t border-edge bg-sidebar">
         <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-4 text-[11px] leading-relaxed text-faint sm:px-6 lg:px-8">
           <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono tracking-wide">
-            <span>DATA — NASA POWER (LaRC) · NASA GIBS EOSDIS · ISRIC SoilGrids 2.0 (CC BY 4.0)</span>
-            <span>VIIRS/MODIS ACTIVE-FIRE DETECTIONS VIA GIBS (FIRMS DETECTION STREAM)</span>
+            <span>{t(locale, 'footer.dataProviders')}</span>
+            <span>{t(locale, 'footer.fireProviders')}</span>
           </div>
           <div className="text-dim/80">
-            TerraField Atlas · NASA Space Apps Challenge 2026 · Environmental associations are not evidence of
-            agricultural causation; no yield or profit predictions.
+            {t(locale, 'footer.missionNotice')}
           </div>
         </div>
       </footer>

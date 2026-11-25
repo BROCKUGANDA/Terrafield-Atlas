@@ -214,6 +214,12 @@ export async function sourceSigns(force = false): Promise<SourceSignsReport> {
     const cached = await runtime.getJson<SourceSignsReport>(cacheKey);
     if (cached) return cached;
   }
+  // A forced refresh must probe now, so it uses its own single-flight lane
+  // with no result caching: concurrent refreshes share one probe set, but the
+  // next click probes again.
+  if (force) {
+    return runtime.singleFlight('source-signs:refresh:force', () => collectSourceSigns(cacheKey), { ttlMs: 0, lockMs: 30_000 });
+  }
   return runtime.singleFlight(`source-signs:refresh:${force ? 'force' : 'cached'}`, async () => {
     if (!force) {
       const cached = await runtime.getJson<SourceSignsReport>(cacheKey);

@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from 'next';
+import { cookies } from 'next/headers';
 import { Space_Grotesk, Archivo, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 import { Providers } from '@/components/providers';
+import { resolveLocale, t } from '@/lib/i18n';
 
 /**
  * Mission-console typography:
@@ -198,21 +200,22 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = resolveLocale(await cookies());
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang={locale} className="dark" suppressHydrationWarning>
       <body
         className={`${spaceGrotesk.variable} ${archivo.variable} ${plexMono.variable} font-sans antialiased bg-background text-foreground`}
       >
-        <Providers>{children}</Providers>
+        <Providers locale={locale}>{children}</Providers>
         <footer className="marketing-footer mx-auto max-w-7xl px-6 py-6 text-sm text-muted-foreground">
-          <a href="/about" className="underline underline-offset-4">Data sources, methodology, privacy & frequently asked questions</a>
+          <a href="/about" className="underline underline-offset-4">{t(locale, 'footer.referenceLink')}</a>
           <details className="mt-4">
-            <summary className="min-h-11 cursor-pointer py-3">Mission questions and evidence limits</summary>
+            <summary className="min-h-11 cursor-pointer py-3">{t(locale, 'footer.referenceSummary')}</summary>
             {FAQ.map((entry) => <section key={entry.q} className="border-t py-4"><h2 className="font-medium text-foreground">{entry.q}</h2><p className="mt-2 leading-relaxed">{entry.a}</p></section>)}
           </details>
         </footer>

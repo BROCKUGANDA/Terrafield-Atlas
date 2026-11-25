@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Map, LineChart, Tractor, Sprout, ScrollText, Flame, FileText,
   Settings, Home, Command, RefreshCw, ClipboardCopy, LogOut, Keyboard,
   Download, MapPin, Search, CircleSlash, Compass, Building2, CreditCard, BrainCircuit, Database,
+  ShoppingBasket,
 } from 'lucide-react';
 import { useSession, type ViewKey } from '@/components/state/store';
 import { useUiStore } from '@/components/state/ui-store';
@@ -30,6 +31,7 @@ const NAV_ITEMS: { key: ViewKey; label: string; icon: React.ComponentType<{ clas
   { key: 'fire', label: 'Fire Intelligence', icon: Flame, shortcut: 'F', blurb: 'VIIRS active-fire detections' },
   { key: 'farm', label: 'Farm Workspace', icon: Tractor, shortcut: 'W', blurb: 'Boundaries, soil tests, notes' },
   { key: 'rotation', label: 'Rotation Planner', icon: Sprout, shortcut: 'R', blurb: 'Compare scenario scores' },
+  { key: 'markets', label: 'Market Prices', icon: ShoppingBasket, shortcut: 'M', blurb: 'HDX/WFP monthly food prices' },
   { key: 'reports', label: 'Field Reports', icon: FileText, shortcut: 'B', blurb: 'Assembled evidence documents' },
   { key: 'organizations', label: 'Organization Workspace', icon: Building2, shortcut: 'G', blurb: 'Teams, workspaces & invitations' },
   { key: 'billing', label: 'Plans & Usage', icon: CreditCard, shortcut: 'U', blurb: 'Entitlements, API keys & webhooks' },

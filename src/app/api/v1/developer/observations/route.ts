@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { apiHandler, decodeCursor, encodeCursor, isoDateSchema, jsonResponse, paginationSchema } from '@/lib/api/helpers';
-import { developerGuard, meterDeveloperRequest } from '@/lib/developer';
+import { meterDeveloperRequest, runDeveloper } from '@/lib/developer';
 import { visibleObservationScope } from '@/lib/tenancy';
 import { POWER_VARIABLES } from '@/lib/types';
 import type { VariableKey } from '@/lib/types';
@@ -13,8 +13,7 @@ const querySchema = z.object({
   to: isoDateSchema.optional(),
 }).merge(paginationSchema(10_000, 1_000)).refine((value) => !value.from || !value.to || value.from <= value.to);
 
-export const GET = apiHandler(async (req, { correlationId }) => {
-  const guard = await developerGuard(req, 'observations.read');
+export const GET = apiHandler((req, { correlationId }) => runDeveloper(req, 'observations.read', async (guard) => {
   const query = querySchema.parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
   const rows = await db.environmentalObservation.findMany({
     where: {
@@ -34,4 +33,4 @@ export const GET = apiHandler(async (req, { correlationId }) => {
     count: page.length,
     nextCursor: rows.length > query.limit ? encodeCursor(page[page.length - 1].id) : null,
   }, { correlationId, headers: { 'X-RateLimit-Remaining': String(guard.remaining) } });
-});
+}));

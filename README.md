@@ -96,9 +96,19 @@ docker compose up -d --wait  # full private Compose stack (requires .env)
 - **Watchdog & safety nets:** `src/instrumentation.ts` registers a 5-min watchdog that restarts a hung scheduler timer (`ensureSchedulerAlive`), logs `unhandledRejection`/`uncaughtException` (serve continues; readiness reports honestly), and closes Prisma on SIGTERM/SIGINT.
 - **Always-live degradation:** GIBS tile fetches serve the last good snapshot labeled `stale` on a total host outage; EONET serves stale snapshots with a labeled note; a hard error only ever means "no snapshot ever existed", never fabricated data.
 - **Race safety:** scheduler claims are conditional atomic updates (`updateMany` guarded on `nextReevaluateAt` — losers skip, never double-run); bulk inserts (POWER observations, fire detections) are P2002-safe (`lib/db-write.ts`): concurrent duplicate natural keys resolve row-by-row instead of failing the job.
-- **Security headers:** X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, COOP, HSTS (next.config.ts). A nonce-based CSP ships in **report-only** mode (`src/middleware.ts`, `POST /api/v1/csp-report`); Next stamps its inline flight scripts with the per-request nonce and violations are logged rather than blocked until the ledger is clean.
+- **Security headers:** X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, COOP, HSTS (next.config.ts). An enforced CSP ships from `src/middleware.ts` with a violation sink at `POST /api/v1/csp-report`. Static pages cannot carry a per-request script nonce, so `script-src` allows `'unsafe-inline'` while every other vector (external origins, objects, base-uri, framing, workers, form targets) is locked down; see LIMITATIONS.
 - **Transport hardening (client):** caller/timeout cancellation stays distinguishable, `Retry-After` is honored, malformed 2xx JSON rejects, GETs retry once, and every mutation carries an idempotency key without auto-retry.
 - **Error/loading UX:** themed SSR `loading.tsx` / `error.tsx` / `global-error.tsx` / `not-found.tsx`, per-module error boundaries with fault digests + copyable diagnostics, unified QueryState skeletons/fault/empty panels.
+
+## Enterprise security, developer platform, and operations (0.5.0)
+
+- **RLS enforced in production.** Request-scoped Prisma work runs as `terrafield_app` through `TENANT_DATABASE_URL` (derived from `.env` at deploy) with transaction-local `app.user_id`, `app.organization_id` and `app.schema`; auth, workers and migrations keep the owner connection. `tests/tenant-rls.integration.ts` plus the five integration suites under `TENANT_RLS_TEST=1` verify cross-tenant denial.
+- **Observability on the host.** `deploy/host-monitoring` runs Prometheus and Grafana on loopback, scrapes `/api/v1/metrics` (blocked publicly at Caddy), provisions the dashboard and alert rules. Start/refresh with `docker compose --env-file .env -f deploy/host-monitoring/compose.yaml up -d`; reach the UIs through an SSH tunnel (`9090`, `3001`).
+- **Account deletion and password reset.** `POST /api/v1/account/delete` requires password + `DELETE`, writes an audit event and returns blocker counts while the account still owns data. Password reset is single-use, hashed and one hour.
+- **OAuth 2.0 client credentials.** `POST /api/v1/oauth/token` exchanges a hashed client secret for a one-hour opaque token scoped to the organization; clients are managed at `/api/v1/organizations/{id}/oauth-clients`. API keys continue to work unchanged.
+- **Invoice settlement.** `GET/POST /api/v1/billing/invoices`, `POST …/{id}/settle`, `POST …/{id}/void` issue per-period invoices and record manual bank/cash settlements; no card processor is connected.
+- **Market prices.** `GET /api/v1/markets/prices` and `POST /api/v1/markets/ingest` serve the WFP/FIT Uganda HDX feed with monthly median/min/max aggregation, provenance and an ingestion ledger.
+- **Localization.** Cookie/query locale (`en`, `sw`) with typed dictionaries, `Intl` formatting and a switcher; navigation, account, marketing shell and landing hero are translated, with untranslated scientific/provider copy documented.
 
 ## A/B experiments (deterministic, ledger-backed)
 

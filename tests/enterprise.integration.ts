@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { createPostgresTestDatabase, deployMigrations } from './postgres-test-database';
+import { createPostgresTestDatabase, deployMigrations, enableTenantRlsTest } from './postgres-test-database';
 
 if (process.env.ENTERPRISE_TEST_WORKER !== '1') {
   test('enterprise tenancy, commercial, developer, webhook, and intelligence integration (isolated process)', () => {
@@ -19,6 +19,7 @@ if (process.env.ENTERPRISE_TEST_WORKER !== '1') {
   process.env.WEBHOOK_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64url');
   const setup = deployMigrations(database.url);
   if (setup.status !== 0) throw new Error(`${setup.stdout}\n${setup.stderr}`);
+  await enableTenantRlsTest(database.url);
 
   const { db } = await import('@/lib/db');
   const { NextRequest } = await import('next/server');
@@ -101,7 +102,8 @@ if (process.env.ENTERPRISE_TEST_WORKER !== '1') {
   });
 
   test('API keys are hashed, scoped, revocable, and tenant-aware', async () => {
-    const created = await apiKeyRoutes.POST(request('api-keys', 'POST', cookies[0], { name: 'Test key', scopes: ['farms.read'] }), ctx());
+    const organization = await db.organization.findFirstOrThrow({ where: { name: 'Test Cooperative' } });
+    const created = await apiKeyRoutes.POST(request('api-keys', 'POST', cookies[0], { name: 'Test key', scopes: ['farms.read'] }, organization.id), ctx());
     expect(created.status).toBe(201);
     const payload = await created.json();
     expect(payload.secret.startsWith('tf_live_')).toBe(true);

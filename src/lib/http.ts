@@ -2,10 +2,10 @@ import { db } from '@/lib/db';
 import { stableHash } from '@/lib/cache';
 import { isPrivateProvider, providerAttribution } from '@/lib/ingest/provider-context';
 import { redisRuntime } from '@/lib/redis';
-import { fetchPinnedPublicUrl } from '@/lib/network-safety';
+import { assertPublicUrl, fetchPinnedPublicUrl } from '@/lib/network-safety';
 
 /** Resilient provider transport. This module is the only server retry owner. */
-export type Provider = 'NASA_POWER' | 'GIBS' | 'SOILGRIDS' | 'FIRMS' | 'EONET' | 'STAC';
+export type Provider = 'NASA_POWER' | 'GIBS' | 'SOILGRIDS' | 'FIRMS' | 'EONET' | 'STAC' | 'HDX';
 
 export class ProviderUnavailableError extends Error {
   constructor(provider: Provider, detail: string) {
@@ -16,7 +16,7 @@ export class ProviderUnavailableError extends Error {
 
 const FAILURE_THRESHOLD = 4;
 const COOLDOWN_MS = 60_000;
-const PROVIDERS: Provider[] = ['NASA_POWER', 'GIBS', 'SOILGRIDS', 'FIRMS', 'EONET', 'STAC'];
+const PROVIDERS: Provider[] = ['NASA_POWER', 'GIBS', 'SOILGRIDS', 'FIRMS', 'EONET', 'STAC', 'HDX'];
 
 export async function circuitStatus() {
   if (isPrivateProvider()) return PROVIDERS.map((provider) => ({ provider, consecutiveFailures: 0, open: false, cooldownRemainingMs: 0 }));
@@ -47,6 +47,14 @@ export interface FetchOptions {
   signal?: AbortSignal;
   pinned?: boolean;
   maxResponseBytes?: number;
+  /**
+   * Follow up to three provider redirects (e.g. HDX CKAN file downloads that
+   * hand off to signed object storage). Every hop is re-validated and fetched
+   * through the DNS-pinned public-URL transport; only the ORIGINAL provider URL
+   * is written to provenance so signed redirect query strings never reach the
+   * ledger.
+   */
+  followRedirects?: boolean;
 }
 
 export interface FetchOutcome {
@@ -159,9 +167,25 @@ export async function resilientFetch(url: string, opts: FetchOptions): Promise<F
       // Only provider transport belongs to the retry classifier. Redis and
       // provenance operations run after this catch so runtime outages can
       // never cause a successful or permanent provider call to be repeated.
-      const res = opts.pinned
-        ? await fetchPinnedPublicUrl(url, { signal, timeoutMs, maxResponseBytes: opts.maxResponseBytes, headers: { accept: '*/*' } })
-        : await fetch(url, { signal, headers: { accept: '*/*' }, cache: 'no-store', redirect: 'manual' });
+      let currentUrl = url;
+      const requestUrl = (target: string, pinTarget: boolean) => opts.pinned === true || pinTarget
+        ? fetchPinnedPublicUrl(target, { signal, timeoutMs, maxResponseBytes: opts.maxResponseBytes, headers: { accept: '*/*' } })
+        : fetch(target, { signal, headers: { accept: '*/*' }, cache: 'no-store', redirect: 'manual' });
+      let res = await requestUrl(currentUrl, false);
+      for (let hop = 0; hop < 4; hop++) {
+        const isRedirect = res.status === 301 || res.status === 302 || res.status === 303
+          || res.status === 307 || res.status === 308;
+        if (opts.followRedirects !== true || !isRedirect) break;
+        const location = res.headers.get('location');
+        if (!location) break;
+        if (hop === 3) throw new Error('provider redirect chain exceeded 3 hops');
+        const next = new URL(location, currentUrl);
+        const verdict = assertPublicUrl(next.toString());
+        if (!verdict.ok) throw new Error(`provider redirect refused: ${verdict.reason ?? 'unsafe target'}`);
+        await res.body?.cancel().catch(() => undefined);
+        currentUrl = next.toString();
+        res = await requestUrl(currentUrl, true);
+      }
       retryAfterHeader = res.headers.get('retry-after');
       const body = await res.arrayBuffer();
       const latencyMs = Date.now() - started;

@@ -163,6 +163,8 @@ test('SoilGrids exhausted timeouts stop after two attempts without a fabricated 
 test('health probes treat a sparse fire tile as reachable without claiming detections', async () => {
   const host = globalThis as typeof globalThis & { __terraSourceProbeMem?: Map<string, unknown> };
   host.__terraSourceProbeMem?.clear();
+  const { redisRuntime } = await import('@/lib/redis');
+  await redisRuntime().setJson('source-probe:SOILGRIDS', { lastLiveAt: 0, lastDetail: 'test reset' }, { ttlMs: 1_000 });
   const originalUpdate = db.dataSource.updateMany;
   db.dataSource.updateMany = mock(async () => ({ count: 0 })) as typeof originalUpdate;
   const urls: string[] = [];

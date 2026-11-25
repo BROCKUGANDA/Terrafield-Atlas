@@ -26,16 +26,31 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 | Quantitative raster pipeline | Geospatial | implemented | Raster service, artifact volume | 7 Python tests pass; enterprise asset test passes | Deployed 0.4.0 | Retention policy remains operational work |
 | Database RLS | Security | implemented | RLS migration, tenant proxy | 3 RLS integration tests pass | Deployed 0.4.0 | Ensure production web role and GUC settings are deployed |
 | Runtime dependency patching | Security | verified | `bun audit` | 0 vulnerabilities across 794 packages | Build artifact | Keep CI audit enabled |
-| CSP | Security | implemented (report-only) | Nonce middleware, report endpoint | `tests/csp.test.ts` | Deployed 0.4.0 | Promote to enforcing after a clean violation ledger |
+| CSP | Security | verified (enforced) | Middleware, report endpoint | `tests/csp.test.ts`; live browser check | Deploying 0.5.0 | Inline scripts allowed because pages are static; nonce needs dynamic rendering |
 | Password reset | Identity | verified | PasswordReset migration, email | `tests/account-isolation.test.ts` (request, replay, expiry, weak password) | Deployed 0.4.0 | Account deletion still absent |
 | Provider provenance attribution | Security | verified | Provider attribution context | `tests/private-provider-context.test.ts` | Deployed 0.4.0 | Personal (non-organization) private calls remain unlogged by design |
-| Host deploy path | SRE | implemented | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deployed 0.4.0 | GitHub Actions blocked by account billing lock; local script used |
-| Observability dashboards | SRE | partial | Production-scale metrics work | Concurrent session | In progress | Prometheus/Grafana acceptance pending |
+| Host deploy path | SRE | verified | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deployed 0.4.0 | GitHub Actions blocked by account billing lock; local script used |
+| Tenant RLS enforcement | Security | verified | `TENANT_DATABASE_URL`, policy migrations | `tests/tenant-rls.integration.ts`; 5 suites with `TENANT_RLS_TEST=1` | Deploying 0.5.0 | Auth/worker/bootstrap paths intentionally use the owner role |
+| Host observability | SRE | implemented | Prometheus/Grafana compose | `tests/deployment-config.test.ts`; live scrape | Deploying 0.5.0 | Single-host, loopback-only; off-host retention is operator work |
+| Account deletion | Identity | verified | Password + confirmation, blockers | `tests/account-isolation.test.ts` | Deploying 0.5.0 | Blocked while the account owns data |
+| OAuth client credentials | Developer platform | verified | Hashed clients/tokens, scopes | `tests/oauth.integration.ts` | Deploying 0.5.0 | No authorization-code flow, rotation or token GC |
+| Invoice settlement | Commercial | verified | Invoice/Payment tables, manual methods | `tests/billing-invoices.integration.ts` | Deploying 0.5.0 | No card processor; provider method rejected |
+| Market prices | Markets | verified | HDX/WFP Uganda CSV | `tests/market-prices.test.ts`; live ingest | Deploying 0.5.0 | Nominal survey data only, no forecasts |
+| Localization | UX | implemented | `src/lib/i18n.ts`, cookie locale | `tests/i18n.test.ts` | Deploying 0.5.0 | en/sw chrome and entry surfaces; long-form copy English |
+| Dependabot advisories | Security | verified | python-multipart 0.0.34 | Alert review; 0 bun audit findings | Deploying 0.5.0 | Re-scan after push |
+| Observability dashboards | SRE | implemented | Host Prometheus/Grafana | `tests/deployment-config.test.ts` | Deploying 0.5.0 | Acceptance pending on host |
 | Backup/restore drill | SRE | partial | Production-scale deploy work | Concurrent session | In progress | Required before release |
 
 ## Change log
 
-### 2026-11-27
+### 2026-11-27 (0.5.0)
+
+- Enforced RLS for request-scoped queries with a tenant app-role connection; completed policies for onboarding, members, OAuth, invoices and payments.
+- Added host Prometheus/Grafana and blocked public metrics at the edge.
+- Added account deletion, OAuth client credentials, invoice settlement, HDX market prices and en/sw localization; enforced CSP.
+- Patched python-multipart to 0.0.34, closing all Dependabot alerts.
+
+### 2026-11-27 (0.4.0)
 
 - Deployed 0.4.0 to the production VPS; validation evidence in `docs/release-validation-0.4.0.md`.
 - Added nonce-based CSP middleware in report-only mode and a bounded `/api/v1/csp-report` intake; enforcement stays off until the violation ledger is clean.

@@ -11,6 +11,7 @@ export type ViewKey =
   | 'analysis'
   | 'farm'
   | 'rotation'
+  | 'markets'
   | 'provenance'
   | 'fire'
   | 'reports'

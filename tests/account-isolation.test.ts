@@ -5,7 +5,7 @@ import { encode } from 'next-auth/jwt';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { createPostgresTestDatabase, deployMigrations } from './postgres-test-database';
+import { createPostgresTestDatabase, deployMigrations, enableTenantRlsTest } from './postgres-test-database';
 import { createFetchMock } from './fetch-mock';
 
 // Keep Prisma singletons, credentials and mail transport spies out of other suites.
@@ -25,6 +25,7 @@ process.env.NEXTAUTH_URL = 'https://accounts.example.test';
 process.env.WATCH_SCHEDULER_OFF = '1';
 const setup = deployMigrations(database.url);
 if (setup.status !== 0) throw new Error(`${setup.stdout}\n${setup.stderr}`);
+await enableTenantRlsTest(database.url);
 
 const { db } = await import('@/lib/db');
 const { hashPassword, verifyPassword, accountRateLimit, tokenHash, verificationToken } = await import('@/lib/account-security');
@@ -53,6 +54,7 @@ const registerRoutes = await import('@/app/api/v1/account/register/route');
 const verifyRoutes = await import('@/app/api/v1/account/verify/route');
 const resetRequestRoutes = await import('@/app/api/v1/account/password-reset/request/route');
 const resetConfirmRoutes = await import('@/app/api/v1/account/password-reset/confirm/route');
+const deleteRoutes = await import('@/app/api/v1/account/delete/route');
 
 const origin = process.env.NEXTAUTH_URL!;
 let cookieA: string;
@@ -406,5 +408,68 @@ test('password reset is single-use, expiring, origin-bound and replaces the pass
     delete process.env.RESEND_API_KEY;
     delete process.env.EMAIL_FROM;
   }
+}, 30_000);
+
+test('account deletion requires the right password, origin and confirmation phrase', async () => {
+  const password = 'a long test password';
+  const user = await db.accountUser.create({ data: { email: 'delete-guard@example.test', passwordHash: await hashPassword(password), emailVerified: new Date() } });
+  const cookie = `__Secure-next-auth.session-token=${await encode({ token: { sub: user.id }, secret: process.env.NEXTAUTH_SECRET!, maxAge: 3600 })}`;
+
+  expect((await deleteRoutes.POST(request('account/delete', 'POST', cookie, { password: 'definitely wrong', confirmation: 'DELETE' }))).status).toBe(401);
+  expect((await deleteRoutes.POST(request('account/delete', 'POST', cookie, { password, confirmation: 'delete' }))).status).toBe(400);
+  expect((await deleteRoutes.POST(request('account/delete', 'POST', cookie, { password, confirmation: 'DELETE' }, 'https://evil.test'))).status).toBe(403);
+  expect(await db.accountUser.findUnique({ where: { id: user.id } })).not.toBeNull();
+  expect(await authenticatePassword('delete-guard@example.test', password)).not.toBeNull();
+}, 30_000);
+
+test('account deletion reports 409 blocker counts while owned resources remain', async () => {
+  const organization = await db.organization.create({ data: { name: 'Blocked owner org', slug: `blocked-owner-${userA}` } });
+  await db.membership.create({ data: { organizationId: organization.id, userId: userA, role: 'owner' } });
+
+  const response = await deleteRoutes.POST(request('account/delete', 'POST', cookieA, { password: 'a long test password', confirmation: 'DELETE' }));
+  expect(response.status).toBe(409);
+  const body = await response.json();
+  expect(body.error.code).toBe('ACCOUNT_HAS_BLOCKERS');
+  expect(body.error.details.organizationsOwned).toBeGreaterThanOrEqual(1);
+  expect(body.error.details.soleOwnerOrganizations).toBeGreaterThanOrEqual(1);
+  expect(body.error.details.farmsOwned).toBeGreaterThanOrEqual(1);
+  expect(body.error.details.watchlistsOwned).toBeGreaterThanOrEqual(1);
+  expect(await db.accountUser.findUnique({ where: { id: userA } })).not.toBeNull();
+}, 30_000);
+
+test('a clean account deletes with credentials and cannot sign in afterwards', async () => {
+  const email = 'delete-clean@example.test';
+  const password = 'a long test password';
+  const user = await db.accountUser.create({ data: {
+    email, passwordHash: await hashPassword(password), emailVerified: new Date(),
+    identities: { create: { provider: 'google', providerAccountId: 'clean-delete-sub' } },
+    verifications: { create: { tokenHash: tokenHash(verificationToken()), expiresAt: new Date(Date.now() + 60_000) } },
+    passwordResets: { create: { tokenHash: tokenHash(verificationToken()), expiresAt: new Date(Date.now() + 60_000) } },
+  } });
+  const organization = await db.organization.create({ data: { name: 'Deletion survivor', slug: `deletion-survivor-${user.id}` } });
+  await db.membership.create({ data: { organizationId: organization.id, userId: user.id, role: 'viewer' } });
+  await db.apiKey.create({ data: {
+    organizationId: organization.id, ownerId: user.id, createdById: user.id,
+    name: 'deleting key', prefix: 'tf_test', keyHash: tokenHash(verificationToken()), scopesJson: '[]',
+  } });
+  const cookie = `__Secure-next-auth.session-token=${await encode({ token: { sub: user.id }, secret: process.env.NEXTAUTH_SECRET!, maxAge: 3600 })}`;
+
+  const response = await deleteRoutes.POST(request('account/delete', 'POST', cookie, { password, confirmation: 'DELETE' }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: true });
+
+  expect(await db.accountUser.findUnique({ where: { id: user.id } })).toBeNull();
+  expect(await db.accountIdentity.count({ where: { userId: user.id } })).toBe(0);
+  expect(await db.accountVerification.count({ where: { userId: user.id } })).toBe(0);
+  expect(await db.passwordReset.count({ where: { userId: user.id } })).toBe(0);
+  expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
+  expect(await db.apiKey.count({ where: { ownerId: user.id } })).toBe(0);
+  expect(await db.organization.findUnique({ where: { id: organization.id } })).not.toBeNull();
+  expect(await accountUserId(request('farms', 'GET', cookie))).toBeNull();
+  expect(await authenticatePassword(email, password)).toBeNull();
+
+  const audit = await db.auditEvent.findFirst({ where: { action: 'account.deleted', targetId: user.id } });
+  expect(audit?.actor).toBe(`account:${user.id}`);
+  expect(JSON.stringify(audit)).not.toContain(email);
 }, 30_000);
 }

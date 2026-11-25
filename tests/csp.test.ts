@@ -3,24 +3,21 @@ import { NextRequest } from 'next/server';
 import { middleware } from '@/middleware';
 import { POST as cspReport } from '@/app/api/v1/csp-report/route';
 
-describe('CSP report-only rollout', () => {
-  test('every document response carries a nonce and a report-only policy', () => {
-    const response = middleware(new NextRequest('https://terrafield.example.test/'));
-    const policy = response.headers.get('content-security-policy-report-only');
+describe('CSP enforcement', () => {
+  test('every document response carries an enforced policy with a report sink', () => {
+    const response = middleware();
+    const policy = response.headers.get('content-security-policy');
     expect(policy).not.toBeNull();
     expect(policy).toContain("default-src 'self'");
     expect(policy).toContain("object-src 'none'");
+    expect(policy).toContain("base-uri 'self'");
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).toContain("worker-src 'self' blob:");
     expect(policy).toContain('report-uri /api/v1/csp-report');
-    const nonce = /'nonce-([A-Za-z0-9+/=]+)'/.exec(policy!)?.[1];
-    expect(nonce?.length).toBeGreaterThanOrEqual(20);
-    // Enforcing mode stays off until the violation ledger is clean.
-    expect(response.headers.get('content-security-policy')).toBeNull();
-  });
-
-  test('the nonce differs per request', () => {
-    const first = middleware(new NextRequest('https://terrafield.example.test/')).headers.get('content-security-policy-report-only');
-    const second = middleware(new NextRequest('https://terrafield.example.test/')).headers.get('content-security-policy-report-only');
-    expect(first).not.toBe(second);
+    // Static pages cannot carry a per-request nonce; inline scripts stay
+    // allowed and that residual risk is documented in LIMITATIONS.
+    expect(policy).toContain("script-src 'self' 'unsafe-inline'");
+    expect(response.headers.get('content-security-policy-report-only')).toBeNull();
   });
 
   test('violation reports are bounded, validated and never echoed', async () => {

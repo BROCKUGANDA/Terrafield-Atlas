@@ -600,6 +600,82 @@ export interface DigestChannelStatus {
   note: string;
 }
 
+export interface MarketSeriesPoint {
+  month: string;
+  median: number;
+  min: number;
+  max: number;
+  sampleCount: number;
+}
+
+export interface MarketIngestionRecord {
+  id: string;
+  datasetId: string;
+  resourceUrl: string;
+  resourceUpdatedAt: string | null;
+  rowCount: number;
+  accepted: number;
+  skipped: number;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  errorDetail: string | null;
+}
+
+export interface MarketPricesResponse {
+  countryCode: string;
+  range: { from: string; to: string };
+  selection: {
+    commodityId: string | null;
+    marketId: string | null;
+    unit: string | null;
+    currency: string | null;
+  };
+  coverage: {
+    storedRows: number;
+    firstDate: string | null;
+    lastDate: string | null;
+    monthsWithData: number;
+    truncated: boolean;
+    commodities: { id: string; name: string; observations: number }[];
+    markets: { id: string; name: string; observations: number }[];
+  };
+  series: MarketSeriesPoint[];
+  provenance: {
+    provider: string;
+    datasetId: string;
+    datasetName: string;
+    countryCode: string;
+    licence: string;
+    attribution: string;
+    sourceUrl: string;
+    retrievedAt: string | null;
+    resourceUrl: string | null;
+    resourceUpdatedAt: string | null;
+    latestIngestion: MarketIngestionRecord | null;
+    note: string;
+  };
+}
+
+export interface MarketIngestResponse {
+  ingestion: MarketIngestionRecord;
+  counts: {
+    rowsRead: number;
+    accepted: number;
+    eligible: number;
+    inserted: number;
+    alreadyStored: number;
+    skipped: number;
+    truncated: boolean;
+    reasons: Record<string, number>;
+  };
+  dataset: { title: string; licence: string };
+  resource: { name: string | null; url: string; updatedAt: string | null };
+  window: { months: number; cutoff: string };
+  retrievedAt: string;
+  note: string;
+}
+
 export interface DataSourceRow {
   id: string;
   provider: string;
@@ -1171,4 +1247,19 @@ export const api = {
   systemSources: (force = false) => request<SourcesLiveResponse>(`/api/v1/system/sources${force ? '?force=1' : ''}`),
   reports: () => request<{ reports: { id: string; title: string; format: string; farmId: string | null; createdAt: string }[]; nextCursor: string | null }>('/api/v1/reports'),
   report: (farmId: string, persist = false) => request<ReportResponse>('/api/v1/reports', { method: 'POST', body: JSON.stringify({ farmId, persist }) }),
+  marketPrices: (params: { commodityId?: string; marketId?: string; unit?: string; from?: string; to?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.commodityId) query.set('commodityId', params.commodityId);
+    if (params.marketId) query.set('marketId', params.marketId);
+    if (params.unit) query.set('unit', params.unit);
+    if (params.from) query.set('from', params.from);
+    if (params.to) query.set('to', params.to);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return request<MarketPricesResponse>(`/api/v1/markets/prices${suffix}`);
+  },
+  ingestMarketPrices: () => request<MarketIngestResponse>(
+    '/api/v1/markets/ingest',
+    { method: 'POST', body: '{}' },
+    { timeoutMs: 90_000 },
+  ),
 };

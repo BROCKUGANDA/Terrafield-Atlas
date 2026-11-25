@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
-import { db } from '@/lib/db';
+import { db, rawDb } from '@/lib/db';
 import { AccountAccessError } from '@/lib/access-error';
 import type { TenantContext } from '@/lib/tenancy';
 
@@ -122,12 +122,12 @@ function usageStart(metric: UsageMetric): Date {
 
 export async function usageFor(context: TenantContext, metric: UsageMetric): Promise<number> {
   if (metric === 'farms') {
-    if (context.organizationId) return db.farm.count({ where: { organizationId: context.organizationId } });
-    return db.farm.count({ where: { ownerId: context.userId } });
+    if (context.organizationId) return rawDb.farm.count({ where: { organizationId: context.organizationId } });
+    return rawDb.farm.count({ where: { ownerId: context.userId } });
   }
   if (metric === 'storage_mb') return 0; // object-storage metering is not configured yet
   const scope = context.organizationId ? { organizationId: context.organizationId } : { ownerId: context.userId };
-  const result = await db.usageEvent.aggregate({
+  const result = await rawDb.usageEvent.aggregate({
     where: { ...scope, metric, occurredAt: { gte: usageStart(metric) } },
     _sum: { quantity: true },
   });
@@ -180,7 +180,7 @@ export async function recordUsage(input: {
   jobId?: string;
   billed?: boolean;
 }): Promise<void> {
-  await db.usageEvent.create({
+  await rawDb.usageEvent.create({
     data: {
       organizationId: input.context.organizationId,
       ownerId: input.context.userId,

@@ -423,6 +423,8 @@ model AccountUser {
   subscriptions      Subscription[]
   apiKeys            ApiKey[]                 @relation("ApiKeyOwner")
   createdApiKeys     ApiKey[]                 @relation("ApiKeyCreator")
+  oauthClients       OAuthClient[]
+  recordedPayments   Payment[]                @relation("PaymentRecorder")
   usageEvents        UsageEvent[]
   agentRuns          AgentRun[]
   savedMapViews      SavedMapView[]
@@ -532,13 +534,14 @@ model DeliveryReceipt {
 // ---------------------------------------------------------------------------
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  country   String?
-  timezone  String   @default("Africa/Kampala")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  createdById String?  @default(dbgenerated("NULLIF(current_setting('app.user_id', true), '')"))
+  name        String
+  slug        String   @unique
+  country     String?
+  timezone    String   @default("Africa/Kampala")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   memberships    Membership[]
   invitations    OrganizationInvitation[]
@@ -558,6 +561,10 @@ model Organization {
   agentRuns      AgentRun[]
   savedMapViews  SavedMapView[]
   rasterAssets   RasterAsset[]
+  oauthClients   OAuthClient[]
+  invoices       Invoice[]
+
+  @@index([createdById])
 }
 
 model Membership {
@@ -641,6 +648,7 @@ model Subscription {
   cancelAt           DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
+  invoices           Invoice[]
 
   @@index([organizationId, status])
   @@index([ownerId, status])
@@ -845,21 +853,134 @@ model FeatureFlag {
 }
 
 model RasterAsset {
-  id            String   @id @default(cuid())
-  ownerId       String?
-  owner         AccountUser? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  id             String        @id @default(cuid())
+  ownerId        String?
+  owner          AccountUser?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   organizationId String?
-  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  filename      String
-  format        String
-  sourceHash    String
-  artifactRef   String   @unique
-  artifactBytes Int
-  statsJson     String
-  lineageJson   String
-  createdAt     DateTime @default(now())
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  filename       String
+  format         String
+  sourceHash     String
+  artifactRef    String        @unique
+  artifactBytes  Int
+  statsJson      String
+  lineageJson    String
+  createdAt      DateTime      @default(now())
 
   @@index([ownerId, createdAt])
   @@index([organizationId, createdAt])
   @@index([sourceHash])
+}
+
+// ---------------------------------------------------------------------------
+// Developer OAuth, invoice settlement, and market price intelligence
+// ---------------------------------------------------------------------------
+
+model OAuthClient {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String
+  owner          AccountUser  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name           String
+  clientId       String       @unique
+  secretHash     String
+  scopesJson     String
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  lastUsedAt     DateTime?
+  tokens         OAuthToken[]
+
+  @@index([organizationId, active])
+}
+
+model OAuthToken {
+  id         String      @id @default(cuid())
+  clientId   String
+  client     OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tokenHash  String      @unique
+  scopesJson String
+  expiresAt  DateTime
+  createdAt  DateTime    @default(now())
+
+  @@index([clientId, expiresAt])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String?
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  number         String        @unique
+  status         String        @default("open") // open | paid | void
+  amountMinor    Int
+  currency       String        @default("USD")
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  issuedAt       DateTime      @default(now())
+  dueAt          DateTime
+  paidAt         DateTime?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  payments       Payment[]
+
+  @@index([organizationId, status])
+  @@index([ownerId, status])
+}
+
+model Payment {
+  id               String       @id @default(cuid())
+  invoiceId        String
+  invoice          Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  organizationId   String?
+  amountMinor      Int
+  currency         String
+  method           String // manual_bank | manual_cash | provider
+  status           String       @default("succeeded") // pending | succeeded | failed
+  reference        String?
+  recordedByUserId String?
+  recordedBy       AccountUser? @relation("PaymentRecorder", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime     @default(now())
+
+  @@index([invoiceId])
+  @@index([organizationId, createdAt])
+}
+
+model MarketPrice {
+  id             String   @id @default(cuid())
+  sourceProvider String // HDX_WFP
+  datasetId      String
+  countryCode    String
+  marketId       String
+  marketName     String
+  commodityId    String
+  commodityName  String
+  unit           String
+  currency       String
+  price          Float
+  priceDate      DateTime
+  category       String?
+  retrievedAt    DateTime @default(now())
+
+  @@unique([sourceProvider, marketId, commodityId, priceDate, unit, currency])
+  @@index([countryCode, commodityId, priceDate])
+}
+
+model MarketIngestion {
+  id                String    @id @default(cuid())
+  datasetId         String
+  resourceUrl       String
+  resourceUpdatedAt DateTime?
+  rowCount          Int
+  accepted          Int
+  skipped           Int
+  startedAt         DateTime  @default(now())
+  finishedAt        DateTime?
+  status            String    @default("running") // running | succeeded | failed
+  errorDetail       String?
+
+  @@index([datasetId, startedAt])
 }

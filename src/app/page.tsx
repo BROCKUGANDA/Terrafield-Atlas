@@ -13,6 +13,7 @@ const SourcesView = dynamic(() => import('@/components/views/sources').then((m) 
 const AnalysisView = dynamic(() => import('@/components/views/analysis').then((m) => m.AnalysisView));
 const FarmWorkspaceView = dynamic(() => import('@/components/views/farm-workspace').then((m) => m.FarmWorkspaceView));
 const RotationPlannerView = dynamic(() => import('@/components/views/rotation-planner').then((m) => m.RotationPlannerView));
+const MarketsView = dynamic(() => import('@/components/views/markets').then((m) => m.MarketsView));
 const ProvenanceView = dynamic(() => import('@/components/views/provenance').then((m) => m.ProvenanceView));
 const FireIntelligenceView = dynamic(() => import('@/components/views/fire-intelligence').then((m) => m.FireIntelligenceView));
 const ReportsView = dynamic(() => import('@/components/views/reports').then((m) => m.ReportsView));
@@ -58,6 +59,7 @@ export default function Home() {
           {activeView === 'analysis' && <AnalysisView />}
           {activeView === 'farm' && <FarmWorkspaceView />}
           {activeView === 'rotation' && <RotationPlannerView />}
+          {activeView === 'markets' && <MarketsView />}
           {activeView === 'provenance' && <ProvenanceView />}
           {activeView === 'fire' && <FireIntelligenceView />}
           {activeView === 'reports' && <ReportsView />}
