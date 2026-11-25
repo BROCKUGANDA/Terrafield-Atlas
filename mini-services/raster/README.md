@@ -26,7 +26,7 @@ Build `Dockerfile` and place the service on the private application network. Set
 
 ## Limitations
 
-- This foundation computes statistics; it does not yet persist derived raster assets.
+- This foundation computes statistics and can persist the derived result JSON to `RASTER_ARTIFACT_DIR` (default `/artifacts`); the Next API records the artifact reference and lineage in `RasterAsset`.
 - Categorical rasters should use nearest-neighbour reprojection.
 - NetCDF/Zarr ingestion requires a separate reviewed adapter.
 - Scientific validation remains the responsibility of the analytical method that consumes these statistics.

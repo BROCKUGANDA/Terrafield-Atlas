@@ -40,6 +40,12 @@ The migration creates `terrafield_app` with no login password. The web URL uses 
 
 Cross-tenant database behavior is verified by `tests/rls.integration.ts`, which switches to `terrafield_app` and asserts that foreign rows are invisible and cross-tenant writes affect zero rows.
 
+## Operator handoff
+
+`scripts/deploy-vps.sh` performs the host deploy used by production: it ships the source over SSH, takes a checksummed `pg_dump` of the PostgreSQL container, runs `bun install --frozen-lockfile`, Prisma generate/migrate, the production build, restarts `terrafield.service`, and gates on `/api/v1/readyz`. Any failure after the previous build was set aside restores it and restarts the service. The Compose overlay remains the alternative for a container-only deployment (`deploy/scripts/release.sh`).
+
+Required environment variables: `VPS_HOST`, `VPS_PORT`, `VPS_USER`, `VPS_SSH_KEY`, `NEXTAUTH_SECRET`, `POSTGRES_PASSWORD`, `DOMAIN`, and `GRAFANA_ADMIN_PASSWORD`. Provide them through the platform secret mechanism, not a chat message or committed file.
+
 ## Rollback
 
 Remove the overlay by stopping with the same two `-f` arguments and starting the base stack normally. The schema migration is additive; rolling back application images does not remove data. Do not drop the RLS migration without a reviewed backup.

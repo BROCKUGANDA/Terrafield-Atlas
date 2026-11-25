@@ -137,6 +137,24 @@ if (process.env.ENTERPRISE_TEST_WORKER !== '1') {
     expect(await db.webhookDelivery.count({ where: { endpointId: stored.id, status: 'delivered' } })).toBe(1);
   });
 
+  test('derived raster asset records retain tenant, lineage, and artifact reference', async () => {
+    const { persistRasterAsset } = await import('@/lib/raster-assets');
+    const context = { userId: users[0].id, organizationId: null, organizationName: null, role: 'personal' as const, permissions: [], isPlatformAdmin: false };
+    const result = {
+      artifactRef: 'raster:test-asset-ref',
+      artifactBytes: 128,
+      metadata: { dataset: { inputFormat: 'netcdf' } },
+      statistics: { validPixels: 63 },
+      lineage: { inputSha256: 'test-source-hash', steps: [] },
+    };
+    const asset = await persistRasterAsset({ context, filename: 'sample.nc', result });
+    expect(asset.artifactRef).toBe('raster:test-asset-ref');
+    const stored = await db.rasterAsset.findUniqueOrThrow({ where: { id: asset.assetId } });
+    expect(stored.ownerId).toBe(users[0].id);
+    expect(stored.format).toBe('netcdf');
+    expect(JSON.parse(stored.statsJson).validPixels).toBe(63);
+  });
+
   test('verified report snapshots persist provenance and export as CSV', async () => {
     const reportRoutes = await import('@/app/api/v1/reports/route');
     const csvRoutes = await import('@/app/api/v1/reports/[id]/csv/route');

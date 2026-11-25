@@ -1,13 +1,13 @@
 # TerraField Atlas — Implementation Ledger
 
-Last updated: 2026-11-25
+Last updated: 2026-11-27
 
 Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `broken`, `deprecated`.
 
 | Feature | Owner | Status | Dependencies | Test evidence | Deployment | Outstanding defects / next action |
 | --- | --- | --- | --- | --- | --- | --- |
 | Public mission console | Platform | verified | Next.js, tokens | Prior browser matrix; current lint/type baseline | Existing preview/production | Refresh production-scale docs |
-| Verified accounts | Identity | verified | PostgreSQL, NextAuth | `tests/account-isolation.test.ts` | Existing production | Password reset/deletion absent |
+| Verified accounts | Identity | verified | PostgreSQL, NextAuth | `tests/account-isolation.test.ts` | Existing production | Account deletion absent |
 | Durable job client/worker | Platform | implemented | Redis/BullMQ | `tests/jobs.integration.ts`, focused suites | Not deployed this pass | External worker deployment config |
 | POWER ingestion | Earth data | implemented | Durable worker | Provider/workflow integration tests | Not deployed this pass | Run live smoke after deployment |
 | Trend analysis | Science | implemented | Stored POWER, worker | `tests/stats.test.ts`, jobs integration | Not deployed this pass | Full browser job flow pending |
@@ -23,14 +23,25 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 | Admin console/feature flags | Platform | implemented | Admin guard | Enterprise admin test | Not deployed | Full operations browser flow pending |
 | Marketing/legal | Commercial | implemented | Design system | Production build includes all pages | Not deployed | Legal review pending |
 | Persisted reports | Reporting | implemented | ReportRecord, quotas | Persistence/CSV/PDF integration test | Not deployed | Browser print fallback retained |
-| Quantitative raster pipeline | Geospatial | implemented | Raster service | 6 Python tests pass (GeoTIFF/NetCDF/Zarr) | Overlay prepared | Derived-asset persistence remains |
+| Quantitative raster pipeline | Geospatial | implemented | Raster service, artifact volume | 7 Python tests pass; enterprise asset test passes | Overlay prepared | Retention policy remains operational work |
 | Database RLS | Security | implemented | RLS migration, tenant proxy | 3 RLS integration tests pass | Overlay prepared | Ensure production web role and GUC settings are deployed |
 | Runtime dependency patching | Security | verified | `bun audit` | 0 high/critical across 794 packages | Build artifact | Keep CI audit enabled |
-| CSP | Security | planned | Nonce strategy | None | No | SEC-003 |
+| CSP | Security | implemented (report-only) | Nonce middleware, report endpoint | `tests/csp.test.ts` | Deploying | Promote to enforcing after a clean violation ledger |
+| Password reset | Identity | verified | PasswordReset migration, email | `tests/account-isolation.test.ts` (request, replay, expiry, weak password) | Deploying | Account deletion still absent |
+| Provider provenance attribution | Security | verified | Provider attribution context | `tests/private-provider-context.test.ts` | Deploying | Personal (non-organization) private calls remain unlogged by design |
+| Host deploy path | SRE | implemented | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deploying | GitHub Actions deploys blocked by account billing lock |
 | Observability dashboards | SRE | partial | Production-scale metrics work | Concurrent session | In progress | Prometheus/Grafana acceptance pending |
 | Backup/restore drill | SRE | partial | Production-scale deploy work | Concurrent session | In progress | Required before release |
 
 ## Change log
+
+### 2026-11-27
+
+- Added nonce-based CSP middleware in report-only mode and a bounded `/api/v1/csp-report` intake; enforcement stays off until the violation ledger is clean.
+- Added single-use, hashed, one-hour password-reset tokens (table, migration, request/confirm routes, account UI); unknown and unverified addresses get the same 202 answer.
+- Private provider calls attributed to an organization now write metadata-only provenance rows (no URL, hash, coordinates or raw error); anonymous private calls remain unlogged.
+- Replaced the stale SQLite `DATABASE_URL` override in the systemd deployment artifacts; added the production unit file and `scripts/deploy-vps.sh` (backup → build → migrate → readiness gate → automatic rollback on failure).
+- Cleared the remaining lint warnings; underscore-prefixed unused bindings are now an explicit convention.
 
 ### 2026-11-25
 
@@ -49,9 +60,14 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 - Added persisted JSON report snapshots and server CSV export; browser print-to-PDF remains.
 - Added a FastAPI/Rasterio service with GeoTIFF statistics, clipping, reprojection/resampling, nodata handling, and lineage; three Python tests pass.
 - Started disposable PostGIS/Redis services; no production data touched.
-- Final isolated verification: 301 tests passing, 0 lint errors, typecheck pass, Prisma client generated, `bun audit` clean, and production build successful with 67 pages.
-- Remaining release gates: production deployment with new secrets/services, external provider/browser acceptance, derived raster asset persistence, legal review.
+- Final isolated verification: 313 tests passing, 0 failures (1,635 assertions), 0 lint errors, typecheck pass, Prisma client generated, `bun audit` clean, and production build successful with 70 pages/routes.
+- Production browser acceptance passed on the stable acceptance stack: 270/270 module-viewport runs, 1,152 assertions, 0 failures.
+- Failure-mode browser acceptance passed all five executed checks.
+- Derived raster assets persist to a private volume with tenant-scoped `RasterAsset` records; seven Python service tests pass.
+- Legal readiness pack added at `docs/LEGAL_REVIEW.md`; qualified counsel sign-off remains.
+- Remaining release gates: real production overlay/secrets, legal sign-off, external-provider guarantees.
 - Database RLS foundation added with tenant proxy, active-organization policies, and three passing integration tests.
 - Server-side PDF generation and NetCDF/Zarr dataset statistics added and tested.
-- Enterprise deployment overlay and environment template added without modifying base Compose.
+- Enterprise deployment overlay and environment template added without modifying base Compose; `scripts/deploy-vps.sh` now preserves the webhook key and uses the checksummed backup/readiness/rollback gate.
 - Capability discovery endpoint removes expected 401 console noise from the shell; provider note is visible in System Health.
+- Re-verified 2026-11-25 (continued pass): typecheck clean; `docker compose -f compose.yaml -f compose.enterprise.yml config` validates; raster service 7 Python tests pass; RLS + enterprise integration wrappers pass; dependency audit clean (0 high/critical).

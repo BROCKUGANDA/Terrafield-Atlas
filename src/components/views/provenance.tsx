@@ -10,7 +10,7 @@ import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
-import { QueryState, EmptyState, FaultPanel } from '@/components/system/query-state';
+import { QueryState, EmptyState } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
 import { ScrollText, Database, RefreshCw, CheckCircle2, XCircle, FileDown } from 'lucide-react';
 import { cn } from '@/lib/utils';

@@ -20,6 +20,18 @@ const eslintConfig = [
     ],
   },
   {
+    files: ["**/*.ts", "**/*.tsx"],
+    rules: {
+      // Underscore is the codebase's explicit "intentionally unused" marker
+      // (mock signatures, zustand migrate params, destructured omissions).
+      "@typescript-eslint/no-unused-vars": ["warn", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+      }],
+    },
+  },
+  {
     files: ["tests/*.cjs", "scripts/*.cjs"],
     languageOptions: {
       sourceType: "commonjs",

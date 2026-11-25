@@ -311,7 +311,7 @@ const handlePrivateFiresSnapshot: JobHandler = async (ctx) => {
     await ctx.checkpoint();
     const result = await withPrivateProvider(() =>
       fetchFiresForDate(date, bbox, ctx.payload.correlationId, ctx.signal),
-    );
+    ctx.payload.organizationId ?? null);
     const detections = result.detections.filter(
       (detection) =>
         detection.obsDate === date &&

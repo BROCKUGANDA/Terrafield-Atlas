@@ -5,7 +5,6 @@ import {
   mannKendall,
 } from '@/lib/stats/core';
 import type { ObservationPoint, TrendExplanation, TrendResult, VariableKey } from '@/lib/types';
-import { POWER_VARIABLES } from '@/lib/types';
 
 /**
  * Environmental trend detection service ("Earth System Trend Detective" work-alike).
@@ -119,7 +118,6 @@ export interface AnalyzeTrendInput {
 
 export function analyzeTrend(input: AnalyzeTrendInput): TrendResult {
   const { variable, points } = input;
-  const meta = POWER_VARIABLES.find((v) => v.key === variable)!;
   const monthlyUnit = monthlyUnitFor(variable, input.unit);
   const aggregated = aggregationFor(variable);
 

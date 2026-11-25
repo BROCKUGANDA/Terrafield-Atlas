@@ -37,10 +37,6 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
   const workspaces = await import('@/app/api/v1/organizations/[id]/workspaces/route');
   const farms = await import('@/app/api/v1/farms/route');
   const farmDetail = await import('@/app/api/v1/farms/[farmId]/route');
-  const soilTests = await import('@/app/api/v1/farms/[farmId]/soil-tests/route');
-  const watchlists = await import('@/app/api/v1/fires/watchlists/[id]/route');
-  const observations = await import('@/app/api/v1/observations/route');
-  const trends = await import('@/app/api/v1/analysis/trends/route');
   const apiKeys = await import('@/app/api/v1/api-keys/route');
   const revokeApiKey = await import('@/app/api/v1/api-keys/[id]/route');
   const developerFarms = await import('@/app/api/v1/developer/farms/route');

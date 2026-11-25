@@ -4,6 +4,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from processing import Bbox, process_raster_bytes
 from dataset_processing import process_dataset_bytes
+from artifacts import persist_result
 
 app = FastAPI(title="TerraField Raster Processing Service", version="2026.11")
 MAX_BYTES = 50 * 1024 * 1024
@@ -21,19 +22,21 @@ async def raster_stats(
     bbox: str | None = Form(None, max_length=2_000),
     target_crs: str | None = Form(None, max_length=200),
     target_resolution: float | None = Form(None, gt=0),
+    persist: bool = Form(False),
 ) -> dict:
     data = await file.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="raster exceeds 50 MB upload limit")
     parsed_bbox = Bbox.model_validate_json(bbox) if bbox else None
     try:
-        return process_raster_bytes(
+        result = process_raster_bytes(
             data,
             band=band,
             bbox=parsed_bbox,
             target_crs=target_crs,
             target_resolution=target_resolution,
         )
+        return persist_result(result) if persist else result
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -47,13 +50,14 @@ async def dataset_stats(
     target_crs: str | None = Form(None, max_length=200),
     target_resolution: float | None = Form(None, gt=0),
     crs: str | None = Form(None, max_length=200),
+    persist: bool = Form(False),
 ) -> dict:
     data = await file.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="dataset exceeds 100 MB upload limit")
     parsed_bbox = Bbox.model_validate_json(bbox) if bbox else None
     try:
-        return process_dataset_bytes(
+        result = process_dataset_bytes(
             data,
             filename=file.filename or "dataset.nc",
             variable_name=variable,
@@ -63,5 +67,6 @@ async def dataset_stats(
             target_resolution=target_resolution,
             crs_override=crs,
         )
+        return persist_result(result) if persist else result
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

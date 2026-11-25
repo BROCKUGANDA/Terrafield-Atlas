@@ -120,7 +120,6 @@ function durationMonths(crop: CropDef): number {
 
 function criterionFamilySequence(crops: CropDef[]): CriterionResult {
   let familyRepeats = 0;
-  let cropRepeats = 0;
   const detail: string[] = [];
   for (let i = 1; i < crops.length; i++) {
     if (crops[i].family === crops[i - 1].family) {
@@ -128,7 +127,6 @@ function criterionFamilySequence(crops: CropDef[]): CriterionResult {
       detail.push(`${crops[i - 1].name} → ${crops[i].name} repeats the ${crops[i].family} family`);
     }
     if (crops[i].cropKey === crops[i - 1].cropKey) {
-      cropRepeats++;
       detail.push(`identical crop (${crops[i].name}) planted back-to-back`);
     }
   }

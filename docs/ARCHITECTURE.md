@@ -70,10 +70,22 @@ Long-running ingestion, trends, fire snapshots and watchlist evaluation return `
 ## Security and operations
 
 - Caddy exposes fixed upstreams only; no query-controlled proxy target remains.
+- A nonce-based CSP ships report-only from `src/middleware.ts`; violations go to the bounded `/api/v1/csp-report` intake and are logged, not stored.
+- Production runs the standalone server under `terrafield.service` from the 600-mode `.env`; `scripts/deploy-vps.sh` ships, backs up, migrates, builds, restarts and gates readiness with automatic restore of the previous build.
 - Database, Redis, Prometheus and Grafana publish no host ports.
 - Containers use JSON logging with rotation, restart policies and resource limits.
 - Release automation builds one image, takes a named backup, deploys migrations, waits for readiness/API checks and restores the prior image/database snapshot on failure.
 - No secrets are stored in source, fixtures, browser bundles or committed environment files.
+
+## Enterprise product layer
+
+- Organizations and memberships are enforced both by API guards and PostgreSQL RLS. Web replicas run as `terrafield_app`; request handlers set transaction-local tenant context through a Prisma proxy.
+- Configurable plans drive server-side quotas for farms, jobs, API requests, reports, intelligence runs, and storage. Only fulfilled operations are metered.
+- Developer API keys are hashed at rest, scoped, revocable, and rate-limited; OpenAPI is served at `/api/v1/openapi.json`.
+- Tenant webhooks use encrypted signing secrets, DNS-aware SSRF checks, no redirects, signed exact body bytes, and durable retry records.
+- Intelligence plans are deterministic, permission-controlled, and approval-gated; every tool execution and evidence reference is persisted.
+- A private `raster` service computes GeoTIFF/NetCDF/Zarr statistics and persists derived artifacts to a named volume; the database stores the artifact reference and lineage.
+- Server-side PDF, CSV, JSON, and persisted report records are available.
 
 ## Verification
 

@@ -848,6 +848,20 @@ export interface RasterStatsResponse {
   statistics: { validPixels: number; totalPixels: number; validFraction: number; minimum: number; maximum: number; mean: number; standardDeviation: number; percentiles: Record<string, number> };
   lineage: { inputSha256: string; inputBytes: number; band: number; steps: Record<string, unknown>[]; processorVersion: string; processedAt: string };
   limitations: string[];
+  artifactRef?: string;
+  artifactBytes?: number;
+  rasterAsset?: { assetId: string; artifactRef: string };
+}
+
+export interface RasterAssetRecord {
+  id: string;
+  filename: string;
+  format: string;
+  sourceHash: string;
+  artifactRef: string;
+  artifactBytes: number;
+  createdAt: string;
+  lineage: Record<string, unknown>;
 }
 
 export interface StacItem {
@@ -1026,7 +1040,7 @@ type FireQueryInput = FireLocationInput & { from: string; to: string; confidence
 type FireIngestInput = FireLocationInput & { from: string; to: string };
 
 export const api = {
-  rasterStats: (file: File, params: { band?: number; bbox?: string; target_crs?: string; target_resolution?: number } = {}) => {
+  rasterStats: (file: File, params: { band?: number; bbox?: string; target_crs?: string; target_resolution?: number; persist?: boolean } = {}) => {
     const form = new FormData();
     form.set('file', file, 'raster.tif');
     const q = new URLSearchParams();
@@ -1034,9 +1048,10 @@ export const api = {
     if (params.bbox) q.set('bbox', params.bbox);
     if (params.target_crs) q.set('target_crs', params.target_crs);
     if (params.target_resolution) q.set('target_resolution', String(params.target_resolution));
+    if (params.persist) q.set('persist', 'true');
     return request<RasterStatsResponse>(`/api/v1/raster/stats?${q.toString()}`, { method: 'POST', body: form }, { timeoutMs: 65_000 });
   },
-  rasterDataset: (file: File, params: { variable?: string; bbox?: string; target_crs?: string; target_resolution?: number; crs?: string } = {}) => {
+  rasterDataset: (file: File, params: { variable?: string; bbox?: string; target_crs?: string; target_resolution?: number; crs?: string; persist?: boolean } = {}) => {
     const form = new FormData();
     form.set('file', file, file.name || 'dataset.nc');
     const q = new URLSearchParams();
@@ -1045,8 +1060,10 @@ export const api = {
     if (params.target_crs) q.set('target_crs', params.target_crs);
     if (params.target_resolution) q.set('target_resolution', String(params.target_resolution));
     if (params.crs) q.set('crs', params.crs);
+    if (params.persist) q.set('persist', 'true');
     return request<RasterStatsResponse>(`/api/v1/raster/dataset?${q.toString()}`, { method: 'POST', body: form }, { timeoutMs: 65_000 });
   },
+  rasterAssets: () => request<{ assets: RasterAssetRecord[]; nextCursor: string | null }>('/api/v1/raster/assets'),
   stacSearch: (params: { geometry?: string; from?: string; to?: string; collections?: string; limit?: number; checkAssets?: boolean }) => {
     const q = new URLSearchParams();
     if (params.geometry) q.set('geometry', params.geometry);

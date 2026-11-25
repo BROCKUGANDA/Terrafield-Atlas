@@ -81,6 +81,29 @@ test('private failed provider attempts do not persist URLs or raw network errors
   } finally { db.apiRequestLog.create = originalLog; }
 });
 
+test('organization-attributed private provider calls log provenance metadata without coordinates', async () => {
+  const originalLog = db.apiRequestLog.create;
+  const rows: unknown[] = [];
+  const log = mock(async (args: { data: Record<string, unknown> }) => { rows.push(args.data); return {} as never; });
+  db.apiRequestLog.create = log as unknown as typeof originalLog;
+  globalThis.fetch = createFetchMock(async () => Response.json({ ok: true }));
+  try {
+    await withPrivateProvider(async () => {
+      await resilientFetch('https://example.test/point?lat=12.34567&lon=45.67891', { provider: 'NASA_POWER', operation: 'private-org-test', maxAttempts: 1 });
+    }, 'org-private-test');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      organizationId: 'org-private-test',
+      provider: 'NASA_POWER',
+      requestUrl: '[private]',
+      paramsHash: null,
+      ok: true,
+    });
+    expect(JSON.stringify(rows[0])).not.toContain('12.34567');
+    expect(JSON.stringify(rows[0])).not.toContain('45.67891');
+  } finally { db.apiRequestLog.create = originalLog; }
+});
+
 test('POWER ingestion rejects a missing farm before any provider or storage access', async () => {
   const originalFarm = db.farm.findUnique;
   db.farm.findUnique = mock(async () => null) as unknown as typeof originalFarm;

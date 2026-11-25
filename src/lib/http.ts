@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { stableHash } from '@/lib/cache';
-import { isPrivateProvider } from '@/lib/ingest/provider-context';
+import { isPrivateProvider, providerAttribution } from '@/lib/ingest/provider-context';
 import { redisRuntime } from '@/lib/redis';
 import { fetchPinnedPublicUrl } from '@/lib/network-safety';
 
@@ -90,13 +90,22 @@ async function logAttempt(
   status: number, latencyMs: number, responseBytes: number | null, ok: boolean,
   errorDetail: string | null, correlationId: string | null,
 ) {
-  if (isPrivateProvider()) return;
+  const attribution = providerAttribution();
+  const isPrivate = attribution?.private === true;
+  // Anonymous private calls stay unlogged; an attributed private call records
+  // the fact and outcome for its organization without URLs or coordinates.
+  if (isPrivate && !attribution.organizationId) return;
   try {
     await db.apiRequestLog.create({ data: {
+      organizationId: attribution?.organizationId ?? null,
       provider, datasetId: datasetId ?? null, operation,
-      requestUrl: redactProviderUrl(url).slice(0, 900), paramsHash: stableHash(url),
+      requestUrl: isPrivate ? '[private]' : redactProviderUrl(url).slice(0, 900),
+      paramsHash: isPrivate ? null : stableHash(url),
       status, latencyMs: Math.round(latencyMs), responseBytes, ok,
-      errorDetail: errorDetail ? errorDetail.slice(0, 300) : null, correlationId,
+      errorDetail: isPrivate
+        ? (errorDetail ? 'private provider request failed' : null)
+        : errorDetail ? errorDetail.slice(0, 300) : null,
+      correlationId,
     } });
   } catch (err) {
     console.error('[provenance-log] failed:', err);

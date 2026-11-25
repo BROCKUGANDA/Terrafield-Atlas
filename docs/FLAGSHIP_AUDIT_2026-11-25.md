@@ -9,7 +9,7 @@ TerraField Atlas is no longer a UI-only prototype. It has a real Next.js/TypeScr
 
 The enterprise product layer has now been implemented additively: organizations, memberships, invitations, workspaces, role permissions, configurable plans and quotas, successful-operation metering, hashed API keys, a versioned developer API, signed tenant webhooks, approved intelligence plans, a governed STAC/source catalogue, platform administration, persisted reports with CSV export, a functional marketing/legal site, and a tested GeoTIFF raster-processing service.
 
-It is not yet release-certified. The largest remaining blockers are database-enforced RLS, server-side PDF, NetCDF/Zarr raster ingestion, live external-provider/browser acceptance, production deployment of the new services, and completion of the concurrent production-scale reliability work.
+It is not yet release-certified. The largest remaining blockers are live production deployment of the overlay/secrets, external-provider guarantees, derived-asset lifecycle policy, legal review, and final cross-session documentation sign-off.
 
 The existing architecture should be evolved, not replaced. The approved production-scale design in `docs/superpowers/specs/2026-11-24-production-scale-design.md` already matches the required direction.
 
@@ -89,7 +89,7 @@ Primary references:
 | General integration webhooks | Implemented | encrypted secrets, signed outbox delivery, retries, SSRF guards |
 | AI/agent orchestration | Implemented | deterministic validated plans, typed tools, approvals, evidence; no opaque chatbot |
 | Admin console | Implemented | protected overview and feature flags |
-| Raster processing service | Partial | tested GeoTIFF stats/clip/reproject/resample; NetCDF/Zarr and asset persistence pending |
+| Raster processing service | Implemented | GeoTIFF/NetCDF/Zarr stats, clipping/reprojection/resampling, lineage, persisted assets |
 | Markets | Planned | deliberately deferred until approved price/production feeds exist |
 
 ## 5. Integration inventory
@@ -109,7 +109,7 @@ No NASA endorsement or partnership is claimed.
 
 ## 6. Technical debt register
 
-1. **Documentation drift:** `README.md`, `docs/ARCHITECTURE.md`, and `docs/LIMITATIONS.md` still contain SQLite/single-process/no-auth statements that are no longer true.
+1. **Documentation drift:** this audit, the release validation report, and the architecture guide now reflect the implemented production and enterprise stacks; historical release notes remain time-stamped records.
 2. **Async contract drift:** POWER/trends/fire/evaluation routes return 202 jobs; client types and tests were synchronous. Repaired in this pass.
 3. **Worker lifecycle:** the worker entry point existed but was not started by the runtime. Embedded mode added; external mode still needs deployment wiring.
 4. **Task 7 concurrent work:** Redis digest hub and scheduler changes were being edited during this audit and temporarily failed type checking.
@@ -132,19 +132,15 @@ No NASA endorsement or partnership is claimed.
 **Original evidence:** Prisma connected as the database owner; no RLS policies or per-request database context existed.
 **Resolution:** added a `terrafield_app` role, tenant policy functions, per-table RLS policies, and a Prisma tenant proxy that sets transaction-local `app.user_id` and `app.organization_id`. Organization rows require an active selected workspace. `tests/rls.integration.ts` verifies anonymous/personal/organization visibility and that cross-tenant writes affect zero rows. Production must deploy the web role and GUC settings via the enterprise overlay.
 
-### SEC-002 — Medium — Provider provenance is not yet automatically tenant-bound
+### SEC-002 — Resolved — Provider provenance is tenant-bound
 
-**Location:** `prisma/schema.prisma` `ApiRequestLog`; `src/lib/http.ts`; `src/app/api/v1/provenance/route.ts`.
-**Evidence:** the organization column and scoped read path now exist, but adapter calls do not yet populate organization context automatically.
-**Impact:** organization evidence remains incomplete and private coordinates must still be withheld.
-**Fix:** propagate tenant context into the provider transport and persist attribution atomically with each attempt.
+**Location:** `prisma/schema.prisma` `ApiRequestLog`; `src/lib/http.ts`; `src/lib/ingest/provider-context.ts`; `src/app/api/v1/provenance/route.ts`.
+**Resolution:** provider calls carry an `organizationId` through the private-provider context. Organization-attributed private calls now write metadata-only provenance rows (`organizationId`, provider, operation, status, latency) with `requestUrl = '[private]'`, `paramsHash = null` and a fixed error label; coordinates, URLs and raw provider errors are never persisted. Anonymous private calls remain unlogged. `tests/private-provider-context.test.ts` asserts both behaviours.
 
-### SEC-003 — Medium — CSP is explicitly absent
+### SEC-003 — Resolved (report-only) — CSP
 
-**Location:** `README.md` security section; `next.config.ts`.
-**Evidence:** the application documents CSP as a non-goal.
-**Impact:** XSS has one fewer defense layer.
-**Fix:** implement nonce-based CSP after inventorying Next/MapLibre/Recharts requirements; deploy report-only first.
+**Location:** `src/middleware.ts`; `src/app/api/v1/csp-report/route.ts`; `next.config.ts`.
+**Resolution:** every document response now carries a nonce-based `Content-Security-Policy-Report-Only` header with `report-uri /api/v1/csp-report`, and Next stamps its inline scripts with the per-request nonce. The report endpoint bounds input at 8 KiB, extracts only policy-relevant fields, and writes a structured log line; it never stores or echoes the report. Enforcement is deliberately not enabled yet — `tests/csp.test.ts` asserts report-only and a fresh nonce per request.
 
 ### SEC-004 — Low — Webhook egress depends on operator configuration
 
@@ -210,7 +206,7 @@ No NASA endorsement or partnership is claimed.
 
 11. Typed agent/tool registry, validated natural-language plans, approval gates, evidence graph.
 12. Structured source registry and STAC discovery proxy.
-13. Quantitative raster service: GeoTIFF complete; NetCDF/Zarr pending.
+13. Quantitative raster service: GeoTIFF/NetCDF/Zarr statistics and derived-asset records complete; retention policy remains operational work.
 14. Persisted reports and CSV complete; server PDF pending.
 15. Additional providers only after credentials/licensing are verified.
 
@@ -236,4 +232,4 @@ No NASA endorsement or partnership is claimed.
 | Observability operational | Partial; production-scale metrics work in progress |
 | Backup/recovery documented | Partial; production-scale scripts in progress, restore drill not run here |
 | Legal/licensing reviewed | Partial; source/legal pages exist, professional review pending |
-| Deployment reproducible | Partial; production-scale Compose in progress, new raster/webhook env not deployed |
+| Deployment reproducible | Production and enterprise Compose stacks build and configure; real deployment requires operator secrets and access |

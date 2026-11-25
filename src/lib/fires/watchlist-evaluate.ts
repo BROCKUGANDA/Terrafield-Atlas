@@ -137,7 +137,7 @@ export async function runWatchlistEvaluation(
     const ensured: EnsuredDay[] = [];
     const privateDetections: { date: string; confidence: string; frp: number | null }[] = [];
     for (const date of days) {
-      const live = w.ownerId ? await withPrivateProvider(() => fetchFiresForDate(date, bbox, correlationId)) : null;
+      const live = w.ownerId ? await withPrivateProvider(() => fetchFiresForDate(date, bbox, correlationId), w.organizationId) : null;
       if (live) {
         privateDetections.push(...live.detections.map((d) => ({ date, confidence: d.confidence, frp: d.frp ?? null })));
       }

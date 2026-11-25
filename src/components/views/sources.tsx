@@ -22,15 +22,17 @@ export function SourcesView() {
   const [rasterFile, setRasterFile] = useState<File | null>(null);
   const [datasetVariable, setDatasetVariable] = useState('');
   const [datasetCrs, setDatasetCrs] = useState('');
+  const [persistRaster, setPersistRaster] = useState(false);
   const [rasterResult, setRasterResult] = useState<RasterStatsResponse | null>(null);
+  const assets = useQuery({ queryKey: ['raster-assets'], queryFn: api.rasterAssets, retry: 1 });
   const raster = useMutation({
     mutationFn: () => {
       const name = (rasterFile?.name ?? '').toLowerCase();
       return name.endsWith('.nc') || name.endsWith('.nc4') || name.endsWith('.zip')
-        ? api.rasterDataset(rasterFile!, { variable: datasetVariable || undefined, crs: datasetCrs || undefined })
-        : api.rasterStats(rasterFile!);
+        ? api.rasterDataset(rasterFile!, { variable: datasetVariable || undefined, crs: datasetCrs || undefined, persist: persistRaster })
+        : api.rasterStats(rasterFile!, { persist: persistRaster });
     },
-    onSuccess: (data) => setRasterResult(data),
+    onSuccess: (data) => { setRasterResult(data); if (persistRaster) void assets.refetch(); },
     onError: (error) => toast({ title: 'Raster processing failed', description: error instanceof ApiRequestError ? error.message : 'Unexpected error.', variant: 'destructive' }),
   });
   const search = useMutation({
@@ -68,8 +70,12 @@ export function SourcesView() {
       <HudPanel calm className="flex flex-col gap-3 p-4">
         <div className="flex items-center gap-2"><UploadCloud className="h-4 w-4 text-signal" /><h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Quantitative raster statistics</h3></div>
         <p className="text-[11px] leading-relaxed text-dim">Upload a GeoTIFF (≤ 50 MB) for pixel statistics, or a NetCDF/Zarr ZIP with CRS metadata for dataset statistics. Clipping, reprojection, resampling, nodata handling, and lineage are shared across all formats.</p>
-        <div className="flex flex-wrap items-center gap-3"><input type="file" accept=".tif,.tiff,image/tiff,.nc,.nc4,.zip" onChange={(event) => setRasterFile(event.target.files?.[0] ?? null)} className="text-xs text-dim" /><Input value={datasetVariable} onChange={(event) => setDatasetVariable(event.target.value)} placeholder="Dataset variable (optional)" className="h-9 w-48 border-edge bg-panel text-ink" /><Input value={datasetCrs} onChange={(event) => setDatasetCrs(event.target.value)} placeholder="CRS override (optional)" className="h-9 w-40 border-edge bg-panel text-ink" /><Button onClick={() => raster.mutate()} disabled={raster.isPending || !rasterFile} className="h-9 font-mono text-xs uppercase tracking-wide-mc">{raster.isPending ? 'Processing…' : 'Compute statistics'}</Button></div>
+        <div className="flex flex-wrap items-center gap-3"><input type="file" accept=".tif,.tiff,image/tiff,.nc,.nc4,.zip" onChange={(event) => setRasterFile(event.target.files?.[0] ?? null)} className="text-xs text-dim" /><Input value={datasetVariable} onChange={(event) => setDatasetVariable(event.target.value)} placeholder="Dataset variable (optional)" className="h-9 w-48 border-edge bg-panel text-ink" /><Input value={datasetCrs} onChange={(event) => setDatasetCrs(event.target.value)} placeholder="CRS override (optional)" className="h-9 w-40 border-edge bg-panel text-ink" /><label className="flex items-center gap-2 text-[11px] text-dim"><input type="checkbox" checked={persistRaster} onChange={(event) => setPersistRaster(event.target.checked)} />Persist derived asset</label><Button onClick={() => raster.mutate()} disabled={raster.isPending || !rasterFile} className="h-9 font-mono text-xs uppercase tracking-wide-mc">{raster.isPending ? 'Processing…' : 'Compute statistics'}</Button></div>
         {rasterResult && <pre className="max-h-80 overflow-auto rounded-sm border border-edge bg-void p-3 font-mono text-[11px] text-dim">{JSON.stringify(rasterResult, null, 2)}</pre>}
+        <div className="border-t border-edge pt-3">
+          <p className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">Persisted raster assets · {(assets.data?.assets ?? []).length}</p>
+          <div className="mt-2 grid gap-2">{(assets.data?.assets ?? []).map((asset) => <div key={asset.id} className="flex flex-wrap items-center gap-2 border-b border-edge/60 py-2 text-[10px] last:border-0"><span className="font-mono text-aqua">{asset.filename}</span><span className="telemetry text-faint">{asset.format} · {asset.artifactBytes.toLocaleString()} bytes · {asset.artifactRef}</span><span className="telemetry ml-auto text-faint">{new Date(asset.createdAt).toISOString().slice(0, 16).replace('T', ' ')}Z</span></div>)}</div>
+        </div>
       </HudPanel>
 
       {result && <HudPanel calm className="flex flex-col gap-3"><div className="flex items-center gap-2"><StatusPill status={`${result.count} STAC items`} pulse={false} /><span className="telemetry text-[10px] text-faint">retrieved {result.retrievedAt}</span></div><div className="grid gap-2">{result.items.map((item) => <div key={item.id} className="border-b border-edge/60 py-2 last:border-0"><div className="flex flex-wrap items-center gap-2"><span className="font-mono text-xs text-ink">{item.id}</span><StatusPill status={item.collection ?? 'no collection'} pulse={false} />{item.cloudCover !== null && <span className="telemetry text-[10px] text-faint">cloud {item.cloudCover}%</span>}</div><p className="telemetry mt-1 text-[10px] text-faint">{item.datetime ?? item.start ?? 'time unknown'}</p><div className="mt-1 flex flex-wrap gap-2">{item.assets.map((asset) => /^https?:/i.test(asset.href) ? <a key={asset.name} href={asset.href} target="_blank" rel="noreferrer" className="font-mono text-[10px] text-aqua underline">{asset.name}</a> : <span key={asset.name} className="font-mono text-[10px] text-faint" title={asset.href}>{asset.name} · provider access</span>)}</div></div>)}</div>{result.assetAccessibility.length > 0 && <div className="border-t border-edge pt-2"><p className="font-mono text-[9px] uppercase tracking-wide-mc text-faint">Asset accessibility</p>{result.assetAccessibility.map((asset) => <p key={asset.href} className="telemetry mt-1 text-[10px] text-dim">{asset.status ?? '—'} · {asset.note} · {asset.href}</p>)}</div>}<p className="text-[10px] leading-relaxed text-caution">{result.limitations.join(' ')}</p></HudPanel>}

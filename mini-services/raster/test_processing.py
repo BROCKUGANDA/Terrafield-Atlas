@@ -1,9 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
+import artifacts
 from processing import Bbox, process_raster_bytes
 
 
@@ -53,6 +56,18 @@ class RasterProcessingTests(unittest.TestCase):
             process_raster_bytes(tiff_bytes(np.ones((2, 2), dtype="float32")), band=2)
         with self.assertRaises(ValueError):
             process_raster_bytes(tiff_bytes(np.ones((2, 2), dtype="float32")), bbox=Bbox(west=2, south=2, east=1, north=1))
+
+    def test_persist_result_writes_artifact_to_bounded_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = artifacts.ARTIFACT_DIR
+            artifacts.ARTIFACT_DIR = Path(directory)
+            try:
+                result = artifacts.persist_result({"statistics": {"mean": 1}, "lineage": {"inputSha256": "abc"}})
+                self.assertTrue(result["artifactRef"].startswith("raster:"))
+                self.assertGreater(result["artifactBytes"], 0)
+                self.assertEqual(len(list(Path(directory).glob("*.json"))), 1)
+            finally:
+                artifacts.ARTIFACT_DIR = original
 
 
 if __name__ == "__main__":

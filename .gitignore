@@ -50,6 +50,12 @@ test
 prompt
 
 server.log
+# Local databases and test artifacts
+*.db
+*.db-wal
+*.db-shm
+test-results/
+.output.txt
 # Skills directory
 /skills/
 

@@ -51,6 +51,8 @@ const { executeJob } = await import('@/lib/jobs/handlers');
 const { publishDigestForWatchlist, digestChannel } = await import('@/lib/fires/digest-channel');
 const registerRoutes = await import('@/app/api/v1/account/register/route');
 const verifyRoutes = await import('@/app/api/v1/account/verify/route');
+const resetRequestRoutes = await import('@/app/api/v1/account/password-reset/request/route');
+const resetConfirmRoutes = await import('@/app/api/v1/account/password-reset/confirm/route');
 
 const origin = process.env.NEXTAUTH_URL!;
 let cookieA: string;
@@ -352,6 +354,53 @@ test('registration binds each verification link to the current pending password'
     expect(await authenticatePassword(email, replacement)).not.toBeNull();
     expect((await registerRoutes.POST(request('account/register', 'POST', undefined, { email, password: original }))).status).toBe(202);
     expect(links).toHaveLength(2);
+  } finally {
+    fetchMock.mockRestore();
+    delete process.env.RESEND_API_KEY;
+    delete process.env.EMAIL_FROM;
+  }
+}, 30_000);
+
+test('password reset is single-use, expiring, origin-bound and replaces the password', async () => {
+  process.env.RESEND_API_KEY = 'test-key-not-real';
+  process.env.EMAIL_FROM = 'test@example.test';
+  const links: string[] = [];
+  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(createFetchMock(async (_input, options) => {
+    const message = JSON.parse(String(options?.body)) as { text: string };
+    links.push(new URL(message.text.match(/https:\/\/\S+/)![0]).searchParams.get('resetAccount')!);
+    return Response.json({ id: 'test-message' });
+  }));
+  try {
+    const email = 'reset@example.test';
+    const original = 'original test password';
+    const replacement = 'replacement test password';
+    await db.accountUser.create({ data: { email, passwordHash: await hashPassword(original), emailVerified: new Date() } });
+
+    // Unknown addresses get the same answer and never create a token.
+    expect((await resetRequestRoutes.POST(request('account/password-reset/request', 'POST', undefined, { email: 'absent@example.test' }))).status).toBe(202);
+    expect(await db.passwordReset.count()).toBe(0);
+    // Origin is mandatory.
+    expect((await resetRequestRoutes.POST(request('account/password-reset/request', 'POST', undefined, { email }, 'https://evil.test'))).status).toBe(403);
+
+    expect((await resetRequestRoutes.POST(request('account/password-reset/request', 'POST', undefined, { email }))).status).toBe(202);
+    expect((await resetRequestRoutes.POST(request('account/password-reset/request', 'POST', undefined, { email }))).status).toBe(202);
+    expect(links).toHaveLength(2);
+    expect(await db.passwordReset.count()).toBe(1);
+
+    // Requesting again invalidates the earlier link.
+    expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: links[0], password: replacement }))).status).toBe(400);
+    expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: links[1], password: replacement }))).status).toBe(200);
+    expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: links[1], password: replacement }))).status).toBe(400);
+    expect(await db.passwordReset.count()).toBe(0);
+    expect(await authenticatePassword(email, original)).toBeNull();
+    expect(await authenticatePassword(email, replacement)).not.toBeNull();
+
+    const expired = verificationToken();
+    const user = await db.accountUser.findUniqueOrThrow({ where: { email } });
+    await db.passwordReset.create({ data: { userId: user.id, tokenHash: tokenHash(expired), expiresAt: new Date(0) } });
+    expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: expired, password: original }))).status).toBe(400);
+    // A weak password is rejected before any token is consumed.
+    expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: expired, password: 'short' }))).status).toBe(400);
   } finally {
     fetchMock.mockRestore();
     delete process.env.RESEND_API_KEY;

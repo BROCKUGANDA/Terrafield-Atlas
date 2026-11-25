@@ -91,7 +91,7 @@ export async function ingestPowerForLocation(
       const fetchChunk = () => fetchPowerDaily({
         lat, lon, start: chunk.start, end: chunk.end, variables, correlationId, signal: options.signal,
       });
-      const res = await (ownerId || organizationId ? withPrivateProvider(fetchChunk) : fetchChunk());
+      const res = await (ownerId || organizationId ? withPrivateProvider(fetchChunk, organizationId) : fetchChunk());
       const rows: {
         ownerId: string | null;
         organizationId: string | null;

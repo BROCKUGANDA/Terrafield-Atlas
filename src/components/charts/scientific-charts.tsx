@@ -15,8 +15,6 @@ import type { ObservationPoint, TrendResult } from '@/lib/types';
 const SIGNAL = '#45e39a'; // --chart-1
 const AQUA = '#4cc3ff'; // --chart-2
 const CAUTION = '#ffb224'; // --chart-3
-const IRIS = '#8da2ff'; // --chart-4
-const CORAL = '#ff7e6b'; // --chart-5
 const CRIT = '#ff5d5d'; // --crit
 const FAINT = '#627392'; // --faint
 const DIM = '#9aaacd'; // --dim

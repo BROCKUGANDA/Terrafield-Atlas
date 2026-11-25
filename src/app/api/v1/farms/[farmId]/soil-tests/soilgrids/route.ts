@@ -24,7 +24,7 @@ export const POST = apiHandler<FarmCtx>((req, { correlationId, params }) => with
   let profile: Awaited<ReturnType<typeof fetchSoilGridsPoint>>;
   try {
     const fetchProfile = () => fetchSoilGridsPoint(farm.centroidLat, farm.centroidLon, correlationId);
-    profile = await (farm.ownerId ? withPrivateProvider(fetchProfile) : fetchProfile());
+    profile = await (farm.ownerId ? withPrivateProvider(fetchProfile, farm.organizationId) : fetchProfile());
   } catch (err) {
     const message = farm.ownerId ? 'private provider request failed' : err instanceof Error ? err.message : String(err);
     return errorResponse(502, 'PROVIDER_UNAVAILABLE',

@@ -414,6 +414,7 @@ model AccountUser {
   createdAt          DateTime                 @default(now())
   identities         AccountIdentity[]
   verifications      AccountVerification[]
+  passwordResets     PasswordReset[]
   farms              Farm[]
   watchlists         FireWatchlist[]
   idempotencyRecords IdempotencyRecord[]
@@ -426,6 +427,7 @@ model AccountUser {
   agentRuns          AgentRun[]
   savedMapViews      SavedMapView[]
   reportRecords      ReportRecord[]
+  rasterAssets       RasterAsset[]
 }
 
 model AccountIdentity {
@@ -443,6 +445,18 @@ model AccountVerification {
   userId    String
   user      AccountUser @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
+}
+
+// Single-use password-reset tokens. Hashed at rest, bounded lifetime, and
+// cleared for a user whenever a reset completes or a new one is requested.
+model PasswordReset {
+  tokenHash   String      @id
+  userId      String
+  user        AccountUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  requestedAt DateTime    @default(now())
+
+  @@index([userId, expiresAt])
 }
 
 model AccountRateLimit {
@@ -543,6 +557,7 @@ model Organization {
   reports        ReportRecord[]
   agentRuns      AgentRun[]
   savedMapViews  SavedMapView[]
+  rasterAssets   RasterAsset[]
 }
 
 model Membership {
@@ -832,6 +847,7 @@ model FeatureFlag {
 model RasterAsset {
   id            String   @id @default(cuid())
   ownerId       String?
+  owner         AccountUser? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   organizationId String?
   organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   filename      String

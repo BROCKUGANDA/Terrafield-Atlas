@@ -1,0 +1,24 @@
+[Unit]
+Description=TerraField Atlas — NASA Earth Intelligence
+After=network-online.target
+Wants=network-online.target
+
+# DATABASE_URL, REDIS_URL, NEXTAUTH_* and provider credentials live in
+# APP_DIR/.env (mode 600). Do not set them here: an Environment= entry that
+# disagrees with the runtime database silently overrides the file on restart.
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/ai-azimara-terrafield
+EnvironmentFile=/home/ubuntu/ai-azimara-terrafield/.env
+Environment=PORT=3011
+Environment=NODE_ENV=production
+ExecStart=/home/ubuntu/.bun/bin/bun .next/standalone/server.js
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

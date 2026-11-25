@@ -85,7 +85,7 @@ export function useConsoleUrlSync(enabled: boolean): void {
         view: viewParam ?? 'landing',
       });
     }
-  }, [enabled]);
+  }, [enabled, setActiveFarmId, setView]);
 
   // 1b. Apply the region preset once the catalogue is available.
   useEffect(() => {
@@ -109,7 +109,7 @@ export function useConsoleUrlSync(enabled: boolean): void {
       country: preset.country,
       context: preset.croppingContext,
     });
-  }, [enabled, regions.isSuccess]);
+  }, [enabled, regions.data?.regions, regions.isSuccess, setLocation]);
 
   // 2. Mirror current store state after incoming link effects have run.
   //    Gated until region presets settle so the mirror can never race ahead

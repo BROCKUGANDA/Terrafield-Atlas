@@ -7,7 +7,7 @@ import { logEvent } from '@/components/state/log-store';
 import { downloadCsv, timestampSlug } from '@/lib/export';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { Kicker, SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
+import { SectionHeader, StatusPill, TelemetryStat, HudPanel } from '@/components/ui-mc/kit';
 import { QueryState } from '@/components/system/query-state';
 import { SkeletonPanel, StatSkeletonRow } from '@/components/system/skeletons';
 import { Settings, Activity, Clock, Database, Zap, RefreshCw, ServerCog, ShieldAlert, FileDown, Compass, RadioTower } from 'lucide-react';

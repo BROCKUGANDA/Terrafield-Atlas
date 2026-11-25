@@ -19,11 +19,13 @@ TerraField Atlas reports uncertainty explicitly. Nothing in this document is hid
 4. **SSE is not a replay log.** Redis fans out live events across replicas; disconnected clients recover current state through REST endpoints.
 5. **Exactly-once external delivery is not possible without receiver cooperation.** Stable event IDs, idempotency headers and durable receipts provide at-least-once delivery with deduplication; receivers should deduplicate by event ID.
 6. **Backups require operator storage policy.** Automated artifacts are checksummed and restore-drilled, but off-VPS replication and retention remain deployment responsibilities.
+7. **Account deletion is not self-service.** Password reset is self-service (single-use, one-hour, hashed tokens); deleting an account still requires an operator because owned farms and organizations must be transferred first.
+8. **CSP is report-only.** Violations are collected and logged, not blocked, until the report ledger is clean enough to enforce.
 
 ## Deliberate scope exclusions
 
 - Kubernetes, multi-region deployments, database sharding and multi-VPS HA.
 - Guaranteed scientific-provider credentials or data products.
-- Server-side PDF rendering; reports use the browser print-to-PDF path.
-- Farmer-uploaded raster/shapefile import, additional fire sensors, and multilingual UI.
+- Server-side PDF, CSV, and JSON report exports are available; browser print remains as a fallback.
+- Raster statistics accept GeoTIFF, NetCDF, and Zarr uploads; importing raster values into farm boundaries or crop models is not automatic.
 - Economic or yield forecasting.

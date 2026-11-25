@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { lookup as dnsLookup } from 'node:dns/promises';
-import http, { request as httpRequest, type IncomingMessage } from 'node:http';
-import https, { request as httpsRequest } from 'node:https';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import type { LookupFunction } from 'node:net';
 
 export interface IpAddressVerdict {
@@ -10,7 +10,6 @@ export interface IpAddressVerdict {
 }
 
 const MAX_IPV4 = (1n << 32n) - 1n;
-const MAX_IPV6 = (1n << 128n) - 1n;
 
 function parseIpv4(value: string): bigint | null {
   const parts = value.split('.');

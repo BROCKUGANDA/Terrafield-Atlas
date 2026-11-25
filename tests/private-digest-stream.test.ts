@@ -104,5 +104,5 @@ if (process.env.PRIVATE_STREAM_WORKER !== '1') {
       await db.$disconnect();
       await database.drop();
     }
-  });
+  }, 30_000);
 }

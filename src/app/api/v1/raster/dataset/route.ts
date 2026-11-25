@@ -3,6 +3,7 @@ import { apiHandler, clientKey, errorResponse, jsonResponse, rateLimit, rateLimi
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
 import { assertEntitlement, recordUsage } from '@/lib/commercial';
 import { requireFeature } from '@/lib/feature-flags';
+import { persistRasterAsset } from '@/lib/raster-assets';
 
 export const runtime = 'nodejs';
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -12,6 +13,7 @@ const querySchema = z.object({
   target_crs: z.string().max(200).optional(),
   target_resolution: z.coerce.number().positive().optional(),
   crs: z.string().max(200).optional(),
+  persist: z.coerce.boolean().default(false),
 });
 
 export const POST = apiHandler(async (req, { correlationId }) => {
@@ -47,6 +49,7 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   if (query.data.target_crs) outbound.set('target_crs', query.data.target_crs);
   if (query.data.target_resolution !== undefined) outbound.set('target_resolution', String(query.data.target_resolution));
   if (query.data.crs) outbound.set('crs', query.data.crs);
+  if (query.data.persist) outbound.set('persist', 'true');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
   try {
@@ -55,6 +58,14 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     if (!response.ok) return errorResponse(502, 'DATASET_PROCESSING_FAILED', 'dataset processing service rejected the request', correlationId);
     let result: unknown;
     try { result = JSON.parse(text); } catch { return errorResponse(502, 'DATASET_BAD_RESPONSE', 'dataset service returned an invalid payload', correlationId); }
+    if (query.data.persist) {
+      try {
+        const asset = await persistRasterAsset({ context, filename: file.name || 'dataset.nc', result });
+        result = { ...(result as Record<string, unknown>), rasterAsset: asset };
+      } catch {
+        return errorResponse(500, 'RASTER_ASSET_PERSIST_FAILED', 'dataset result was computed but the asset record could not be stored', correlationId);
+      }
+    }
     await recordUsage({ context, metric: 'processing_jobs_per_month', operationId: `dataset:${correlationId}` });
     return jsonResponse(result, { correlationId });
   } catch {

@@ -59,4 +59,26 @@ describe('private Compose deployment', () => {
       expect(alerts).toContain(name);
     }
   });
+
+  test('systemd deployment never pins the runtime to the legacy SQLite file', () => {
+    const unit = read('deploy/systemd/terrafield.service');
+    expect(unit).toContain('EnvironmentFile=/home/ubuntu/ai-azimara-terrafield/.env');
+    expect(unit).not.toMatch(/Environment=DATABASE_URL/);
+    for (const dropIn of ['deploy/systemd/terrafield.service.d/10-block-storage.conf']) {
+      expect(read(dropIn)).not.toMatch(/DATABASE_URL/);
+    }
+    for (const stale of ['deploy/systemd/terrafield.service.d/20-block-database.conf']) {
+      expect(() => read(stale)).toThrow();
+    }
+  });
+
+  test('host deploy script backs up, gates readiness and rolls back', () => {
+    const deploy = read('scripts/deploy-vps.sh');
+    expect(deploy).toContain('pg_dump');
+    expect(deploy).toContain('/api/v1/readyz');
+    expect(deploy).toContain('db:migrate:deploy');
+    expect(deploy).toContain('rollback()');
+    expect(deploy).toContain('systemctl restart');
+    expect(deploy).toContain('--frozen-lockfile');
+  });
 });
