@@ -96,7 +96,7 @@ describe('private Compose deployment', () => {
     expect(compose).toContain('prom/prometheus');
     expect(compose).toContain('grafana/grafana');
     expect(compose).toContain('127.0.0.1:9090:9090');
-    expect(compose).toContain('127.0.0.1:3001:3000');
+    expect(compose).toContain('127.0.0.1:33001:3000');
     const scrape = read('deploy/host-monitoring/prometheus.yml');
     expect(scrape).toContain('host.docker.internal:3011');
     expect(scrape).toContain('/api/v1/metrics');

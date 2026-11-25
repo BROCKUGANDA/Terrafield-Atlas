@@ -18,11 +18,11 @@ import { NextResponse } from 'next/server';
 export function middleware() {
   const policy = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://gibs.earthdata.nasa.gov https://eonet.gsfc.nasa.gov",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    "connect-src 'self' https://cloudflareinsights.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "media-src 'self'",

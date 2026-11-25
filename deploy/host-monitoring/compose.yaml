@@ -29,12 +29,12 @@ services:
     restart: unless-stopped
     depends_on: [prometheus]
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:33001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SERVER_ROOT_URL: http://127.0.0.1:3001
+      GF_SERVER_ROOT_URL: http://127.0.0.1:33001
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/provisioning/dashboards/dashboard.json:/var/lib/grafana/dashboards/terrafield.json:ro

@@ -31,7 +31,7 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 | Provider provenance attribution | Security | verified | Provider attribution context | `tests/private-provider-context.test.ts` | Deployed 0.4.0 | Personal (non-organization) private calls remain unlogged by design |
 | Host deploy path | SRE | verified | systemd, PostgreSQL container | `tests/deployment-config.test.ts`; live deploy | Deployed 0.4.0 | GitHub Actions blocked by account billing lock; local script used |
 | Tenant RLS enforcement | Security | verified | `TENANT_DATABASE_URL`, policy migrations | `tests/tenant-rls.integration.ts`; 5 suites with `TENANT_RLS_TEST=1` | Deploying 0.5.0 | Auth/worker/bootstrap paths intentionally use the owner role |
-| Host observability | SRE | implemented | Prometheus/Grafana compose | `tests/deployment-config.test.ts`; live scrape | Deploying 0.5.0 | Single-host, loopback-only; off-host retention is operator work |
+| Host observability | SRE | implemented | Prometheus/Grafana compose | `tests/deployment-config.test.ts`; live scrape | Deploying 0.5.0 | Single-host, loopback-only (Grafana 33001); off-host retention is operator work |
 | Account deletion | Identity | verified | Password + confirmation, blockers | `tests/account-isolation.test.ts` | Deploying 0.5.0 | Blocked while the account owns data |
 | OAuth client credentials | Developer platform | verified | Hashed clients/tokens, scopes | `tests/oauth.integration.ts` | Deploying 0.5.0 | No authorization-code flow, rotation or token GC |
 | Invoice settlement | Commercial | verified | Invoice/Payment tables, manual methods | `tests/billing-invoices.integration.ts` | Deploying 0.5.0 | No card processor; provider method rejected |
@@ -44,6 +44,8 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 ## Change log
 
 ### 2026-11-27 (0.5.0)
+
+- Deployed 0.5.0; validation evidence in `docs/release-validation-0.5.0.md`.
 
 - Enforced RLS for request-scoped queries with a tenant app-role connection; completed policies for onboarding, members, OAuth, invoices and payments.
 - Added host Prometheus/Grafana and blocked public metrics at the edge.

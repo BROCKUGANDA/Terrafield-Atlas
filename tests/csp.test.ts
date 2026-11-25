@@ -16,7 +16,7 @@ describe('CSP enforcement', () => {
     expect(policy).toContain('report-uri /api/v1/csp-report');
     // Static pages cannot carry a per-request nonce; inline scripts stay
     // allowed and that residual risk is documented in LIMITATIONS.
-    expect(policy).toContain("script-src 'self' 'unsafe-inline'");
+    expect(policy).toContain("script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com");
     expect(response.headers.get('content-security-policy-report-only')).toBeNull();
   });
 
