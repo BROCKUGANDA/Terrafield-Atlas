@@ -6,7 +6,9 @@ import { canReadResource, resolveTenantContext } from '@/lib/tenancy';
 type ReportCtx = { params: Promise<{ id: string }> };
 
 function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  const raw = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  // Neutralize spreadsheet formula injection before quoting.
+  const text = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

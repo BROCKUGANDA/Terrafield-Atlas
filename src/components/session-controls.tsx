@@ -36,7 +36,7 @@ export function SessionControls() {
 
   if (!notice && !fault) return null;
   return (
-    <aside aria-label="Session and privacy information" className="relative z-30 border-b border-white/10 bg-slate-950 px-4 py-3 text-xs text-slate-300">
+    <aside aria-label="Session and privacy information" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-xs text-slate-300 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2">
         <p className="min-w-0 flex-1 basis-64">{fault ? 'Demo-session service unavailable. The demo callsign is not an authenticated account.' : 'Essential session cookies only; no advertising cookies. Public-demo preferences and drafts use browser storage. Private workspace drafts stay in memory and reset on account changes. Sessions expire after 8 hours.'} <a href="/about" className="underline underline-offset-4">Data & privacy</a></p>
         {notice && <button type="button" className="min-h-11 rounded border border-white/20 px-4" onClick={() => {

@@ -15,6 +15,13 @@ import type { TenantContext } from '@/lib/tenancy';
 export const MANUAL_PAYMENT_METHODS = ['manual_bank', 'manual_cash'] as const;
 export type ManualPaymentMethod = (typeof MANUAL_PAYMENT_METHODS)[number];
 
+/**
+ * `onchain` is accepted only through the module-private capability used by
+ * settleVerifiedOnchainInvoiceInTransaction; the public settlement route and
+ * settleInvoice() cannot submit it.
+ */
+export const ONCHAIN_PAYMENT_METHOD = 'onchain' as const;
+
 export const BILLING_PAYMENT_NOTE =
   'Settlement is recorded manually by an authorized manager. No card processor or payment provider is connected; the platform never charges a card.';
 
@@ -59,6 +66,12 @@ export interface SettleInvoiceInput {
   amountMinor?: number;
   method: string;
   reference?: string | null;
+}
+
+/** Module-private capability: only settleVerifiedOnchainInvoiceInTransaction can set it. */
+const ONCHAIN_SETTLEMENT_CAPABILITY: unique symbol = Symbol('onchain-settlement-capability');
+interface InternalSettlementInput extends SettleInvoiceInput {
+  [ONCHAIN_SETTLEMENT_CAPABILITY]?: true;
 }
 
 function addMonthsUtc(date: Date, months: number): Date {
@@ -175,6 +188,141 @@ export async function listInvoices(
   });
 }
 
+function validateSettlementInput(input: InternalSettlementInput): void {
+  if (input.method === 'provider') {
+    throw new AccountAccessError(409, 'PAYMENT_PROVIDER_NOT_CONFIGURED', 'no payment provider adapter is configured; record a manual bank or cash settlement');
+  }
+  if (input.method === ONCHAIN_PAYMENT_METHOD) {
+    if (input[ONCHAIN_SETTLEMENT_CAPABILITY] !== true) {
+      throw new AccountAccessError(400, 'ONCHAIN_VERIFICATION_REQUIRED', 'onchain settlements are accepted only from the verified onchain payment path');
+    }
+  } else if (!MANUAL_PAYMENT_METHODS.some((method) => method === input.method)) {
+    throw new AccountAccessError(400, 'INVALID_PAYMENT_METHOD', `payment method must be one of ${MANUAL_PAYMENT_METHODS.join(', ')}`);
+  }
+  if (input.amountMinor !== undefined && (!Number.isInteger(input.amountMinor) || input.amountMinor < 0)) {
+    throw new AccountAccessError(400, 'INVALID_AMOUNT', 'settlement amount must be a non-negative integer in minor units');
+  }
+  const reference = input.reference?.trim() || null;
+  if (reference && reference.length > 200) {
+    throw new AccountAccessError(400, 'INVALID_REFERENCE', 'settlement reference must be 200 characters or fewer');
+  }
+}
+
+/**
+ * Settle inside an existing serializable transaction. The verified onchain
+ * wrapper uses this so its payment row, intent status, and invoice settlement
+ * commit or roll back together. Callers outside this module must use
+ * settleInvoice() or settleVerifiedOnchainInvoiceInTransaction().
+ */
+async function settleInvoiceCore(
+  tx: Prisma.TransactionClient,
+  context: TenantContext,
+  invoiceId: string,
+  input: InternalSettlementInput,
+): Promise<{ invoice: InvoiceRecord; payment: PaymentRecord; subscription: { id: string; status: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null } | null }> {
+  const userId = requireAccount(context);
+  validateSettlementInput(input);
+  const reference = input.reference?.trim() || null;
+
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-settle:${invoiceId}`}))`;
+  const invoice = await tx.invoice.findUnique({ where: { id: invoiceId }, select: invoiceDetailSelect });
+  if (!invoice || !inScope(invoice, context)) {
+    throw new AccountAccessError(404, 'INVOICE_NOT_FOUND', 'invoice not found');
+  }
+  if (invoice.status !== 'open') {
+    throw new AccountAccessError(409, 'INVOICE_NOT_OPEN', `invoice is ${invoice.status}; only open invoices can be settled`);
+  }
+  if (input.amountMinor !== undefined && input.amountMinor !== invoice.amountMinor) {
+    throw new AccountAccessError(409, 'AMOUNT_MISMATCH', `settlement amount must equal the invoice total of ${invoice.amountMinor} ${invoice.currency} minor units`);
+  }
+
+  const now = new Date();
+  const payment = await tx.payment.create({
+    data: {
+      invoiceId: invoice.id,
+      organizationId: invoice.organizationId,
+      amountMinor: invoice.amountMinor,
+      currency: invoice.currency,
+      method: input.method,
+      status: 'succeeded',
+      reference,
+      recordedByUserId: userId,
+    },
+    select: paymentSelect,
+  });
+
+  let subscription: { id: string; status: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null } | null = null;
+  if (invoice.subscriptionId) {
+    const current = await tx.subscription.findUnique({
+      where: { id: invoice.subscriptionId },
+      select: { id: true, currentPeriodStart: true, currentPeriodEnd: true, status: true },
+    });
+    if (current) {
+      const baseStart = current.currentPeriodStart ?? invoice.periodStart ?? now;
+      const baseEnd = current.currentPeriodEnd ?? invoice.periodEnd ?? addMonthsUtc(baseStart, 1);
+      const nextStart = addMonthsUtc(baseStart, 1);
+      let nextEnd = addMonthsUtc(baseEnd, 1);
+      if (nextEnd <= nextStart) nextEnd = addMonthsUtc(nextStart, 1);
+      subscription = await tx.subscription.update({
+        where: { id: current.id },
+        data: { status: 'active', cancelAt: null, currentPeriodStart: nextStart, currentPeriodEnd: nextEnd },
+        select: { id: true, status: true, currentPeriodStart: true, currentPeriodEnd: true },
+      });
+    }
+  }
+
+  const settled = await tx.invoice.update({
+    where: { id: invoice.id },
+    data: { status: 'paid', paidAt: now },
+    select: invoiceDetailSelect,
+  });
+
+  await writeMutationEffects(tx, {
+    actor: `account:${userId}`,
+    action: 'billing.invoice.settle',
+    targetId: invoice.id,
+    detail: `${input.method}${reference ? ` (${reference})` : ''}`,
+    organizationId: invoice.organizationId,
+    aggregateType: 'Invoice',
+    aggregateId: invoice.id,
+    eventType: 'invoice.paid',
+    payload: {
+      invoiceId: invoice.id,
+      paymentId: payment.id,
+      amountMinor: payment.amountMinor,
+      currency: payment.currency,
+      method: payment.method,
+      reference,
+      subscriptionId: invoice.subscriptionId,
+      periodStart: subscription?.currentPeriodStart ?? null,
+      periodEnd: subscription?.currentPeriodEnd ?? null,
+    },
+  });
+
+  return { invoice: settled, payment, subscription };
+}
+
+/**
+ * The only entry point that may record an onchain settlement. Callers must be
+ * the server-side verifier, which has already checked the chain receipt and
+ * exact transfer semantics; this function does not perform RPC itself.
+ */
+export async function settleVerifiedOnchainInvoiceInTransaction(
+  tx: Prisma.TransactionClient,
+  context: TenantContext,
+  invoiceId: string,
+  txHash: string,
+): Promise<{ invoice: InvoiceRecord; payment: PaymentRecord; subscription: { id: string; status: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null } | null }> {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+    throw new AccountAccessError(400, 'INVALID_TX_HASH', 'a verified onchain settlement requires a 32-byte transaction hash');
+  }
+  return settleInvoiceCore(tx, context, invoiceId, {
+    method: ONCHAIN_PAYMENT_METHOD,
+    reference: txHash,
+    [ONCHAIN_SETTLEMENT_CAPABILITY]: true,
+  });
+}
+
 /**
  * Record one manual settlement. The invoice must be open, the recorded amount
  * must equal the invoice total, and a linked subscription is activated and
@@ -185,99 +333,12 @@ export async function settleInvoice(
   invoiceId: string,
   input: SettleInvoiceInput,
 ): Promise<{ invoice: InvoiceRecord; payment: PaymentRecord; subscription: { id: string; status: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null } | null }> {
-  const userId = requireAccount(context);
-  if (input.method === 'provider') {
-    throw new AccountAccessError(409, 'PAYMENT_PROVIDER_NOT_CONFIGURED', 'no payment provider adapter is configured; record a manual bank or cash settlement');
-  }
-  if (!MANUAL_PAYMENT_METHODS.some((method) => method === input.method)) {
-    throw new AccountAccessError(400, 'INVALID_PAYMENT_METHOD', `payment method must be one of ${MANUAL_PAYMENT_METHODS.join(', ')}`);
-  }
-  if (input.amountMinor !== undefined && (!Number.isInteger(input.amountMinor) || input.amountMinor < 0)) {
-    throw new AccountAccessError(400, 'INVALID_AMOUNT', 'settlement amount must be a non-negative integer in minor units');
-  }
-  const reference = input.reference?.trim() || null;
-  if (reference && reference.length > 200) {
-    throw new AccountAccessError(400, 'INVALID_REFERENCE', 'settlement reference must be 200 characters or fewer');
-  }
-
-  return db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-settle:${invoiceId}`}))`;
-    const invoice = await tx.invoice.findUnique({ where: { id: invoiceId }, select: invoiceDetailSelect });
-    if (!invoice || !inScope(invoice, context)) {
-      throw new AccountAccessError(404, 'INVOICE_NOT_FOUND', 'invoice not found');
-    }
-    if (invoice.status !== 'open') {
-      throw new AccountAccessError(409, 'INVOICE_NOT_OPEN', `invoice is ${invoice.status}; only open invoices can be settled`);
-    }
-    if (input.amountMinor !== undefined && input.amountMinor !== invoice.amountMinor) {
-      throw new AccountAccessError(409, 'AMOUNT_MISMATCH', `settlement amount must equal the invoice total of ${invoice.amountMinor} ${invoice.currency} minor units`);
-    }
-
-    const now = new Date();
-    const payment = await tx.payment.create({
-      data: {
-        invoiceId: invoice.id,
-        organizationId: invoice.organizationId,
-        amountMinor: invoice.amountMinor,
-        currency: invoice.currency,
-        method: input.method,
-        status: 'succeeded',
-        reference,
-        recordedByUserId: userId,
-      },
-      select: paymentSelect,
-    });
-
-    let subscription: { id: string; status: string; currentPeriodStart: Date | null; currentPeriodEnd: Date | null } | null = null;
-    if (invoice.subscriptionId) {
-      const current = await tx.subscription.findUnique({
-        where: { id: invoice.subscriptionId },
-        select: { id: true, currentPeriodStart: true, currentPeriodEnd: true, status: true },
-      });
-      if (current) {
-        const baseStart = current.currentPeriodStart ?? invoice.periodStart ?? now;
-        const baseEnd = current.currentPeriodEnd ?? invoice.periodEnd ?? addMonthsUtc(baseStart, 1);
-        const nextStart = addMonthsUtc(baseStart, 1);
-        let nextEnd = addMonthsUtc(baseEnd, 1);
-        if (nextEnd <= nextStart) nextEnd = addMonthsUtc(nextStart, 1);
-        subscription = await tx.subscription.update({
-          where: { id: current.id },
-          data: { status: 'active', cancelAt: null, currentPeriodStart: nextStart, currentPeriodEnd: nextEnd },
-          select: { id: true, status: true, currentPeriodStart: true, currentPeriodEnd: true },
-        });
-      }
-    }
-
-    const settled = await tx.invoice.update({
-      where: { id: invoice.id },
-      data: { status: 'paid', paidAt: now },
-      select: invoiceDetailSelect,
-    });
-
-    await writeMutationEffects(tx, {
-      actor: `account:${userId}`,
-      action: 'billing.invoice.settle',
-      targetId: invoice.id,
-      detail: `manual ${input.method}${reference ? ` (${reference})` : ''}`,
-      organizationId: invoice.organizationId,
-      aggregateType: 'Invoice',
-      aggregateId: invoice.id,
-      eventType: 'invoice.paid',
-      payload: {
-        invoiceId: invoice.id,
-        paymentId: payment.id,
-        amountMinor: payment.amountMinor,
-        currency: payment.currency,
-        method: payment.method,
-        reference,
-        subscriptionId: invoice.subscriptionId,
-        periodStart: subscription?.currentPeriodStart ?? null,
-        periodEnd: subscription?.currentPeriodEnd ?? null,
-      },
-    });
-
-    return { invoice: settled, payment, subscription };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 30_000 });
+  requireAccount(context);
+  validateSettlementInput(input);
+  return db.$transaction(
+    (tx) => settleInvoiceCore(tx, context, invoiceId, input),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 30_000 },
+  );
 }
 
 /** Void an open invoice. Voided invoices can never be settled. */

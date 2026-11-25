@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { BodyTooLargeError, readBoundedText } from '@/lib/account-security';
-import { rateLimit } from '@/lib/api/helpers';
+import { clientKey, rateLimit } from '@/lib/api/helpers';
 import { getCorrelationId } from '@/lib/correlation';
 import { exchangeClientCredentials } from '@/lib/oauth';
 import { RedisUnavailableError } from '@/lib/redis';
@@ -53,7 +53,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (scope.length > MAX_SCOPE_LENGTH) return oauthError(400, 'invalid_scope', 'requested scope is too long', correlationId);
 
   try {
-    const limit = await rateLimit(`oauth:token:${clientId}`, { capacity: 30, refillPerMinute: 30 });
+    const limit = await rateLimit(`${clientKey(req, 'oauth:token')}:${clientId}`, { capacity: 30, refillPerMinute: 30 });
     if (!limit.allowed) {
       const res = oauthError(429, 'temporarily_unavailable', `too many token requests; retry after ${limit.retryAfterSec}s`, correlationId);
       res.headers.set('Retry-After', String(limit.retryAfterSec));

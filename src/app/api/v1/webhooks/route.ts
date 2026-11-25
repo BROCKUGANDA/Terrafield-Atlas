@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { apiHandler, clientKey, errorResponse, jsonResponse, parseBody, rateLimit, rateLimitResponse, redactOneTimeSecret, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
-import { assertCapability } from '@/lib/commercial';
 import { encryptSecret } from '@/lib/webhook-crypto';
 import { WEBHOOK_EVENTS } from '@/lib/webhooks/events';
 import { assertResolvedWebhookTargetSafe } from '@/lib/fires/digest-exit-webhook';
@@ -33,7 +32,6 @@ export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, 
   const context = await resolveTenantContext(req);
   if (!context.organizationId) return errorResponse(400, 'ORGANIZATION_REQUIRED', 'webhooks require an organization workspace', correlationId);
   requirePermission(context, 'webhook.manage');
-  await assertCapability(context, 'webhooks');
   const rl = await rateLimit(clientKey(req, 'webhooks:create'), { capacity: 10, refillPerMinute: 3 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, schema);
@@ -72,7 +70,6 @@ export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, 
     const context = await resolveTenantContext(req);
     if (!context.organizationId) return errorResponse(400, 'ORGANIZATION_REQUIRED', 'webhooks require an organization workspace', correlationId);
     requirePermission(context, 'webhook.manage');
-    await assertCapability(context, 'webhooks');
-  },
+    },
   redactReplay: redactOneTimeSecret,
 }));

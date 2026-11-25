@@ -33,6 +33,8 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   }
   const query = querySchema.safeParse(Object.fromEntries(new URL(req.url).searchParams.entries()));
   if (!query.success) return errorResponse(400, 'VALIDATION_ERROR', 'invalid raster processing parameters', correlationId);
+  const declaredBytes = Number(req.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BYTES) return errorResponse(413, 'PAYLOAD_TOO_LARGE', 'upload exceeds 50 MB', correlationId);
   let form: FormData;
   try { form = await req.formData(); } catch { return errorResponse(400, 'INVALID_MULTIPART', 'multipart GeoTIFF upload is required', correlationId); }
   const file = form.get('file');

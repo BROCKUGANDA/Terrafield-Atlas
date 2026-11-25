@@ -161,7 +161,7 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
     const stored = await db.apiKey.findUniqueOrThrow({ where: { id: apiKeyId } });
     expect(stored.keyHash).not.toBe(apiSecret);
     expect(JSON.stringify(stored)).not.toContain(apiSecret);
-    const replayRecord = await db.idempotencyRecord.findUniqueOrThrow({ where: { ownerId_route_key: { ownerId: userA, route: '/api/v1/api-keys', key: idempotencyKey } } });
+    const replayRecord = await db.idempotencyRecord.findFirstOrThrow({ where: { ownerId: userA, key: idempotencyKey } });
     expect(replayRecord.responseRef).not.toContain(apiSecret);
     const replay = await apiKeys.POST(request('api-keys', 'POST', options), ctx());
     expect(replay.status).toBe(201);
@@ -222,7 +222,7 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
     const created = await webhooks.POST(request('webhooks', 'POST', options), ctx());
     expect(created.status, await created.clone().text()).toBe(201);
     const { secret, webhook } = await created.json();
-    const record = await db.idempotencyRecord.findUniqueOrThrow({ where: { ownerId_route_key: { ownerId: manager.id, route: '/api/v1/webhooks', key } } });
+    const record = await db.idempotencyRecord.findFirstOrThrow({ where: { ownerId: manager.id, key } });
     expect(record.responseRef).not.toContain(secret);
 
     const replay = await webhooks.POST(request('webhooks', 'POST', options), ctx());
@@ -242,7 +242,7 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
     expect(body.plans.map((plan: { code: string }) => plan.code)).toEqual(['explorer', 'professional', 'cooperative', 'enterprise', 'institutional']);
     expect(body.subscription.status).toBe('trialing');
     expect(body.entitlements.capabilities.organization).toBe(true);
-    expect(body.paymentNote).toContain('No payment provider');
+    expect(body.paymentNote).toContain('Core features are free');
   });
 
   test('intelligence plans require approval and record audited tool evidence', async () => {
@@ -527,14 +527,12 @@ if (process.env.TERRAFIELD_ENTERPRISE_TEST_WORKER !== '1') {
     expect(created.status).toBe(201);
     const organization = (await created.json()).organization;
     const actorMembership = await db.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId: organization.id, userId: actor.id } } });
-    await db.membership.update({ where: { id: actorMembership.id }, data: { role: 'admin' } });
-    const owners = await Promise.all(['first-owner@enterprise.test', 'second-owner@enterprise.test'].map(async (email) => {
-      const user = await db.accountUser.create({ data: { email, emailVerified: new Date() } });
-      return db.membership.create({ data: { organizationId: organization.id, userId: user.id, role: 'owner', status: 'active' } });
-    }));
-    const responses = await Promise.all(owners.map((owner) => memberDetail.PATCH(
-      request(`organizations/${organization.id}/members/${owner.id}`, 'PATCH', { cookie: actorCookie, organizationId: organization.id, body: { role: 'viewer' } }),
-      ctx({ id: organization.id, membershipId: owner.id }),
+    expect(actorMembership.role).toBe('owner');
+    const secondOwner = await db.accountUser.create({ data: { email: 'second-owner@enterprise.test', emailVerified: new Date() } });
+    const secondMembership = await db.membership.create({ data: { organizationId: organization.id, userId: secondOwner.id, role: 'owner', status: 'active' } });
+    const responses = await Promise.all([actorMembership, secondMembership].map((membership) => memberDetail.PATCH(
+      request(`organizations/${organization.id}/members/${membership.id}`, 'PATCH', { cookie: actorCookie, organizationId: organization.id, body: { role: 'viewer' } }),
+      ctx({ id: organization.id, membershipId: membership.id }),
     )));
     expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
     expect(await db.membership.count({ where: { organizationId: organization.id, role: 'owner', status: 'active' } })).toBe(1);

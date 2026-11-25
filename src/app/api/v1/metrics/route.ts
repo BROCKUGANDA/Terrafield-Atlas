@@ -1,12 +1,24 @@
 import { db } from '@/lib/db';
 import { appMetrics } from '@/lib/metrics';
 import { redisRuntime } from '@/lib/redis';
+import { classifyIpLiteral } from '@/lib/network-safety';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** Private-network Prometheus endpoint. Caddy explicitly denies public access. */
-export async function GET() {
+/**
+ * Private-network Prometheus endpoint. Caddy denies public access and the app
+ * adds defence in depth: a forwarded public client address is rejected even if
+ * the edge rule is lost.
+ */
+export async function GET(req: Request) {
+  const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  if (forwarded) {
+    const verdict = classifyIpLiteral(forwarded.replace(/^::ffff:/, ''));
+    if (verdict === null || verdict.ok) {
+      return new Response('metrics are private\n', { status: 403, headers: { 'cache-control': 'no-store' } });
+    }
+  }
   const [{ queueMetrics }, { schedulerLeaseStatus }, { digestChannelStatus }] = await Promise.all([
     import('@/lib/jobs/runtime'),
     import('@/lib/scheduler'),

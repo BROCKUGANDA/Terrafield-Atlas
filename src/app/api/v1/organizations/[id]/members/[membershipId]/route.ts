@@ -31,6 +31,10 @@ export const PATCH = apiHandler<MemberCtx>((req, { correlationId, params }) => w
   if (!parsed.ok) return parsed.res;
   const existing = await db.membership.findUnique({ where: { id: membershipId }, select: { organizationId: true, role: true, status: true } });
   if (!existing || existing.organizationId !== id) return errorResponse(404, 'NOT_FOUND', 'membership not found', correlationId);
+  const touchesOwnerRole = existing.role === 'owner' || parsed.data.role === 'owner';
+  if (touchesOwnerRole && context.role !== 'owner' && !context.isPlatformAdmin) {
+    return errorResponse(403, 'OWNER_ROLE_REQUIRED', 'only an owner can grant, change, or suspend the owner role', correlationId);
+  }
   if (existing.role === 'owner' && (parsed.data.role !== 'owner' || parsed.data.status === 'suspended')) {
     const owners = await db.membership.count({ where: { organizationId: id, role: 'owner', status: 'active' } });
     if (owners <= 1) return errorResponse(409, 'LAST_OWNER', 'an organization must retain at least one active owner', correlationId);

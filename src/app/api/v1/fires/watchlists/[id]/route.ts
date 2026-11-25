@@ -6,7 +6,7 @@ import {
 } from '@/lib/api/helpers';
 import { serializeEvent, serializeWatchlist } from '@/lib/fires/watchlist-serialize';
 import { isReevaluateInterval, nextRunAfter, REEVALUATE_INTERVALS } from '@/lib/schedule-core';
-import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { canReadResource, requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
 /**
  * GET    /api/v1/fires/watchlists/[id]
@@ -37,8 +37,9 @@ const patchSchema = z.object({
 export const GET = apiHandler<WatchCtx>(async (req, { correlationId, params }) => {
   const { id } = await params;
   paginationSchema(100, 25).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
+  const context = await resolveTenantContext(req);
   const watchlist = await db.fireWatchlist.findUnique({ where: { id } });
-  if (!watchlist) return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
+  if (!watchlist || !canReadResource(context, watchlist)) return errorResponse(404, 'NOT_FOUND', `watchlist ${id} not found`, correlationId);
   const events = await db.fireWatchEvent.findMany({ where: { watchlistId: id }, orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }], take: 25 });
   return jsonResponse({ watchlist: serializeWatchlist(watchlist), events: events.map(serializeEvent), correlationId }, { correlationId });
 });

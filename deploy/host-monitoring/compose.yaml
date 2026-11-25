@@ -1,18 +1,15 @@
 name: terrafield-monitoring
 
-# Host-side observability for the systemd deployment. Both UIs bind loopback
-# only; reach them through an SSH tunnel. Prometheus scrapes the application on
-# the host via host.docker.internal and never exposes the metrics port.
+# Host-side observability for the loopback-bound systemd deployment. Both
+# services use host networking so the app port is never published off-box;
+# Prometheus and Grafana bind 127.0.0.1 explicitly.
 
 services:
   prometheus:
     image: prom/prometheus:v3.2.1
     container_name: terrafield-prometheus
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:9090:9090"
+    network_mode: host
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
@@ -21,22 +18,23 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=30d
-      - --web.listen-address=0.0.0.0:9090
+      - --web.listen-address=127.0.0.1:9090
 
   grafana:
     image: grafana/grafana:11.6.0
     container_name: terrafield-grafana
     restart: unless-stopped
+    network_mode: host
     depends_on: [prometheus]
-    ports:
-      - "127.0.0.1:33001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "33001"
       GF_SERVER_ROOT_URL: http://127.0.0.1:33001
     volumes:
-      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/provisioning/dashboards/dashboard.json:/var/lib/grafana/dashboards/terrafield.json:ro
       - grafana-data:/var/lib/grafana
 

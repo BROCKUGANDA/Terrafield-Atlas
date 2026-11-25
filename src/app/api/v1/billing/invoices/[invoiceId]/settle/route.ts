@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { apiHandler, jsonResponse, parseBody, withIdempotency } from '@/lib/api/helpers';
+import { apiHandler, errorResponse, jsonResponse, parseBody, withIdempotency } from '@/lib/api/helpers';
 import { BILLING_PAYMENT_NOTE, settleInvoice } from '@/lib/billing/invoices';
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
@@ -19,6 +19,12 @@ export const POST = apiHandler<InvoiceCtx>(async (req, { correlationId, params }
     requirePermission(context, 'billing.manage');
     const parsed = await parseBody(req, settleSchema);
     if (!parsed.ok) return parsed.res;
+    // A tenant manager cannot attest their own bank transfer. Customer-visible
+    // settlement is the verified onchain path; manual methods are an operator
+    // record after an off-platform payment.
+    if (!context.isPlatformAdmin) {
+      return errorResponse(403, 'MANUAL_SETTLEMENT_ADMIN_ONLY', 'manual settlement is recorded by a platform administrator', correlationId);
+    }
     const result = await settleInvoice(context, invoiceId, parsed.data);
     return jsonResponse({ ...result, paymentNote: BILLING_PAYMENT_NOTE }, { correlationId });
   });

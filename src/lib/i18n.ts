@@ -136,12 +136,49 @@ const en = {
   'account.signedIn': 'Account signed in',
   'account.backToSignIn': 'Back to sign in',
   'account.updatePassword': 'Update password',
+  'account.chooseNewPassword': 'Choose a new password',
   'account.resetHelp':
     'This single-use link expires one hour after it was sent. Your new password must be at least 12 characters.',
   'account.registerHelp':
     'Use a unique password of at least 12 characters. We’ll send a verification link; your password is never sent by email.',
   'account.forgotHelp':
     'We’ll email a single-use reset link to a verified account. The message is the same whether or not the address is registered.',
+  'account.passwordMismatch': 'Passwords do not match.',
+  'account.invalidPassword': 'Password is incorrect.',
+  'account.rateLimited': 'Too many attempts. Try again later.',
+  'account.serviceUnavailable': 'Account service unavailable.',
+  'account.resetFailed': 'Password reset could not be completed.',
+  'account.resetSuccess': 'Password updated. Sign in with your new password.',
+  'account.registerFailed': 'Registration could not be completed. Check your details or try later.',
+  'account.registerSent':
+    'If registration is available for this address, a verification email has been sent. Verify your email before signing in.',
+  'account.resetRequestFailed': 'Password reset could not be requested. Try again later.',
+  'account.resetRequestSent':
+    'If a verified account exists for this address, a password-reset email has been sent.',
+  'account.signInFailed': 'Sign-in failed. Check your email and password, and verify your email first.',
+  'account.deleteSummary': 'Delete account',
+  'account.deleteIntro':
+    'Permanently erase this account and its sign-in credentials. Organizations, farms, watchlists, invitations or API keys you still own must be transferred or removed first.',
+  'account.deleteConfirmLabel': 'Type DELETE to confirm',
+  'account.deleteButton': 'Delete account permanently',
+  'account.deleteBlocked': 'Resolve the listed resources before deleting this account.',
+  'account.deleteFailed': 'Account could not be deleted.',
+  'account.blocker.organizationsOwned': 'Organizations you own',
+  'account.blocker.farmsOwned': 'Farms you own',
+  'account.blocker.soleOwnerOrganizations': 'Organizations where you are the only owner',
+  'account.blocker.watchlistsOwned': 'Fire watchlists you own',
+  'account.blocker.organizationInvitationsCreated': 'Organization invitations you sent',
+  'account.blocker.apiKeysCreated': 'API keys you created',
+  'account.inviteTitle': 'Organization invitation',
+  'account.inviteBody':
+    'Accept this invitation to join the organization workspace. The server verifies the token, expiry, and invited email.',
+  'account.inviteAccept': 'Accept invitation',
+  'account.inviteAccepting': 'Accepting…',
+  'account.inviteAccepted': 'Invitation accepted. Role: {role}.',
+  'account.inviteFailed': 'Invitation could not be accepted.',
+  'account.inviteSignInPrompt': 'Sign in or create the invited account to accept your organization invitation.',
+  'account.openFarmWorkspace': 'Open farm workspace',
+  'account.signOutAccount': 'Sign out account',
 
   // Marketing shell (header, CTA, footer notice).
   'marketing.nav.platform': 'Platform',
@@ -194,23 +231,23 @@ const sw: Record<TranslationKey, string> = {
   'locale.swahili': 'Kiswahili',
 
   'nav.landing': 'Muhtasari wa Misheni',
-  'nav.dashboard': 'Maarifa ya Dunia',
+  'nav.dashboard': 'Ufahamu wa Dunia',
   'nav.explorer': 'Kichunguzi cha Kijiografia',
   'nav.sources': 'Katalogi ya Data',
   'nav.analysis': 'Uchambuzi wa Mazingira',
-  'nav.fire': 'Maarifa ya Moto',
+  'nav.fire': 'Ufahamu wa Moto',
   'nav.farm': 'Eneo la Kazi la Shamba',
-  'nav.rotation': 'Mpangaji wa Mzunguko wa Mazao',
+  'nav.rotation': 'Mpangilio wa Mzunguko wa Mazao',
   'nav.markets': 'Masoko',
   'nav.reports': 'Ripoti za Shamba',
-  'nav.organizations': 'Eneo la Kazi la Taasisi',
+  'nav.organizations': 'Eneo la Kazi la Shirika',
   'nav.billing': 'Mipango na Matumizi',
-  'nav.intelligence': 'Maarifa ya Atlas',
-  'nav.provenance': 'Ushahidi na Chanzo',
+  'nav.intelligence': 'Ufahamu wa Atlas',
+  'nav.provenance': 'Ushahidi na Asili ya Data',
   'nav.admin': 'Utawala wa Jukwaa',
   'nav.settings': 'Afya ya Mfumo',
   'nav.group.mission': 'Misheni',
-  'nav.group.intelligence': 'Maarifa ya Dunia',
+  'nav.group.intelligence': 'Ufahamu wa Dunia',
   'nav.group.planning': 'Mipango ya Shamba',
   'nav.group.enterprise': 'Taasisi na Biashara',
   'nav.group.trust': 'Uaminifu na Mifumo',
@@ -219,7 +256,7 @@ const sw: Record<TranslationKey, string> = {
   'landing.kicker': 'NASA Space Apps 2026 · Field Shift',
   'landing.heroSr': '— konsoli ya misheni ya TerraField Atlas',
   'landing.heroIntro':
-    'Ufahamu wa uchunguzi wa Dunia kwa ustahimilivu wa kilimo. Tazama kile satelaiti za NASA zinachokiona kuhusu ardhi yako — mvua, halijoto, mionzi ya jua, unyevu wa eneo la mizizi, mimea na historia ya moto — elewa kama mabadiliko ni muhimu kitakwimu, na linganisha chaguo za mzunguko wa mazao zinazoungwa mkono na ushahidi huku kila alama ikielezeka na kila uchunguzi ukifuatilika hadi chanzo chake.',
+    'Ufahamu wa uchunguzi wa Dunia kwa ustahimilivu wa kilimo. Tazama kile satelaiti za NASA zinachokiona kuhusu ardhi yako — mvua, halijoto, mionzi ya jua, unyevu wa eneo la mizizi, mimea na historia ya moto — elewa ikiwa mabadiliko ni yenye maana kitakwimu, na linganisha chaguo za mzunguko wa mazao zinazoungwa mkono na ushahidi huku kila alama ikielezeka na kila uchunguzi ukifuatilika hadi chanzo chake.',
   'landing.cta': 'Ingia kwenye konsoli',
   'landing.accessGranted': 'Ufikiaji umeruhusiwa',
   'landing.missionObserver': '/ mwangalizi wa misheni',
@@ -233,10 +270,10 @@ const sw: Record<TranslationKey, string> = {
   'landing.continueAsGuest': 'Endelea kama mgeni',
   'landing.accessNote':
     'Onyesho wazi — kitambulisho cha kipindi kinabaki kwenye kifaa hiki. Hakuna vitambulisho, hakuna nenosiri, hakuna kinachotumwa.',
-  'landing.liveTelemetry': 'Mtandao wa telemetria unaoendelea',
+  'landing.liveTelemetry': 'Mtandao wa telemetria wa moja kwa moja',
   'landing.stylizedNotImagery': 'imechorwa · si picha',
   'landing.initializing': 'inaandaa kionyeshi cha telemetria…',
-  'landing.demoPreset': 'chaguo la onyesho',
+  'landing.demoPreset': 'mpangilio tayari wa onyesho',
   'landing.stylizedNote': 'mtandao wa telemetria uliochorwa — si bidhaa ya picha',
   'landing.sourceRegistry': 'Sajili ya vyanzo',
   'landing.systemStatus': 'Hali ya mfumo',
@@ -247,10 +284,10 @@ const sw: Record<TranslationKey, string> = {
   'account.intro':
     'Akaunti iliyothibitishwa ni tofauti na jina la wito la onyesho la umma. Mashamba na orodha za ufuatiliaji zinazomilikiwa na akaunti hukaguliwa kwenye seva, si kulindwa na lebo ya kivinjari.',
   'account.detail':
-    'Akaunti za kibinafsi zinaunga mkono kumbukumbu za shamba, uingizaji wa POWER, uchambuzi wa kihistoria, vipimo vya udongo, mifumo ya mzunguko na ripoti. Orodha za ufuatiliaji za kibinafsi zinaunga mkono tathmini, upimaji wa nyuma, ratiba na muhtasari wa moja kwa moja kwa mmiliki pekee. Maeneo ya barua pepe na webhook yanayoshirikiwa hayapokei arifa za kibinafsi. Upatikanaji wa mtoa huduma na ufikiaji wa kumbukumbu bado unatumika.',
+    'Akaunti za kibinafsi zinasaidia kumbukumbu za shamba, uingizaji wa POWER, uchambuzi wa kihistoria, vipimo vya udongo, hali za mzunguko na ripoti. Orodha za ufuatiliaji za kibinafsi zinasaidia tathmini, upimaji wa nyuma, ratiba na muhtasari wa moja kwa moja kwa mmiliki pekee. Maeneo ya barua pepe na webhook yanayoshirikiwa hayapokei arifa za kibinafsi. Upatikanaji wa watoa huduma na wigo wa kumbukumbu bado unatumika.',
   'account.continueDemo': 'Endelea na onyesho la umma linaloshirikiwa',
   'account.signIn': 'Ingia',
-  'account.register': 'Sajili',
+  'account.register': 'Jisajili',
   'account.reset': 'Weka upya nenosiri',
   'account.name': 'Jina',
   'account.email': 'Barua pepe',
@@ -270,15 +307,52 @@ const sw: Record<TranslationKey, string> = {
   'account.pleaseWait': 'Tafadhali subiri…',
   'account.helpCookies': 'Vidakuzi muhimu vya akaunti vinakuweka umeingia.',
   'account.privacyLink': 'Faragha na mbinu za data',
-  'account.signedIn': 'Akaunti imeingia',
-  'account.backToSignIn': 'Rudi kuingia',
+  'account.signedIn': 'Umeingia katika akaunti',
+  'account.backToSignIn': 'Rudi kwenye ukurasa wa kuingia',
   'account.updatePassword': 'Sasisha nenosiri',
+  'account.chooseNewPassword': 'Chagua nenosiri jipya',
   'account.resetHelp':
     'Kiungo hiki cha matumizi ya mara moja kinaisha saa moja baada ya kutumwa. Nenosiri lako jipya lazima liwe na angalau herufi 12.',
   'account.registerHelp':
     'Tumia nenosiri la kipekee la angalau herufi 12. Tutatuma kiungo cha uthibitisho; nenosiri lako halitumwi kwa barua pepe.',
   'account.forgotHelp':
     'Tutatuma kiungo cha kuweka upya cha matumizi ya mara moja kwa akaunti iliyothibitishwa. Ujumbe ni ule ule ikiwa anwani imesajiliwa au la.',
+  'account.passwordMismatch': 'Manenosiri hayafanani.',
+  'account.invalidPassword': 'Nenosiri si sahihi.',
+  'account.rateLimited': 'Majaribio mengi mno. Jaribu tena baadaye.',
+  'account.serviceUnavailable': 'Huduma ya akaunti haipatikani.',
+  'account.resetFailed': 'Kuweka upya nenosiri hakukukamilika.',
+  'account.resetSuccess': 'Nenosiri limesasishwa. Ingia kwa nenosiri lako jipya.',
+  'account.registerFailed': 'Usajili haukukamilika. Angalia taarifa zako au jaribu baadaye.',
+  'account.registerSent':
+    'Ikiwa usajili unapatikana kwa anwani hii, barua pepe ya uthibitisho imetumwa. Thibitisha barua pepe yako kabla ya kuingia.',
+  'account.resetRequestFailed': 'Ombi la kuweka upya nenosiri halikuweza kufanyika. Jaribu tena baadaye.',
+  'account.resetRequestSent':
+    'Ikiwa akaunti iliyothibitishwa ipo kwa anwani hii, barua pepe ya kuweka upya nenosiri imetumwa.',
+  'account.signInFailed': 'Kuingia hakukufaulu. Angalia barua pepe na nenosiri lako, na thibitisha barua pepe yako kwanza.',
+  'account.deleteSummary': 'Futa akaunti',
+  'account.deleteIntro':
+    'Futa kabisa akaunti hii na vitambulisho vyake vya kuingia. Mashirika, mashamba, orodha za ufuatiliaji, mialiko au funguo za API unazomiliki bado lazima zihamishwe au kuondolewa kwanza.',
+  'account.deleteConfirmLabel': 'Andika DELETE ili kuthibitisha',
+  'account.deleteButton': 'Futa akaunti kabisa',
+  'account.deleteBlocked': 'Tatua rasilimali zilizoorodheshwa kabla ya kufuta akaunti hii.',
+  'account.deleteFailed': 'Akaunti haikuweza kufutwa.',
+  'account.blocker.organizationsOwned': 'Mashirika unayomiliki',
+  'account.blocker.farmsOwned': 'Mashamba unayomiliki',
+  'account.blocker.soleOwnerOrganizations': 'Mashirika ambapo wewe ndiye mmiliki pekee',
+  'account.blocker.watchlistsOwned': 'Orodha za ufuatiliaji wa moto unazomiliki',
+  'account.blocker.organizationInvitationsCreated': 'Mialiko ya mashirika uliyotuma',
+  'account.blocker.apiKeysCreated': 'Funguo za API ulizounda',
+  'account.inviteTitle': 'Mwaliko wa shirika',
+  'account.inviteBody':
+    'Kubali mwaliko huu ili ujiunge na eneo la kazi la shirika. Seva huthibitisha tokeni, muda wake wa mwisho, na barua pepe iliyoalikwa.',
+  'account.inviteAccept': 'Kubali mwaliko',
+  'account.inviteAccepting': 'Inakubali…',
+  'account.inviteAccepted': 'Mwaliko umekubaliwa. Jukumu: {role}.',
+  'account.inviteFailed': 'Mwaliko haukuweza kukubaliwa.',
+  'account.inviteSignInPrompt': 'Ingia au unda akaunti iliyoalikwa ili kukubali mwaliko wako wa shirika.',
+  'account.openFarmWorkspace': 'Fungua eneo la kazi la shamba',
+  'account.signOutAccount': 'Toka kwenye akaunti',
 
   'marketing.nav.platform': 'Jukwaa',
   'marketing.nav.solutions': 'Suluhisho',
@@ -289,18 +363,18 @@ const sw: Record<TranslationKey, string> = {
   'marketing.nav.contact': 'Wasiliana',
   'marketing.nav.about': 'Kuhusu',
   'marketing.nav.industries': 'Sekta',
-  'marketing.nav.openapi': 'Maelezo ya OpenAPI',
+  'marketing.nav.openapi': 'Vipimo vya OpenAPI',
   'marketing.nav.privacy': 'Faragha',
   'marketing.nav.terms': 'Masharti',
   'marketing.nav.licensing': 'Leseni na mipaka',
   'marketing.homeLabel': 'Nyumbani kwa TerraField Atlas',
-  'marketing.navLabel': 'Urambazaji wa tovuti ya masoko',
+  'marketing.navLabel': 'Urambazaji wa masoko',
   'marketing.cta': 'Fungua konsoli',
   'marketing.tagline':
     'Uchunguzi wa Dunia unaogeuka kuwa maarifa ya utendaji yanayoelezeka kwa kilimo, ustahimilivu, na mipango ya taasisi.',
-  'marketing.motto': 'Ushahidi kabla ya hitimisho · chanzo kabla ya uwasilishaji',
+  'marketing.motto': 'Ushahidi kabla ya hitimisho · asili kabla ya uwasilishaji',
   'marketing.footerNotice':
-    'Hakuna idhini au ushirikiano wa NASA unaodaiwa. Uhusiano wa kimazingira si uthibitisho wa sababu za kilimo.',
+    'Hakuna uidhinishaji au ushirikiano wa NASA unaodaiwa. Uhusiano wa kimazingira si uthibitisho wa sababu za kilimo.',
 
   'footer.referenceLink': 'Vyanzo vya data, mbinu, faragha na maswali yanayoulizwa mara kwa mara',
   'footer.referenceSummary': 'Maswali ya misheni na mipaka ya ushahidi',
@@ -322,13 +396,15 @@ export const dictionaries: Record<Locale, Readonly<Record<TranslationKey, string
 
 /**
  * Keys that intentionally stay in English in every locale: product/event
- * names, acronyms and provider-attribution copy that must match the
- * scientific record verbatim. Their values must be identical across
+ * names, acronyms, language endonyms and provider-attribution copy that must
+ * match the scientific record verbatim. Their values must be identical across
  * dictionaries; `dictionaryParity` reports any drift.
  */
 export const UNTRANSLATED_KEYS = [
   'brand.name',
   'landing.kicker',
+  'locale.english',
+  'locale.swahili',
   'marketing.nav.api',
   'footer.dataProviders',
   'footer.fireProviders',

@@ -389,6 +389,7 @@ test('password reset is single-use, expiring, origin-bound and replaces the pass
     expect(links).toHaveLength(2);
     expect(await db.passwordReset.count()).toBe(1);
 
+    const preResetCookie = `__Secure-next-auth.session-token=${await encode({ secret: process.env.NEXTAUTH_SECRET!, token: { sub: (await db.accountUser.findUniqueOrThrow({ where: { email } })).id }, maxAge: 3600 })}`;
     // Requesting again invalidates the earlier link.
     expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: links[0], password: replacement }))).status).toBe(400);
     expect((await resetConfirmRoutes.POST(request('account/password-reset/confirm', 'POST', undefined, { token: links[1], password: replacement }))).status).toBe(200);
@@ -396,6 +397,8 @@ test('password reset is single-use, expiring, origin-bound and replaces the pass
     expect(await db.passwordReset.count()).toBe(0);
     expect(await authenticatePassword(email, original)).toBeNull();
     expect(await authenticatePassword(email, replacement)).not.toBeNull();
+    // A token minted before the reset is no longer accepted.
+    expect(await accountUserId(request('farms', 'GET', preResetCookie))).toBeNull();
 
     const expired = verificationToken();
     const user = await db.accountUser.findUniqueOrThrow({ where: { email } });

@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { apiHandler, errorResponse, jsonResponse, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
+import { apiHandler, clientKey, errorResponse, jsonResponse, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
 import { requireAdministrator } from '@/lib/account-access';
 import { cacheStats, cacheInvalidate } from '@/lib/cache';
 import { circuitStatus } from '@/lib/http';
@@ -17,7 +17,11 @@ import { publicCacheDiagnostics, publicCircuitDiagnostics, publicDigestDiagnosti
  * GET  /api/v1/system/status — settings & diagnostics
  * POST /api/v1/system/status — actions (cache invalidate)
  */
-export const GET = apiHandler(async () => {
+export const GET = apiHandler(async (req) => {
+  // Public diagnostics trigger six counts plus live provider probes; keep an
+  // IP ceiling so they cannot be used as an amplification surface.
+  const rl = await rateLimit(clientKey(req, 'system:status'), { capacity: 60, refillPerMinute: 60 });
+  if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, 'system-status');
   // startScheduler is idempotent; calling it here guarantees a started timer
   // even if instrumentation bootstrapping was skipped in this environment.
   startScheduler();

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getCorrelationId } from '@/lib/correlation';
 import { readBoundedText } from '@/lib/account-security';
+import { clientKey, rateLimit } from '@/lib/api/helpers';
 
 export const runtime = 'nodejs';
 
@@ -17,6 +18,12 @@ const MAX_REPORT_BYTES = 8 * 1024;
  */
 export async function POST(req: NextRequest) {
   const correlationId = getCorrelationId(req.headers.get('x-correlation-id'));
+  // Reports are cheap but unbounded; keep a per-client ceiling. A Redis outage
+  // must not drop security telemetry, so the limiter fails open.
+  try {
+    const limit = await rateLimit(clientKey(req, 'csp-report'), { capacity: 60, refillPerMinute: 60 });
+    if (!limit.allowed) return new Response(null, { status: 429 });
+  } catch { /* fail open */ }
   let text: string;
   try {
     text = await readBoundedText(req, MAX_REPORT_BYTES);

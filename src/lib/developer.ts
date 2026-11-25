@@ -1,7 +1,7 @@
 import { authenticateDeveloperRequest, requireApiScope, type ApiPrincipal, type ApiScope } from '@/lib/api-auth';
 import { AccountAccessError } from '@/lib/access-error';
 import { rateLimit } from '@/lib/api/helpers';
-import { assertCapability, assertEntitlement, recordUsage } from '@/lib/commercial';
+import { assertEntitlement, recordUsage } from '@/lib/commercial';
 import type { TenantContext } from '@/lib/tenancy';
 import { withTenantContext } from '@/lib/tenant-db';
 
@@ -23,7 +23,6 @@ export async function developerGuard(req: Request, scope: ApiScope): Promise<Dev
     permissions: [],
     isPlatformAdmin: false,
   };
-  await assertCapability(tenant, 'api_access');
   await assertEntitlement(tenant, 'api_requests_per_day');
   const limit = await rateLimit(`developer:${principal.keyId}`, { capacity: 120, refillPerMinute: 120 });
   if (!limit.allowed) throw new AccountAccessError(429, 'RATE_LIMITED', `too many requests; retry after ${limit.retryAfterSec}s`);

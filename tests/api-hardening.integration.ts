@@ -258,7 +258,7 @@ if (process.env.TERRAFIELD_API_HARDENING_WORKER !== '1') {
     expect(await db.farm.count({ where: { name: body.name, ownerId: userA } })).toBe(1);
     expect(await db.auditEvent.count({ where: { action: 'farm.create', targetId: firstBody.farm.id } })).toBe(1);
     expect(await db.outboxEvent.count({ where: { aggregateType: 'Farm', aggregateId: firstBody.farm.id } })).toBe(1);
-    expect(await db.idempotencyRecord.count({ where: { ownerId: userA, route: '/api/v1/farms', key } })).toBe(1);
+    expect(await db.idempotencyRecord.count({ where: { ownerId: userA, key } })).toBe(1);
     const conflict = await farms.POST(request('farms', 'POST', cookieA, { ...body, name: 'Conflicting farm' }, { key }), ctx());
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } });

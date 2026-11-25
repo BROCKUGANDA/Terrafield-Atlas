@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { API_SCOPES } from '@/lib/api-auth';
 import { apiHandler, clientKey, jsonResponse, parseBody, rateLimit, rateLimitResponse, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
-import { assertCapability } from '@/lib/commercial';
 import { createOAuthClient } from '@/lib/oauth';
 import { requireOrganization, requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
@@ -44,7 +43,6 @@ export const POST = apiHandler<ClientCtx>((req, { correlationId, params }) => wi
   const context = await resolveTenantContext(req);
   requireOrganization(context, id);
   requirePermission(context, 'org.manage');
-  await assertCapability(context, 'api_access');
   const rl = await rateLimit(clientKey(req, 'oauth-client:create'), { capacity: 10, refillPerMinute: 3 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, createSchema);
@@ -80,7 +78,6 @@ export const POST = apiHandler<ClientCtx>((req, { correlationId, params }) => wi
     const context = await resolveTenantContext(req);
     requireOrganization(context, id);
     requirePermission(context, 'org.manage');
-    await assertCapability(context, 'api_access');
-  },
+    },
   redactReplay: redactClientSecret,
 }));

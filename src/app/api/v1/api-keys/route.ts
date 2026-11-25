@@ -3,7 +3,6 @@ import { db } from '@/lib/db';
 import { API_SCOPES, generateApiKey } from '@/lib/api-auth';
 import { apiHandler, clientKey, errorResponse, jsonResponse, parseBody, rateLimit, rateLimitResponse, redactOneTimeSecret, withIdempotency, writeMutationEffects } from '@/lib/api/helpers';
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
-import { assertCapability } from '@/lib/commercial';
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -26,7 +25,6 @@ export const GET = apiHandler(async (req, { correlationId }) => {
 export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, '/api/v1/api-keys', async (req, { userId }) => {
   const context = await resolveTenantContext(req);
   requirePermission(context, 'api_key.manage');
-  await assertCapability(context, 'api_access');
   const rl = await rateLimit(clientKey(req, 'api-key:create'), { capacity: 10, refillPerMinute: 3 });
   if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec, correlationId);
   const parsed = await parseBody(req, createSchema);
@@ -63,7 +61,6 @@ export const POST = apiHandler((req, { correlationId }) => withIdempotency(req, 
   authorize: async () => {
     const context = await resolveTenantContext(req);
     requirePermission(context, 'api_key.manage');
-    await assertCapability(context, 'api_access');
-  },
+    },
   redactReplay: redactOneTimeSecret,
 }));

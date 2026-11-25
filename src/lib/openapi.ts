@@ -9,7 +9,7 @@ export const openApiDocument = {
     version: '1.1.0',
     description: 'Permission-scoped, tenant-aware access to farms, observations, analyses, reports, and data sources. Authenticate with a console-issued API key or an OAuth 2.0 client-credentials access token. No NASA endorsement is implied.',
   },
-  servers: [{ url: '/api/v1', description: 'Same-origin TerraField API' }],
+  servers: [{ url: 'https://terrafieldatlas.us/api/v1', description: 'Production' }, { url: '/api/v1', description: 'Same-origin TerraField API' }],
   security: [{ bearerAuth: [] }],
   paths: {
     '/developer/farms': { get: { summary: 'List authorized farms', parameters: [{ name: 'cursor', in: 'query', schema: { type: 'string' } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } }], responses: { '200': { description: 'Farm page' }, '401': { description: 'Invalid API key or access token' }, '402': { description: 'Plan quota reached' }, '429': { description: 'Rate limited' } } } },

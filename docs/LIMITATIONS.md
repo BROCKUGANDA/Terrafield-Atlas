@@ -24,8 +24,8 @@ TerraField Atlas reports uncertainty explicitly. Nothing in this document is hid
 
 ## Enterprise and commercial scope
 
-1. **RLS covers request-scoped queries.** Prometheus, workers, migrations and auth bootstrap paths use the owner connection; user-facing API queries run as `terrafield_app` with tenant context.
-2. **No card processor is connected.** Invoices are settled manually by an authorized manager (bank or cash) and recorded with a Payment row; the `provider` method is rejected until a reviewed adapter exists.
+1. **RLS covers request-scoped queries.** Prometheus, workers, migrations and auth bootstrap paths use the owner connection; user-facing API queries run as `terrafield_app` with tenant context. `/api/v1/readyz` fails closed when the tenant role is missing, superuser, or BYPASSRLS.
+2. **Support is onchain; invoices are settled by an operator.** Voluntary USDC/native support is verified server-side and changes no entitlement. Manual bank/cash invoice settlement is restricted to a platform administrator; the `provider` method is rejected until a reviewed adapter exists.
 3. **OAuth supports client credentials only.** Authorization-code/consent flows for end users, secret rotation and token garbage collection are not implemented; revoked clients and expired tokens are rejected at use.
 4. **Localization is partial by design.** English and Swahili cover navigation, account, marketing shell and landing hero; scientific, provider and long-form product copy remains English.
 5. **Market prices are nominal survey observations.** The HDX/WFP Uganda feed is retail market survey data, not farm-gate contracts or forecasts; missing months remain missing.

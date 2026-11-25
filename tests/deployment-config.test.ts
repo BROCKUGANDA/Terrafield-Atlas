@@ -95,12 +95,19 @@ describe('private Compose deployment', () => {
     const compose = read('deploy/host-monitoring/compose.yaml');
     expect(compose).toContain('prom/prometheus');
     expect(compose).toContain('grafana/grafana');
-    expect(compose).toContain('127.0.0.1:9090:9090');
-    expect(compose).toContain('127.0.0.1:33001:3000');
+    expect(compose).toContain('network_mode: host');
+    expect(compose).toContain('127.0.0.1:9090');
+    expect(compose).toContain('GF_SERVER_HTTP_PORT');
+    expect(compose).toContain('33001');
     const scrape = read('deploy/host-monitoring/prometheus.yml');
-    expect(scrape).toContain('host.docker.internal:3011');
+    expect(scrape).toContain('127.0.0.1:3011');
     expect(scrape).toContain('/api/v1/metrics');
     const deploy = read('scripts/deploy-vps.sh');
     expect(deploy).toContain('deploy/host-monitoring/compose.yaml');
+  });
+
+  test('the application binds loopback so port 3011 is not a public bypass', () => {
+    const unit = read('deploy/systemd/terrafield.service');
+    expect(unit).toContain('Environment=HOSTNAME=127.0.0.1');
   });
 });

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Check, CreditCard, Gauge, Receipt, ShieldCheck } from 'lucide-react';
+import { Check, Coins, Copy, CreditCard, Gauge, Receipt, ShieldCheck } from 'lucide-react';
 import { api, ApiRequestError, type BillingPlan } from '@/lib/api-client';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -107,6 +107,264 @@ async function billingRequest<T>(path: string, init: RequestInit = {}): Promise<
   }
   if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
   return payload as T;
+}
+
+interface OnchainConfigResponse {
+  enabled: boolean;
+  chainId: number | null;
+  treasuryAddress: string | null;
+  tokenAddress: string | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number | null;
+  native: boolean;
+  confirmations: number;
+  expiresMinutes: number;
+  minAmountMinor: number;
+  maxAmountMinor: number;
+  missing: string[];
+  paymentNote: string;
+}
+
+interface OnchainPaymentRow {
+  id: string;
+  intentId: string;
+  chainId: number;
+  txHash: string;
+  fromAddress: string;
+  tokenAddress: string;
+  amountUnits: string;
+  confirmations: number;
+  blockNumber: string | null;
+  verifiedAt: string;
+}
+
+interface OnchainIntentRow {
+  id: string;
+  invoiceId: string | null;
+  chainId: number;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  treasuryAddress: string;
+  amountUnits: string;
+  memo: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  paidAt: string | null;
+  payment: OnchainPaymentRow | null;
+  paymentNote: string;
+}
+
+const ONCHAIN_PRESETS = [500, 1000, 2500, 5000];
+
+function formatTokenUnits(units: string, decimals: number): string {
+  try {
+    const value = BigInt(units);
+    const scale = 10n ** BigInt(decimals);
+    const whole = value / scale;
+    const fraction = (value % scale).toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 8);
+    return fraction ? `${whole}.${fraction}` : whole.toString();
+  } catch {
+    return units;
+  }
+}
+
+function shortAddress(address: string): string {
+  return address.length > 14 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address;
+}
+
+function OnchainSupportCard() {
+  const { toast } = useToast();
+  const config = useQuery({
+    queryKey: ['billing-onchain-config'],
+    queryFn: () => billingRequest<OnchainConfigResponse>('/api/v1/billing/onchain/config'),
+    retry: 1,
+  });
+  const [amountInput, setAmountInput] = useState('10.00');
+  const [intent, setIntent] = useState<OnchainIntentRow | null>(null);
+  const [txHash, setTxHash] = useState('');
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const create = useMutation({
+    mutationFn: (amount: number) => billingRequest<{ intent: OnchainIntentRow }>('/api/v1/billing/onchain/intents', {
+      method: 'POST',
+      body: JSON.stringify({ amountMinor: amount }),
+    }),
+    onSuccess: (result) => {
+      setIntent(result.intent);
+      setTxHash('');
+      toast({ title: 'Support intent created', description: `Send exactly ${formatTokenUnits(result.intent.amountUnits, result.intent.tokenDecimals)} ${result.intent.tokenSymbol}. This does not change your plan or entitlements.` });
+    },
+    onError: (error) => toast({ title: 'Could not create intent', description: error instanceof Error ? error.message : 'Unexpected error.', variant: 'destructive' }),
+  });
+  const verify = useMutation({
+    mutationFn: (input: { intentId: string; hash: string }) => billingRequest<{ intent: OnchainIntentRow; payment: OnchainPaymentRow }>(`/api/v1/billing/onchain/intents/${input.intentId}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ txHash: input.hash }),
+    }),
+    onSuccess: (result) => {
+      setIntent(result.intent);
+      setTxHash('');
+      toast({ title: 'Support payment verified', description: 'Recorded from the public chain. Your entitlements are unchanged.' });
+      logEvent({ severity: 'success', category: 'SYSTEM', title: 'Onchain support verified', detail: `${result.payment.txHash} · ${formatTokenUnits(result.payment.amountUnits, result.intent.tokenDecimals)} ${result.intent.tokenSymbol} · ${result.payment.confirmations} confirmations. Voluntary support only.`, view: 'billing' });
+    },
+    onError: (error) => toast({ title: 'Verification rejected', description: error instanceof Error ? error.message : 'Unexpected error.', variant: 'destructive' }),
+  });
+
+  const copy = async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast({ title: `${label} copied` });
+    } catch {
+      toast({ title: 'Copy failed', description: 'Select and copy the value manually.', variant: 'destructive' });
+    }
+  };
+
+  if (config.isError) return <FaultPanel error={config.error} onRetry={() => config.refetch()} label="Onchain support configuration" />;
+  const data = config.data;
+  const decimals = intent?.tokenDecimals ?? data?.tokenDecimals ?? 6;
+  const symbol = intent?.tokenSymbol ?? data?.tokenSymbol ?? 'USDC';
+  const presets = ONCHAIN_PRESETS.filter((value) => value >= (data?.minAmountMinor ?? 100) && value <= (data?.maxAmountMinor ?? 1_000_000));
+  const effectiveStatus = intent && intent.status === 'open' && now > 0 && new Date(intent.expiresAt).getTime() <= now ? 'expired' : intent?.status;
+  const displayStatus = effectiveStatus === 'open' ? 'pending' : effectiveStatus;
+  const parsedAmountMinor = Math.round(Number(amountInput) * 100);
+  const amountMinor = Number.isFinite(parsedAmountMinor) ? parsedAmountMinor : 0;
+  const amountValid = Number.isFinite(parsedAmountMinor) && amountMinor >= (data?.minAmountMinor ?? 100) && amountMinor <= (data?.maxAmountMinor ?? 1_000_000);
+
+  return (
+    <HudPanel calm className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Coins className="h-4 w-4 text-signal" />
+        <h3 className="font-display text-sm font-bold uppercase tracking-wide-mc text-ink">Onchain support</h3>
+        <StatusPill status={data?.enabled ? 'configured' : 'not configured'} pulse={false} />
+      </div>
+      <p className="max-w-3xl text-[11px] leading-relaxed text-dim">
+        Core TerraField features stay free. Onchain support is voluntary and does not unlock or lock anything. It is not a card or fiat payment, and paying it never changes your plan, quotas, or access.
+      </p>
+
+      {!data && <p className="text-[11px] text-faint">Reading onchain support configuration…</p>}
+      {data && !data.enabled && (
+        <div className="rounded-sm border border-edge bg-panel-2/50 p-3">
+          <p className="text-[11px] leading-relaxed text-dim">
+            Onchain support is not configured on this deployment. Everything else in TerraField keeps working; no support payment can be created or verified here.
+          </p>
+        </div>
+      )}
+
+      {data?.enabled && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-2">
+            <p className="text-[11px] text-dim">Choose a voluntary amount ({symbol} on chain {data.chainId}). Minimum ${(data.minAmountMinor / 100).toFixed(2)}, maximum ${(data.maxAmountMinor / 100).toFixed(2)}.</p>
+            <div className="flex flex-wrap gap-2">
+              {presets.map((value) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant={amountMinor === value ? 'default' : 'outline'}
+                  className="h-8 font-mono text-[10px] uppercase tracking-wide-mc"
+                  onClick={() => setAmountInput((value / 100).toFixed(2))}
+                >
+                  ${(value / 100).toFixed(0)}
+                </Button>
+              ))}
+            </div>
+            <Label className="grid max-w-[220px] gap-1 text-[10px] text-dim">
+              Custom amount (USD)
+              <Input
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+                inputMode="decimal"
+                className="border-edge bg-panel text-ink"
+              />
+            </Label>
+            <Button
+              className="h-9 w-fit font-mono text-[10px] uppercase tracking-wide-mc"
+              onClick={() => create.mutate(amountMinor)}
+              disabled={create.isPending || !amountValid}
+            >
+              {create.isPending ? 'Creating…' : `Create $${(amountMinor / 100).toFixed(2)} support intent`}
+            </Button>
+            <p className="telemetry text-[10px] text-faint">Intents expire after {data.expiresMinutes} minutes. Verification waits for {data.confirmations} confirmation{data.confirmations === 1 ? '' : 's'}.</p>
+          </div>
+
+          <div className="grid gap-2">
+            {!intent && <p className="text-[11px] leading-relaxed text-dim">No active intent. Create one to get the exact amount, treasury address, and memo.</p>}
+            {intent && (
+              <div className="grid gap-2 rounded-sm border border-edge bg-panel-2/50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPill status={displayStatus ?? 'pending'} pulse={effectiveStatus === 'open'} />
+                  <span className="font-mono text-sm text-ink">{formatTokenUnits(intent.amountUnits, decimals)} {symbol}</span>
+                  <span className="telemetry text-[10px] text-faint">chain {intent.chainId}</span>
+                  {intent.invoiceId && <span className="telemetry text-[10px] text-faint">invoice-linked</span>}
+                </div>
+                <div className="grid gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-[10px] text-faint">Recipient</span>
+                    <code className="break-all font-mono text-[10px] text-ink">{intent.treasuryAddress}</code>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Copy treasury address" onClick={() => void copy('Treasury address', intent.treasuryAddress)}><Copy className="h-3 w-3" /></Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-[10px] text-faint">Token</span>
+                    <code className="break-all font-mono text-[10px] text-ink">{intent.tokenAddress === 'native' ? 'native (gas coin)' : intent.tokenAddress}</code>
+                    {intent.tokenAddress !== 'native' && <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Copy token address" onClick={() => void copy('Token address', intent.tokenAddress)}><Copy className="h-3 w-3" /></Button>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-[10px] text-faint">Memo</span>
+                    <code className="break-all font-mono text-[10px] text-ink">{intent.memo}</code>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Copy memo" onClick={() => void copy('Memo', intent.memo)}><Copy className="h-3 w-3" /></Button>
+                  </div>
+                  <p className="telemetry text-[10px] text-faint">Expires {intent.expiresAt.slice(0, 16).replace('T', ' ')} UTC · intent {intent.id.slice(0, 10)}…</p>
+                </div>
+                <p className="text-[10px] leading-relaxed text-dim">
+                  Send exactly this amount of {symbol} to the recipient on chain {intent.chainId}. Keep the memo as your reference. The server checks the public chain only after you paste the transaction hash; it never holds a key.
+                </p>
+
+                {effectiveStatus === 'paid' && intent.payment ? (
+                  <div className="grid gap-1 border-t border-edge/60 pt-2">
+                    <p className="text-[11px] text-signal">Verified · {intent.payment.confirmations} confirmation{intent.payment.confirmations === 1 ? '' : 's'} · from {shortAddress(intent.payment.fromAddress)}</p>
+                    <code className="break-all font-mono text-[10px] text-dim">{intent.payment.txHash}</code>
+                    <p className="text-[10px] text-faint">Thank you. This support did not change your plan or entitlements.</p>
+                  </div>
+                ) : (
+                  <form
+                    className="grid gap-2 border-t border-edge/60 pt-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!intent || effectiveStatus !== 'open') return;
+                      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash.trim())) {
+                        toast({ title: 'Invalid transaction hash', description: 'Paste the 0x-prefixed 32-byte hash.', variant: 'destructive' });
+                        return;
+                      }
+                      verify.mutate({ intentId: intent.id, hash: txHash.trim() });
+                    }}
+                  >
+                    <Label className="grid gap-1 text-[10px] text-dim">
+                      Transaction hash
+                      <Input value={txHash} onChange={(event) => setTxHash(event.target.value)} placeholder="0x…" maxLength={66} className="border-edge bg-panel font-mono text-ink" />
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="submit" className="h-8 font-mono text-[10px] uppercase tracking-wide-mc" disabled={verify.isPending || effectiveStatus !== 'open'}>
+                        {verify.isPending ? 'Verifying…' : 'Verify support payment'}
+                      </Button>
+                      <Button type="button" variant="ghost" className="h-8 font-mono text-[10px] uppercase tracking-wide-mc" onClick={() => { setIntent(null); setTxHash(''); }}>
+                        New intent
+                      </Button>
+                    </div>
+                    {effectiveStatus === 'expired' && <p className="text-[10px] text-caution">This intent expired before verification. Create a fresh intent and send again; expired intents are never accepted.</p>}
+                  </form>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </HudPanel>
+  );
 }
 
 export function BillingView() {
@@ -331,6 +589,8 @@ export function BillingView() {
           </div>
         )}
       </HudPanel>
+
+      <OnchainSupportCard />
 
       {billing.data?.subscription.id && (
         <HudPanel calm className="flex flex-wrap items-center gap-3 p-4">

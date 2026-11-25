@@ -1,0 +1,112 @@
+_format_version: "3.0"
+services:
+- host: terrafieldatlas.us
+  id: ccb77245-ac90-556c-92f8-43f250b8380c
+  name: terrafield-atlas-developer-api
+  path: /api/v1
+  plugins:
+  - name: rate-limiting
+    config:
+      minute: 120
+      hour: 1000
+      policy: local
+      error_code: 429
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-Id
+      generator: uuid
+      echo_downstream: true
+  port: 443
+  protocol: https
+  routes:
+  - id: 7ba988f9-6f76-5024-91e3-2b157b7efae1
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_developer-analyses_get
+    paths:
+    - ~/developer/analyses$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: 1e57da17-47c4-5fc0-8d05-eda702a86f38
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_developer-farms_get
+    paths:
+    - ~/developer/farms$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: 385c317e-541a-537d-8b51-2c5afa8feb23
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_developer-observations_get
+    paths:
+    - ~/developer/observations$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: d9c77bc6-b0b0-5edd-a006-6b4d6ff602dc
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_developer-reports_get
+    paths:
+    - ~/developer/reports$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: 76073f68-404e-54f8-b47b-a68f0dfb0e1c
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_developer-sources_get
+    paths:
+    - ~/developer/sources$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: d2011626-1776-5bda-9b22-fc95343c44e4
+    methods:
+    - POST
+    name: terrafield-atlas-developer-api_oauth-token_post
+    paths:
+    - ~/oauth/token$
+    plugins: []
+    regex_priority: 200
+    strip_path: false
+    tags: []
+  - id: 074d1fb2-2b89-5517-a421-2f9e9d587966
+    methods:
+    - GET
+    name: terrafield-atlas-developer-api_organizations-id-oauth-clients_get
+    paths:
+    - ~/organizations/(?<id>[^#?/]+)/oauth-clients$
+    plugins: []
+    regex_priority: 100
+    strip_path: false
+    tags: []
+  - id: 680ab632-fcfd-5202-804e-4fec447a840e
+    methods:
+    - POST
+    name: terrafield-atlas-developer-api_organizations-id-oauth-clients_post
+    paths:
+    - ~/organizations/(?<id>[^#?/]+)/oauth-clients$
+    plugins: []
+    regex_priority: 100
+    strip_path: false
+    tags: []
+  - id: 2fbfb880-a6bb-5898-953e-8f0cfe47e6b3
+    methods:
+    - DELETE
+    name: terrafield-atlas-developer-api_organizations-id-oauth-clients-clientid_delete
+    paths:
+    - ~/organizations/(?<id>[^#?/]+)/oauth-clients/(?<clientid>[^#?/]+)$
+    plugins: []
+    regex_priority: 100
+    strip_path: false
+    tags: []
+  tags: []

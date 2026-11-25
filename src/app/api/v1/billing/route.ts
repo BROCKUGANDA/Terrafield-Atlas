@@ -31,7 +31,7 @@ export const GET = apiHandler(async (req, { correlationId }) => {
     entitlements,
     usage,
     events,
-    paymentNote: 'No payment provider is connected. Plan changes are administrative state changes; settlement requires a reviewed provider integration.',
+    paymentNote: 'Core features are free. Plans differ only in cost-bearing compute quotas. Onchain support is voluntary and changes no entitlement; manual invoice settlement is an administrator action.',
   }, { correlationId });
 });
 
@@ -40,6 +40,12 @@ export const PATCH = apiHandler((req, { correlationId }) => withIdempotency(req,
   requirePermission(context, 'billing.manage');
   const parsed = await parseBody(req, patchSchema);
   if (!parsed.ok) return parsed.res;
+  // Freemium: plans only change cost-bearing quotas. Self-service assignment
+  // would let any account grant itself institutional compute; assignment is
+  // an administrative decision, while cancel/resume stay self-service.
+  if (parsed.data.planCode && !context.isPlatformAdmin) {
+    return errorResponse(403, 'PLAN_ASSIGNMENT_ADMIN_ONLY', 'plan changes require a platform administrator', correlationId);
+  }
   await ensurePlans();
   const plan = parsed.data.planCode ? await db.plan.findUnique({ where: { code: parsed.data.planCode } }) : null;
   if (parsed.data.planCode && (!plan || !plan.active)) return errorResponse(404, 'PLAN_NOT_FOUND', 'plan not found', correlationId);

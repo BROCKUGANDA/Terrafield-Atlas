@@ -37,11 +37,11 @@ interface PlanDefinition {
 export const DEFAULT_PLANS: readonly PlanDefinition[] = [
   {
     code: 'explorer', name: 'Explorer', description: 'Public exploration and limited personal workflows.', monthlyPriceMinor: 0, sortOrder: 10,
-    entitlements: { limits: { farms: 25, processing_jobs_per_month: 50, api_requests_per_day: 0, reports_per_month: 20, ai_runs_per_month: 20, storage_mb: 1_000 }, capabilities: { organization: false, api_access: false, webhooks: false, advanced_analytics: false } },
+    entitlements: { limits: { farms: 25, processing_jobs_per_month: 50, api_requests_per_day: 1_000, reports_per_month: 20, ai_runs_per_month: 20, storage_mb: 1_000 }, capabilities: { organization: true, api_access: true, webhooks: true, advanced_analytics: true } },
   },
   {
     code: 'professional', name: 'Professional', description: 'Individual agricultural professionals and consultants.', monthlyPriceMinor: 2900, sortOrder: 20,
-    entitlements: { limits: { farms: 25, processing_jobs_per_month: 50, api_requests_per_day: 1_000, reports_per_month: 20, ai_runs_per_month: 20, storage_mb: 2_000 }, capabilities: { organization: false, api_access: true, webhooks: false, advanced_analytics: true } },
+    entitlements: { limits: { farms: 25, processing_jobs_per_month: 50, api_requests_per_day: 1_000, reports_per_month: 20, ai_runs_per_month: 20, storage_mb: 2_000 }, capabilities: { organization: true, api_access: true, webhooks: true, advanced_analytics: true } },
   },
   {
     code: 'cooperative', name: 'Cooperative', description: 'Multi-farm monitoring and team workflows.', monthlyPriceMinor: 19900, sortOrder: 30,
@@ -125,7 +125,6 @@ export async function usageFor(context: TenantContext, metric: UsageMetric): Pro
     if (context.organizationId) return rawDb.farm.count({ where: { organizationId: context.organizationId } });
     return rawDb.farm.count({ where: { ownerId: context.userId } });
   }
-  if (metric === 'storage_mb') return 0; // object-storage metering is not configured yet
   const scope = context.organizationId ? { organizationId: context.organizationId } : { ownerId: context.userId };
   const result = await rawDb.usageEvent.aggregate({
     where: { ...scope, metric, occurredAt: { gte: usageStart(metric) } },

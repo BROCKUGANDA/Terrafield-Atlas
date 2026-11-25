@@ -71,8 +71,8 @@ Long-running ingestion, trends, fire snapshots and watchlist evaluation return `
 
 - Caddy exposes fixed upstreams only; no query-controlled proxy target remains.
 - An enforced CSP ships from `src/middleware.ts` (static pages keep `'unsafe-inline'` scripts); violations go to the bounded `/api/v1/csp-report` intake and are logged, not stored.
-- Production runs the standalone server under `terrafield.service` from the 600-mode `.env`; `scripts/deploy-vps.sh` ships, backs up, migrates, builds, restarts and gates readiness with automatic restore of the previous build.
-- Database, Redis, Prometheus and Grafana publish no host ports.
+- Production runs the standalone server under `terrafield.service` from the 600-mode `.env` plus a generated `.env.tenant`; `scripts/deploy-vps.sh` ships, backs up, migrates, builds, restarts and gates readiness (including the tenant-role assertion) with automatic restore of the previous build.
+- The application binds `127.0.0.1:3011`; Caddy and the host-network Prometheus are its only peers. Database, Redis and monitoring bind loopback and publish no public ports.
 - Containers use JSON logging with rotation, restart policies and resource limits.
 - Release automation builds one image, takes a named backup, deploys migrations, waits for readiness/API checks and restores the prior image/database snapshot on failure.
 - No secrets are stored in source, fixtures, browser bundles or committed environment files.

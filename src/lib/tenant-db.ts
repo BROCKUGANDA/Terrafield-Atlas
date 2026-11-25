@@ -112,16 +112,18 @@ export function withTenantContext<T>(context: TenantContext | null, fn: () => T 
   return tenantStorage.run(context, fn);
 }
 
+/** Identity of the tenant connection, used by readiness to fail closed. */
+export async function tenantConnectionRole(): Promise<{ user: string; superuser: boolean; bypassRls: boolean } | null> {
+  if (!tenantUrl) return null;
+  const rows = await scopedClient.$queryRaw<Array<{ user: string; superuser: boolean; bypass_rls: boolean }>>`
+    SELECT current_user AS user, rolsuper AS superuser, rolbypassrls AS bypass_rls
+    FROM pg_roles WHERE rolname = current_user
+  `;
+  const row = rows[0];
+  return row ? { user: row.user, superuser: row.superuser, bypassRls: row.bypass_rls } : null;
+}
+
 export function currentTenantContext(): TenantContext | null {
   return tenantStorage.getStore() ?? null;
 }
 
-/**
- * Replace the tenant context for the remainder of the current async chain.
- * Developer routes authenticate after apiHandler resolved an anonymous
- * session context; the API principal then becomes the authoritative tenant.
- * `enterWith` is scoped to this request chain, not to sibling requests.
- */
-export function enterTenantContext(context: TenantContext): void {
-  tenantStorage.enterWith(context);
-}

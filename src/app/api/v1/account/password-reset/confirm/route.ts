@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     if (!row || row.expiresAt <= new Date()) return false;
     const consumed = await tx.passwordReset.deleteMany({ where: { tokenHash: hash, expiresAt: { gt: new Date() } } });
     if (consumed.count !== 1) return false;
-    await tx.accountUser.update({ where: { id: row.userId }, data: { passwordHash } });
+    await tx.accountUser.update({ where: { id: row.userId }, data: { passwordHash, sessionVersion: { increment: 1 } } });
     await tx.passwordReset.deleteMany({ where: { userId: row.userId } });
     await tx.accountVerification.deleteMany({ where: { userId: row.userId } });
     return true;

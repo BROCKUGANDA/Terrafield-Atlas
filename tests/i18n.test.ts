@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_LOCALE,
   LOCALES,
+  LOCALE_NAMES,
   UNTRANSLATED_KEYS,
   dictionaries,
   dictionaryParity,
@@ -13,6 +16,11 @@ import {
   resolveLocale,
   t,
 } from '@/lib/i18n';
+
+const accountFormSource = readFileSync(
+  fileURLToPath(new URL('../src/components/account-form.tsx', import.meta.url)),
+  'utf8',
+);
 
 describe('dictionary parity', () => {
   test('every English key exists in Swahili with no extras or drift', () => {
@@ -33,6 +41,82 @@ describe('dictionary parity', () => {
   test('Swahili genuinely translates the selected surfaces', () => {
     for (const key of ['nav.dashboard', 'nav.settings', 'account.titleLine1', 'marketing.footerNotice', 'landing.heroIntro'] as const) {
       expect(t('sw', key)).not.toBe(t('en', key));
+    }
+  });
+
+  test('every Swahili value is a non-empty, trimmed string', () => {
+    for (const key of Object.keys(dictionaries.en)) {
+      const value = dictionaries.sw[key as keyof typeof dictionaries.sw];
+      expect(typeof value).toBe('string');
+      expect(value.trim().length).toBeGreaterThan(0);
+      expect(value).toBe(value.trim());
+    }
+  });
+
+  test('Swahili differs from English except the explicit untranslated allowlist', () => {
+    const allowed = new Set<string>(UNTRANSLATED_KEYS);
+    for (const key of Object.keys(dictionaries.en)) {
+      if (dictionaries.en[key as keyof typeof dictionaries.en] === dictionaries.sw[key as keyof typeof dictionaries.sw]) {
+        // Identical copy is only permitted for proper nouns, acronyms and
+        // provider attribution that must match the source record verbatim.
+        expect(allowed.has(key)).toBe(true);
+      }
+    }
+  });
+
+  test('interpolation placeholders match exactly between English and Swahili', () => {
+    const placeholders = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+    for (const key of Object.keys(dictionaries.en)) {
+      expect(placeholders(dictionaries.sw[key as keyof typeof dictionaries.sw])).toEqual(
+        placeholders(dictionaries.en[key as keyof typeof dictionaries.en]),
+      );
+    }
+  });
+
+  test('language endonyms and switcher labels are accurate', () => {
+    expect(LOCALE_NAMES).toEqual({ en: 'English', sw: 'Kiswahili' });
+    expect(dictionaries.en['locale.english']).toBe('English');
+    expect(dictionaries.en['locale.swahili']).toBe('Kiswahili');
+    expect(dictionaries.sw['locale.english']).toBe('English');
+    expect(dictionaries.sw['locale.swahili']).toBe('Kiswahili');
+    expect(UNTRANSLATED_KEYS).toContain('locale.english');
+    expect(UNTRANSLATED_KEYS).toContain('locale.swahili');
+    for (const locale of LOCALES) {
+      // `<html lang>` receives the raw locale code, so each code must be a
+      // valid BCP-47 primary subtag and match the switcher option value.
+      expect(isLocale(locale)).toBe(true);
+      expect(localeTag(locale).startsWith(locale)).toBe(true);
+    }
+  });
+
+  test('account form uses only keys that exist in both dictionaries', () => {
+    const used = [...new Set(
+      [...accountFormSource.matchAll(/'account\.[A-Za-z0-9.]+'/g)].map((match) => match[0].slice(1, -1)),
+    )];
+    // Guard against the regex silently matching nothing after a refactor.
+    expect(used.length).toBeGreaterThan(40);
+    for (const key of used) {
+      expect(dictionaries.en[key as keyof typeof dictionaries.en]).toBeDefined();
+      expect(dictionaries.sw[key as keyof typeof dictionaries.sw]?.trim().length).toBeGreaterThan(0);
+    }
+    // Every sign-in, registration, recovery and deletion flow is localized.
+    for (const key of [
+      'account.signInTitle',
+      'account.registerTitle',
+      'account.resetTitle',
+      'account.forgotHelp',
+      'account.registerHelp',
+      'account.resetHelp',
+      'account.passwordMismatch',
+      'account.signInFailed',
+      'account.registerSent',
+      'account.resetSuccess',
+      'account.inviteAccepted',
+      'account.deleteSummary',
+      'account.deleteButton',
+      'account.deleteBlocked',
+    ] as const) {
+      expect(used).toContain(key);
     }
   });
 });

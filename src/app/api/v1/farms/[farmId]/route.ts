@@ -5,7 +5,7 @@ import {
   apiHandler, dedupedBoundedArray, errorResponse, jsonResponse, paginationSchema,
   parseBody, withIdempotency, writeMutationEffects,
 } from '@/lib/api/helpers';
-import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
+import { canReadResource, requirePermission, resolveTenantContext } from '@/lib/tenancy';
 
 /**
  * GET   /api/v1/farms/{farmId}
@@ -29,6 +29,7 @@ type FarmCtx = { params: Promise<{ farmId: string }> };
 
 export const GET = apiHandler<FarmCtx>(async (req, { correlationId, params }) => {
   const { farmId } = await params;
+  const context = await resolveTenantContext(req);
   paginationSchema(100, 50).parse(Object.fromEntries(new URL(req.url).searchParams.entries()));
   const farm = await db.farm.findUnique({
     where: { id: farmId },
@@ -37,7 +38,9 @@ export const GET = apiHandler<FarmCtx>(async (req, { correlationId, params }) =>
       _count: { select: { scenarios: true, trendAnalyses: true, observations: true } },
     },
   });
-  if (!farm) {
+  // Explicit authorization in addition to RLS: a missing tenant connection or
+  // a future policy regression must not turn a 404 into a cross-tenant read.
+  if (!farm || !canReadResource(context, farm)) {
     return errorResponse(404, 'NOT_FOUND', `farm ${farmId} not found`, correlationId);
   }
   return jsonResponse({ farm }, { correlationId });

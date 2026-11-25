@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { db, tenantConnectionRole } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,6 +15,22 @@ export async function GET() {
     checks.database = { ok: true, detail: 'reachable' };
   } catch {
     checks.database = { ok: false, detail: 'unavailable' };
+  }
+
+  try {
+    const tenantConfigured = Boolean(process.env.TENANT_DATABASE_URL?.trim());
+    if (!tenantConfigured) {
+      checks.tenantRole = process.env.NODE_ENV === 'production'
+        ? { ok: false, detail: 'tenant database role is not configured' }
+        : { ok: true, detail: 'tenant role not required outside production' };
+    } else {
+      const role = await tenantConnectionRole();
+      checks.tenantRole = role && role.user === 'terrafield_app' && !role.superuser && !role.bypassRls
+        ? { ok: true, detail: 'request queries run as terrafield_app without RLS bypass' }
+        : { ok: false, detail: 'tenant connection is not the restricted app role' };
+    }
+  } catch {
+    checks.tenantRole = { ok: false, detail: 'tenant role could not be verified' };
   }
 
   try {

@@ -12,7 +12,7 @@ export async function authenticatePassword(email: string, password: string) {
   const user = await db.accountUser.findUnique({ where: { email: normalized } });
   const valid = await verifyPassword(password, user?.passwordHash ?? null);
   if (!valid || !user?.emailVerified) return null;
-  return { id: user.id, email: user.email, name: user.name };
+  return { id: user.id, email: user.email, name: user.name, sessionVersion: user.sessionVersion };
 }
 
 export const authOptions: NextAuthOptions = {
@@ -45,6 +45,7 @@ export const authOptions: NextAuthOptions = {
         if (identity) {
           if (!identity.user.emailVerified) return false;
           user.id = identity.userId;
+          (user as { sessionVersion?: number }).sessionVersion = identity.user.sessionVersion;
           return true;
         }
         // Never silently link by email (including pre-registered credentials).
@@ -58,7 +59,10 @@ export const authOptions: NextAuthOptions = {
       } catch { return false; }
     },
     async jwt({ token, user }) {
-      if (user) token.sub = user.id;
+      if (user) {
+        token.sub = user.id;
+        (token as { sessionVersion?: number }).sessionVersion = (user as { sessionVersion?: number }).sessionVersion ?? 0;
+      }
       return token;
     },
     async session({ session, token }) {
@@ -72,6 +76,8 @@ export async function accountUserId(req: Request): Promise<string | null> {
   if (!process.env.NEXTAUTH_SECRET) return null;
   const token = await getToken({ req: req as Parameters<typeof getToken>[0]['req'], secret: process.env.NEXTAUTH_SECRET });
   if (!token?.sub) return null;
-  const user = await db.accountUser.findUnique({ where: { id: token.sub }, select: { id: true, emailVerified: true } });
-  return user?.emailVerified ? user.id : null;
+  const user = await db.accountUser.findUnique({ where: { id: token.sub }, select: { id: true, emailVerified: true, sessionVersion: true } });
+  if (!user?.emailVerified) return null;
+  const tokenVersion = (token as { sessionVersion?: number }).sessionVersion ?? 0;
+  return tokenVersion === user.sessionVersion ? user.id : null;
 }

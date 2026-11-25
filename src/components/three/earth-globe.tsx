@@ -187,13 +187,13 @@ export function EarthGlobe({
     /* ---------------- renderer (with graceful failure) --------------- */
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: (window.devicePixelRatio || 1) <= 1.25 });
     } catch {
       // No WebGL available — surface the static fallback after this frame.
       const failRaf = requestAnimationFrame(() => setFailed(true));
       return () => cancelAnimationFrame(failRaf);
     }
-    const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    const pixelRatio = Math.min(1.5, window.devicePixelRatio || 1);
     renderer.setPixelRatio(pixelRatio);
     renderer.setClearColor(0x000000, 0);
 
@@ -548,6 +548,8 @@ export function EarthGlobe({
     const onContextLost = (e: Event) => {
       e.preventDefault();
       cancelAnimationFrame(raf);
+      intersection.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       resizeObserver.disconnect();
       setFailed(true);
     };
@@ -573,8 +575,12 @@ export function EarthGlobe({
     const SAT_BASE_ANGLE = 1.2;
     const SAT_SPEED = 0.3;
 
+    // Render only while the globe is on screen and the tab is visible. A
+    // landing-page globe must not keep the main thread busy off-screen.
+    let visible = true;
     const tick = () => {
-      raf = requestAnimationFrame(tick);
+      raf = 0;
+      if (!visible || document.hidden) return;
       const delta = Math.min(clock.getDelta(), 0.05);
       elapsed += delta;
 
@@ -622,12 +628,24 @@ export function EarthGlobe({
       }
 
       renderer.render(scene, camera);
+      raf = requestAnimationFrame(tick);
     };
+    const intersection = new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      if (visible && raf === 0) { clock.getDelta(); tick(); }
+    }, { threshold: 0.01 });
+    intersection.observe(container);
+    const onVisibility = () => {
+      if (!document.hidden && visible && raf === 0) { clock.getDelta(); tick(); }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     tick();
 
     /* ---------------- strict-mode-safe cleanup ---------------------- */
     return () => {
       cancelAnimationFrame(raf);
+      intersection.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       resizeObserver.disconnect();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);

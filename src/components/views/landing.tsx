@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useQuery } from '@tanstack/react-query';
 import { useSession as useAccountSession } from 'next-auth/react';
 import { motion } from 'framer-motion';
@@ -18,7 +19,12 @@ import {
 import { Kicker, SectionHeader, StatusPill, TelemetryStat, CoordReadout } from '@/components/ui-mc/kit';
 import { QueryState, FaultPanel } from '@/components/system/query-state';
 import { StatSkeletonRow, SkeletonRows } from '@/components/system/skeletons';
-import { EarthGlobe, type GlobeStation } from '@/components/three/earth-globe';
+import type { GlobeStation } from '@/components/three/earth-globe';
+
+const EarthGlobe = dynamic(() => import('@/components/three/earth-globe').then((module) => module.EarthGlobe), {
+  ssr: false,
+  loading: () => <div className="grid-bg absolute inset-0" aria-hidden />,
+});
 import { useLocale } from '@/components/locale-switcher';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -191,8 +197,17 @@ export function LandingView() {
   // Lazy-mount the 3D layer after first paint to keep the hero instant.
   const [globeReady, setGlobeReady] = useState(false);
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setGlobeReady(true));
-    return () => cancelAnimationFrame(raf);
+    // Defer the WebGL bundle until after first paint/idle so it cannot compete
+    // with the hero's LCP; the fixed-height placeholder prevents layout shift.
+    let cancelled = false;
+    const start = () => { if (!cancelled) setGlobeReady(true); };
+    const idleWindow = window as typeof window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      const id = idleWindow.requestIdleCallback(start, { timeout: 1800 });
+      return () => { cancelled = true; idleWindow.cancelIdleCallback?.(id); };
+    }
+    const timer = setTimeout(start, 700);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
   const db = status.data?.database;

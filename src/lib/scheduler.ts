@@ -6,6 +6,7 @@ import {
   type TickResult,
 } from '@/lib/schedule-core';
 import { runWatchlistEvaluation } from '@/lib/fires/watchlist-evaluate';
+import { cleanupRetention, markRetentionRun, retentionDue } from '@/lib/retention';
 
 /**
  * In-process background scheduler for watchlist re-evaluation.
@@ -227,6 +228,16 @@ async function tickOnce(): Promise<void> {
       void renewSchedulerLease(rt.holder!).then((renewed) => { rt.leader = renewed; }).catch(() => { rt.leader = false; });
     }, Math.floor(SCHEDULER_LEASE_TTL_MS / 3));
     heartbeat.unref?.();
+    if (retentionDue()) {
+      try {
+        const cleaned = await cleanupRetention();
+        markRetentionRun();
+        const total = Object.entries(cleaned).reduce((sum, [key, value]) => key === 'at' ? sum : sum + Number(value), 0);
+        if (total > 0) console.log(`[scheduler] retention removed ${total} row(s)`);
+      } catch (err) {
+        console.warn('[scheduler] retention cleanup failed:', err instanceof Error ? err.message : err);
+      }
+    }
     const result = await runSchedulerTick({
       now: new Date(),
       maxRuns: MAX_RUNS_PER_TICK,

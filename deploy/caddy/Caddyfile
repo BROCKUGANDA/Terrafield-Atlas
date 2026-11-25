@@ -8,6 +8,9 @@
 
 	# Prometheus scrapes the web containers directly on the private network.
 	# The metrics endpoint is never part of the public application surface.
+	request_body {
+		max_size 50MB
+	}
 	@metrics path /api/v1/metrics
 	respond @metrics 403
 

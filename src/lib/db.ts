@@ -1,1 +1,1 @@
-export { db, rawDb, withTenantContext, currentTenantContext, enterTenantContext } from '@/lib/tenant-db';
+export { db, rawDb, withTenantContext, currentTenantContext, tenantConnectionRole } from '@/lib/tenant-db';

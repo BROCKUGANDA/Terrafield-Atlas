@@ -184,13 +184,16 @@ export async function withIdempotency(req: NextRequest, route: string, handler: 
   let fingerprintBody: unknown = rawBody;
   try { fingerprintBody = rawBody ? JSON.parse(rawBody) : null; } catch { /* hash malformed bytes for conflict detection */ }
   const url = new URL(req.url);
+  const organizationScope = req.headers.get('x-terrafield-organization')?.trim() || 'personal';
+  const routeScope = `${route}::${organizationScope}`;
   const requestHash = stableHash(canonicalJson({
     method: req.method,
     path: url.pathname,
+    organizationScope,
     query: [...url.searchParams.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     body: fingerprintBody,
   }));
-  const where = { ownerId_route_key: { ownerId: userId, route, key } };
+  const where = { ownerId_route_key: { ownerId: userId, route: routeScope, key } };
   const existing = await db.idempotencyRecord.findUnique({ where });
   if (existing) return replayResponse(existing, requestHash, correlationId);
 
@@ -200,7 +203,7 @@ export async function withIdempotency(req: NextRequest, route: string, handler: 
     const body = await outcome.clone().json();
     const stored: StoredResponse = { status: outcome.status, body: options.redactReplay ? options.redactReplay(body) : body, correlationId };
     try {
-      await db.idempotencyRecord.create({ data: { ownerId: userId, route, key, requestHash, responseRef: JSON.stringify(stored) } });
+      await db.idempotencyRecord.create({ data: { ownerId: userId, route: routeScope, key, requestHash, responseRef: JSON.stringify(stored) } });
     } catch (error) {
       if ((error as { code?: string })?.code !== 'P2002') throw error;
       const raced = await db.idempotencyRecord.findUniqueOrThrow({ where });
@@ -218,7 +221,7 @@ export async function withIdempotency(req: NextRequest, route: string, handler: 
         if (!response.ok) throw new MutationResponseError(response);
         const body = await response.clone().json();
         const stored: StoredResponse = { status: response.status, body: options.redactReplay ? options.redactReplay(body) : body, correlationId };
-        await tx.idempotencyRecord.create({ data: { ownerId: userId, route, key, requestHash, responseRef: JSON.stringify(stored) } });
+        await tx.idempotencyRecord.create({ data: { ownerId: userId, route: routeScope, key, requestHash, responseRef: JSON.stringify(stored) } });
         return response;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 30_000 });
     } catch (error) {
@@ -272,8 +275,13 @@ export async function rateLimit(
   return redisRuntime().tokenBucket(`rate:${key}`, limit);
 }
 
-export function clientKey(req: NextRequest, route: string): string {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
+export function clientKey(req: Request, route: string): string {
+  // Prefer the address the edge set (Caddy/nginx X-Real-IP). XFF is only a
+  // fallback, and the LAST hop is the one our own proxy appended; the first
+  // hop is client-controlled when a proxy appends instead of overwriting.
+  const realIp = req.headers.get('x-real-ip')?.trim();
+  const forwarded = req.headers.get('x-forwarded-for')?.split(',').map((part) => part.trim()).filter(Boolean);
+  const ip = realIp || forwarded?.at(-1) || 'local';
   return `${ip}:${route}`;
 }
 
@@ -291,7 +299,7 @@ export function apiHandler<C = { params: Promise<Record<string, string | string[
     const startedAt = Date.now();
     let measuredStatus = 500;
     try {
-      return await withTenantContext(await resolveTenantContext(req).catch(() => null), async () => {
+      return await withTenantContext(await resolveTenantContext(req), async () => {
         const params = await (ctx as { params?: Promise<Record<string, unknown>> } | undefined)?.params;
         await accountApiGuard(req, params);
         const response = await fn(req, { ...(ctx as C), correlationId });

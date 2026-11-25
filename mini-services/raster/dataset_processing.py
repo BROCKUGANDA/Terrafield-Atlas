@@ -18,6 +18,8 @@ from processing import Bbox, process_raster_bytes
 
 MAX_DATASET_BYTES = 100 * 1024 * 1024
 MAX_ZARR_MEMBERS = 5_000
+MAX_ZARR_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
+MAX_ZARR_MEMBER_BYTES = 50 * 1024 * 1024
 
 
 def _resolve_crs(dataset: xr.Dataset, variable: xr.DataArray, override: str | None) -> CRS:
@@ -68,7 +70,11 @@ def _safe_zip_extract(data: bytes, destination: str) -> None:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         members = archive.infolist()
         if len(members) > MAX_ZARR_MEMBERS:
-            raise ValueError("Zarr archive contains too many members")
+            raise ValueError('zarr archive has too many members')
+        if sum(member.file_size for member in members) > MAX_ZARR_UNCOMPRESSED_BYTES:
+            raise ValueError('zarr archive expands beyond the allowed size')
+        if any(member.file_size > MAX_ZARR_MEMBER_BYTES for member in members):
+            raise ValueError("zarr archive member exceeds the allowed size")
         for member in members:
             name = member.filename
             path = Path(name)

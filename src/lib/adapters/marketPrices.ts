@@ -450,6 +450,7 @@ export async function fetchWfpUgandaPrices(options: FetchWfpOptions = {}): Promi
 
   const resource = pickLatestCsvResource(packageJson);
   const csvOutcome = await resilientFetch(resource.url, {
+      pinned: true,
     provider: 'HDX',
     datasetId: HDX_DATASET_ID,
     operation: 'csv-download',

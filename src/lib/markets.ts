@@ -22,7 +22,7 @@ import {
  * price, and `min`/`max` expose the dispersion instead of hiding it.
  */
 
-export const MARKET_QUERY_ROW_CAP = 100_000;
+export const MARKET_QUERY_ROW_CAP = 20_000;
 
 export interface MonthlyPriceAggregate {
   month: string; // YYYY-MM

@@ -40,18 +40,20 @@ if (process.env.BILLING_INVOICE_TEST_WORKER !== '1') {
     date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds(), date.getUTCMilliseconds(),
   ));
 
-  const [owner, analyst, outsider] = await Promise.all(['owner', 'analyst', 'outsider'].map((name) => db.accountUser.create({
-    data: { email: `${name}@billing.example.test`, emailVerified: new Date() },
+  const [owner, analyst, outsider, orgAdmin, secondOwner] = await Promise.all(['owner', 'analyst', 'outsider', 'orgadmin', 'secondowner'].map((name) => db.accountUser.create({
+    data: { email: `${name}@billing.example.test`, emailVerified: new Date(), isAdmin: name === 'owner' },
   })));
   const organization = await db.organization.create({ data: { name: 'Billing Cooperative', slug: 'billing-cooperative' } });
   await db.membership.create({ data: { organizationId: organization.id, userId: owner.id, role: 'owner' } });
   await db.membership.create({ data: { organizationId: organization.id, userId: analyst.id, role: 'analyst' } });
+  await db.membership.create({ data: { organizationId: organization.id, userId: orgAdmin.id, role: 'admin' } });
+  await db.membership.create({ data: { organizationId: organization.id, userId: secondOwner.id, role: 'owner' } });
   const subscription = await db.subscription.create({
     data: { organizationId: organization.id, planId: plan.id, status: 'active', currentPeriodStart: periodStart, currentPeriodEnd: periodEnd },
   });
 
   const cookieFor = async (user: { id: string }) => `__Secure-next-auth.session-token=${await encode({ secret: process.env.NEXTAUTH_SECRET!, token: { sub: user.id }, maxAge: 3600 })}`;
-  const [ownerCookie, analystCookie, outsiderCookie] = await Promise.all([owner, analyst, outsider].map(cookieFor));
+  const [ownerCookie, analystCookie, outsiderCookie, _orgAdminCookie, secondOwnerCookie] = await Promise.all([owner, analyst, outsider, orgAdmin, secondOwner].map(cookieFor));
 
   let sequence = 0;
   const ctx = <T extends Record<string, string> = Record<string, string>>(params: T = {} as T) => ({ params: Promise.resolve(params) });
@@ -105,6 +107,12 @@ if (process.env.BILLING_INVOICE_TEST_WORKER !== '1') {
       ctx({ invoiceId }),
     );
     expect(deniedSettle.status).toBe(403);
+    const selfAttested = await settleRoutes.POST(
+      request(`billing/invoices/${invoiceId}/settle`, 'POST', secondOwnerCookie, { amountMinor: plan.monthlyPriceMinor, method: 'manual_bank' }, organization.id),
+      ctx({ invoiceId }),
+    );
+    expect(selfAttested.status).toBe(403);
+    expect((await selfAttested.json()).error.code).toBe('MANUAL_SETTLEMENT_ADMIN_ONLY');
     expect(await db.payment.count({ where: { invoiceId } })).toBe(0);
   });
 
@@ -199,6 +207,6 @@ if (process.env.BILLING_INVOICE_TEST_WORKER !== '1') {
       request(`billing/invoices/${invoiceId}/settle`, 'POST', outsiderCookie, { amountMinor: plan.monthlyPriceMinor, method: 'manual_bank' }),
       ctx({ invoiceId }),
     );
-    expect(crossTenant.status).toBe(404);
+    expect(crossTenant.status).toBe(403);
   });
 }
