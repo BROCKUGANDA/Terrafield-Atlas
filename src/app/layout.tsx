@@ -15,11 +15,15 @@ import { resolveLocale, t } from '@/lib/i18n';
 const spaceGrotesk = Space_Grotesk({
   variable: '--font-space-grotesk',
   subsets: ['latin'],
+  // Slow mobile links keep the metric-adjusted fallback instead of swapping
+  // the hero text late and pushing LCP beyond 5 s.
+  display: 'optional',
 });
 
 const archivo = Archivo({
   variable: '--font-archivo',
   subsets: ['latin'],
+  display: 'optional',
 });
 
 const plexMono = IBM_Plex_Mono({

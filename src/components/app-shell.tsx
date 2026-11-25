@@ -267,7 +267,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="hidden truncate text-faint xl:inline xl:max-w-[18rem]">{location.label}</span>
               </div>
 
-              <div className="console-command-actions ml-auto flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+              <div className="console-command-actions ml-auto flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto sm:gap-3">
                 <OrganizationSwitcher />
                 <AccountControls />
                 <LocaleSwitcher />

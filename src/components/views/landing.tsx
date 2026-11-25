@@ -199,7 +199,12 @@ export function LandingView() {
   useEffect(() => {
     // Defer the WebGL bundle until after first paint/idle so it cannot compete
     // with the hero's LCP; the fixed-height placeholder prevents layout shift.
+    // Small screens and reduced-motion visitors keep the static orbit view: the
+    // three.js chunk is ~570 KB and its init dominates mobile main-thread time.
     let cancelled = false;
+    const desktop = window.matchMedia('(min-width: 768px)').matches;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!desktop || reduceMotion) return;
     const start = () => { if (!cancelled) setGlobeReady(true); };
     const idleWindow = window as typeof window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
     if (typeof idleWindow.requestIdleCallback === 'function') {
@@ -229,42 +234,25 @@ export function LandingView() {
         <div className="grid items-start gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10">
           {/* Left column — title, value, console access */}
           <div className="flex flex-col items-start gap-5">
-            <motion.div
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-            >
+            <div>
               <Kicker>{t(locale, 'landing.kicker')}</Kicker>
-            </motion.div>
+            </div>
 
-            <motion.h1
+            <h1
               id="hero-heading"
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
               className="font-display text-5xl font-bold uppercase leading-[0.94] tracking-tight text-ink sm:text-6xl lg:text-7xl"
             >
               TerraField
               <span className="block text-nasa glow-nasa">Atlas</span>
               <span className="sr-only"> {t(locale, 'landing.heroSr')}</span>
-            </motion.h1>
+            </h1>
 
-            <motion.p
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
-              className="max-w-xl text-sm leading-relaxed text-dim sm:text-base"
-            >
+            <p className="max-w-xl text-sm leading-relaxed text-dim sm:text-base">
               {heroIntro}
-            </motion.p>
+            </p>
 
             {/* Demo access card */}
-            <motion.div
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              className="hud w-full max-w-xl p-4 sm:p-5"
-            >
+            <div className="hud w-full max-w-xl p-4 sm:p-5">
               {operator ? (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-wrap items-center gap-3">
@@ -324,16 +312,11 @@ export function LandingView() {
                   </p>
                 </form>
               )}
-            </motion.div>
+            </div>
           </div>
 
           {/* Right column — telemetry network globe viewport */}
-          <motion.div
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.24, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-col gap-3"
-          >
+          <div className="flex flex-col gap-3">
             <div className="hud scanlines relative h-[320px] overflow-hidden md:h-[min(420px,52vh)]">
               <p className="pointer-events-none absolute left-3 top-2.5 z-10 font-mono text-[10px] font-semibold uppercase tracking-mission text-aqua">
                 {t(locale, 'landing.liveTelemetry')}
@@ -345,11 +328,14 @@ export function LandingView() {
               {globeReady ? (
                 <EarthGlobe className="absolute inset-0" onStationHover={setHoveredStation} />
               ) : (
-                <div className="grid-bg absolute inset-0 flex flex-col items-center justify-center gap-2">
+                <div className="grid-bg absolute inset-0 flex flex-col items-center justify-center gap-3">
                   <span className="anim-blink h-2 w-2 rounded-full bg-aqua" aria-hidden />
                   <p className="font-mono text-[10px] uppercase tracking-wide-mc text-faint">
-                    {t(locale, 'landing.initializing')}
+                    {t(locale, 'landing.globeStatic')}
                   </p>
+                  <button type="button" onClick={() => setGlobeReady(true)} className="min-h-9 rounded border border-aqua/40 px-3 font-mono text-[10px] uppercase tracking-wide-mc text-aqua">
+                    {t(locale, 'landing.renderGlobe')}
+                  </button>
                 </div>
               )}
 
@@ -399,7 +385,7 @@ export function LandingView() {
                 </div>
               )}
             </div>
-          </motion.div>
+          </div>
         </div>
       </section>
 

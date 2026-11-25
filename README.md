@@ -110,6 +110,14 @@ docker compose up -d --wait  # full private Compose stack (requires .env)
 - **Market prices.** `GET /api/v1/markets/prices` and `POST /api/v1/markets/ingest` serve the WFP/FIT Uganda HDX feed with monthly median/min/max aggregation, provenance and an ingestion ledger.
 - **Localization.** Cookie/query locale (`en`, `sw`) with typed dictionaries, `Intl` formatting and a switcher; navigation, account, marketing shell and landing hero are translated, with untranslated scientific/provider copy documented.
 
+## Freemium and onchain support (0.6.0)
+
+- **Core features are free.** Organizations, API keys, OAuth clients, webhooks, reports, analyses, markets and intelligence are available on every plan; only cost-bearing compute quotas differ. `PATCH /api/v1/billing` cannot assign a plan unless the caller is a platform administrator, and manual invoice settlement is an administrator record after an off-platform payment.
+- **Voluntary onchain support.** `contracts/TerraFieldSupport.sol` (OpenZeppelin `Ownable`/`ReentrancyGuard`/`SafeERC20`) forwards USDC or native currency to a public treasury; the server verifies the receipt at `POST /api/v1/billing/onchain/intents/{id}/verify`. Support changes no entitlement and the server never holds a key. Configure `ONCHAIN_*` (see `docs/ONCHAIN_PAYMENTS.md`); until then the UI reports `enabled:false`.
+- **Developer gateway.** `deploy/kong/terrafield-openapi.yaml` is generated with decK from the live OpenAPI and validated; `docs/API_GATEWAY.md` covers the DB-less Kong smoke test.
+- **Mutation gate.** `bun run test:mutation` runs explicit mutants against i18n, market parsing/aggregation and the rotation engine (26/26 detected).
+- **Loopback app port.** The standalone server binds `127.0.0.1:3011`; Caddy is the only public edge and Prometheus/Grafana run on host-network loopback.
+
 ## A/B experiments (deterministic, ledger-backed)
 
 - **Assignment:** pure SHA-256 bucketing of `(experiment key, anonymous unit id)` into [0, 1000) mapped by cumulative variant weights — stable across restarts and processes, no flicker, no sticky sessions (`src/lib/experiments.ts`).

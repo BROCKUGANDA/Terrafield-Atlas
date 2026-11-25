@@ -38,10 +38,23 @@ Status vocabulary: `verified`, `implemented`, `partial`, `planned`, `blocked`, `
 | Market prices | Markets | verified | HDX/WFP Uganda CSV | `tests/market-prices.test.ts`; live ingest | Deployed 0.5.0 | Nominal survey data only, no forecasts |
 | Localization | UX | implemented | `src/lib/i18n.ts`, cookie locale | `tests/i18n.test.ts` | Deployed 0.5.0 | en/sw chrome and entry surfaces; long-form copy English |
 | Dependabot advisories | Security | verified | python-multipart 0.0.34 | Alert review; 0 bun audit findings | Deployed 0.5.0 | Re-scan after push |
+| Onchain support | Commercial | implemented | OpenZeppelin contract, JSON-RPC verifier | `tests/onchain-payments.test.ts`; contract compile test | Deployed 0.6.0 (disabled until `ONCHAIN_*` is configured) | Needs operator treasury/RPC/token env; contracts not deployed |
+| Freemium policy | Commercial | verified | Plan limits only | Billing/enterprise integration suites | Deployed 0.6.0 | Compute quotas are the only difference; plan assignment admin-only |
+| Security audit remediation | Security | verified | RLS, auth, SSRF, uploads | Targeted suites; 357-test run | Deployed 0.6.0 | Some low findings are documented mitigations |
+| Mutation testing | QA | verified | `scripts/mutation-check.ts` | 26/26 mutants killed (100%) | Local gate | Targets are explicit, not whole-repo |
+| Kong gateway config | Developer platform | verified | decK + Kong 3.9 | `deck file validate`; gateway smoke test | Repo artifact | Kong is not in the production path |
+| Lighthouse baseline | Performance | partial | Deferred globe, fixed header | Lighthouse mobile report | Deployed 0.6.0 | LCP remains network-bound; CPU work reduced 23s→7s |
 | Observability dashboards | SRE | implemented | Host Prometheus/Grafana | `tests/deployment-config.test.ts` | Deployed 0.5.0 | Acceptance pending on host |
 | Backup/restore drill | SRE | partial | Production-scale deploy work | Concurrent session | In progress | Required before release |
 
 ## Change log
+
+### 2026-11-26 (0.6.0)
+
+- Added onchain support payments (OpenZeppelin contract + verifier) and a freemium policy: core features free, plan assignment admin-only, manual settlement admin-only.
+- Remediated the security audit (fail-closed tenancy/readiness, resource checks, owner-only role changes, tenant idempotency, IP trust, SSRF pinning, upload/zip caps, CSV injection, storage metering, session invalidation).
+- Bound the app to loopback, moved monitoring to host network, capped edge bodies, deferred the 3D globe, stabilized the command bar.
+- Recorded 357 tests, RLS suites 5/5, mutation 26/26, Kong validation and the Lighthouse baseline.
 
 ### 2026-11-27 (0.5.0)
 
