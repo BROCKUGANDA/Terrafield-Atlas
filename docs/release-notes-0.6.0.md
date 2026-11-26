@@ -60,8 +60,8 @@
 - Landing hero globe is code-split and mounted on idle; globe rendering pauses
   off-screen/hidden, caps DPR at 1.5 and disables MSAA on high-DPI screens.
 - Consent/privacy notice is a fixed overlay, removing the largest layout shift.
-- Mutation testing: `bun run test:mutation` with 100% detection on runnable
-  targets (rotation engine; market/i18n when clean).
+- Mutation testing: `bun run test:mutation` — 31/31 mutants detected (100%) across
+i18n, markets, rotation, retention, onchain rules and invoice settlement.
 - Kong: decK-validated declarative config (`deploy/kong`) and a DB-less Kong
   smoke test through the gateway (`docs/API_GATEWAY.md`).
 
@@ -75,5 +75,6 @@
 ## Verification
 
 357 tests / 0 failures, typecheck, lint, production build, RLS-mode suites,
-onchain suite, mutation run; Lighthouse re-measured after deploy
+onchain suite, mutation run; Lighthouse mobile 59/96/100/100, LCP 4.2 s,
+TBT 820 ms, CLS 0.003
 (`docs/release-validation-0.6.0.md`).

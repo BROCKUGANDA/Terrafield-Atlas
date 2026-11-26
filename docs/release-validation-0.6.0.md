@@ -1,6 +1,6 @@
 # TerraField Atlas 0.6.0 — release validation (2026-11-26)
 
-Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/terrafield/releases/20261125T232727Z`.
+Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/terrafield/releases/20261126T042109Z`.
 
 ## Local gates
 
@@ -10,19 +10,19 @@ Production: https://terrafieldatlas.us · VPS `57.130.80.158` · release `/mnt/t
 - `bun run build`: pass.
 - `bun audit --audit-level=high`: 0 vulnerabilities / 794 packages; Dependabot open alerts: 0.
 - **RLS-mode suites** (`TENANT_RLS_TEST=1`): account, enterprise, enterprise product, OAuth, billing — **5/5 pass**.
-- **Mutation testing**: `bun run test:mutation` → **26/26 mutants detected (100%)** across i18n, HDX market parsing/aggregation and the rotation engine.
+- **Mutation testing**: `bun run test:mutation` → **31/31 mutants detected (100%)**: i18n (5), HDX/market (11), rotation engine (10), retention (2), onchain rules (2), invoice amount equality (1).
 - **Contract**: `contracts/TerraFieldSupport.sol` compiles against `@openzeppelin/contracts@5.6.1` with solc 0.8.39; ABI committed; compile test passes.
 
 ## Lighthouse (mobile, throttled, production)
 
 | Metric | Before (0.5.0) | Final (0.6.0) |
 | --- | --- | --- |
-| Performance | 26 | **51** |
+| Performance | 26 | **59** |
 | Accessibility | 96 | 96 |
 | Best practices | 100 | 100 |
 | SEO | 100 | 100 |
-| LCP | 5.1 s | **4.6 s** |
-| TBT | 4,460 ms | **1,430 ms** |
+| LCP | 5.1 s | **4.2 s** |
+| TBT | 4,460 ms | **820 ms** |
 | CLS | 0.338 | **0.003** |
 | Speed Index | 6.3 s | 5.5 s |
 | Main-thread work | 35.3 s | ~7 s |
@@ -80,11 +80,11 @@ through Kong.
   `ONCHAIN_RPC_URL`, `ONCHAIN_CHAIN_ID`, `ONCHAIN_TREASURY`, and
   `ONCHAIN_TOKEN_ADDRESS` (or `native`), optionally `ONCHAIN_SUPPORT_CONTRACT`,
   then deploy the contract and restart. No keys are held by the server.
-- Lighthouse mobile performance is 51: LCP remains network-bound (~4.6 s on
-  simulated slow 4G) with a ~660 KB JS payload; further work needs bundle
-  reduction (Three/Recharts/framer), not just deferral.
+- Lighthouse mobile performance is 59: LCP remains network-bound (~4.2 s on
+  simulated slow 4G); framer-motion was removed from the initial bundle and the
+  globe is deferred, but React/Next and remaining UI libraries still dominate.
 - Manual settlement remains operator-only; no fiat/card processor.
 - Localization covers navigation/account/marketing entry; scientific and
   provider copy stays English by policy.
-- Mutation targets are an explicit subset (pure modules), not whole-repo.
+- Mutation targets remain an explicit high-value subset (now including retention, onchain rules and invoice settlement), not whole-repo.
 - Kong config is an artifact/smoke test, not the production path.

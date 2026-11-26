@@ -324,7 +324,10 @@ function gitDirty(file: string): boolean {
 
 async function runTests(files: string[]): Promise<TestRun> {
   const started = Date.now();
-  const proc = Bun.spawn(['bun', 'test', ...files], {
+  // Bun treats a bare path without ".test"/".spec" as a name filter; the ./
+  // prefix forces path mode for integration-style file names.
+  const paths = files.map((file) => (file.startsWith('./') ? file : `./${file}`));
+  const proc = Bun.spawn(['bun', 'test', ...paths], {
     cwd: ROOT,
     env: { ...process.env },
     stdout: 'pipe',
