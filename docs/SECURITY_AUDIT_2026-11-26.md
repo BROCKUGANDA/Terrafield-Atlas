@@ -43,9 +43,11 @@ remediation.
 - L5 reorg reconciliation after recording is not implemented; support-only
   payments grant nothing, and invoice-linked actions are admin-only with ≥6
   confirmations.
-- L8 entitlement checks are still check-then-act for a few job-creating routes;
-  quotas can overshoot under deliberate concurrency. Jobs are metered only on
-  success.
+- L8 entitlement checks are serialized per tenant/metric in-process
+  (`withQuotaGuard`) for job creation and report persistence, removing the
+  concurrent-request overshoot in the single-web-process deployment. A
+  multi-instance deployment must add a database advisory lock; jobs are still
+  metered only on success.
 - CSP keeps `'unsafe-inline'` for scripts because the console is statically
   rendered; a nonce policy requires dynamic rendering.
 - RPC verification trusts the configured JSON-RPC provider; use a reputable

@@ -52,6 +52,10 @@
   JWTs.
 - Dead context-mutating helper removed.
 
+## Quotas and availability
+
+- Concurrent job/report creation is serialized per tenant before the entitlement check, closing the single-process check-then-act overshoot.
+
 ## Availability and performance
 
 - App binds `127.0.0.1:3011`; only Caddy and host-network Prometheus can reach

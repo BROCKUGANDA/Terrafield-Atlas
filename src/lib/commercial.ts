@@ -142,6 +142,36 @@ export async function assertEntitlement(context: TenantContext, metric: UsageMet
   }
 }
 
+const quotaLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize entitlement check + write for one tenant/metric in this process.
+ * Production runs one web process per host, so this removes the check-then-act
+ * overshoot between concurrent requests; multi-instance deployments should add
+ * a database advisory lock (documented limitation).
+ */
+export async function withQuotaGuard<T>(
+  context: TenantContext,
+  metric: UsageMetric,
+  action: () => Promise<T>,
+): Promise<T> {
+  const tenant = context.organizationId ?? context.userId ?? 'anonymous';
+  const key = `${tenant}:${metric}`;
+  const previous = quotaLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  quotaLocks.set(key, tail);
+  await previous.catch(() => undefined);
+  try {
+    await assertEntitlement(context, metric);
+    return await action();
+  } finally {
+    release();
+    if (quotaLocks.get(key) === tail) quotaLocks.delete(key);
+  }
+}
+
 export async function assertCapability(context: TenantContext, capability: keyof Entitlements['capabilities']): Promise<void> {
   const entitlements = await entitlementsFor(context);
   if (!entitlements.capabilities[capability]) {

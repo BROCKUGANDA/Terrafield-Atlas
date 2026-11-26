@@ -7,7 +7,7 @@ import { POWER_VARIABLES } from '@/lib/types';
 import type { ObservationPoint, VariableKey } from '@/lib/types';
 import type { ApiRequestLog } from '@prisma/client';
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
-import { assertEntitlement, recordUsage } from '@/lib/commercial';
+import { recordUsage, withQuotaGuard } from '@/lib/commercial';
 
 /**
  * POST /api/v1/reports
@@ -197,19 +197,21 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     const context = await resolveTenantContext(req);
     if (!context.userId) return jsonResponse({ error: { code: 'AUTH_REQUIRED', message: 'sign in to persist a report', correlationId } }, { status: 401, correlationId });
     requirePermission(context, 'report.create');
-    await assertEntitlement(context, 'reports_per_month');
-    const stored = await db.reportRecord.create({
-      data: {
-        organizationId: context.organizationId ?? farm.organizationId,
-        ownerId: context.userId,
-        farmId: farm.id,
-        title: `${farm.name} — evidence assessment`,
-        format: 'json',
-        contentJson: JSON.stringify(report),
-        provenanceJson: JSON.stringify({ datasetVersions: report.environmentalRecord.datasetVersions, generatedAt: report.generatedAt, correlationId, methodology: report.methodology }),
-      },
+    const stored = await withQuotaGuard(context, 'reports_per_month', async () => {
+      const record = await db.reportRecord.create({
+        data: {
+          organizationId: context.organizationId ?? farm.organizationId,
+          ownerId: context.userId,
+          farmId: farm.id,
+          title: `${farm.name} — evidence assessment`,
+          format: 'json',
+          contentJson: JSON.stringify(report),
+          provenanceJson: JSON.stringify({ datasetVersions: report.environmentalRecord.datasetVersions, generatedAt: report.generatedAt, correlationId, methodology: report.methodology }),
+        },
+      });
+      await recordUsage({ context, metric: 'reports_per_month', operationId: `report:${record.id}` });
+      return record;
     });
-    await recordUsage({ context, metric: 'reports_per_month', operationId: `report:${stored.id}` });
     return jsonResponse({ ...report, reportId: stored.id, persisted: true }, { correlationId });
   }
   return jsonResponse(report, { correlationId });

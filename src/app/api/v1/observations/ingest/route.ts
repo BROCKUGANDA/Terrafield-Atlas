@@ -5,7 +5,7 @@ import { POWER_VARIABLES } from '@/lib/types';
 import type { VariableKey } from '@/lib/types';
 import { enqueueJob, jobUrl } from '@/lib/queue';
 import { requirePermission, resolveTenantContext } from '@/lib/tenancy';
-import { assertEntitlement } from '@/lib/commercial';
+import { withQuotaGuard } from '@/lib/commercial';
 
 /**
  * POST /api/v1/observations/ingest
@@ -63,11 +63,10 @@ export const POST = apiHandler(async (req, { correlationId }) => {
   // (null for the shared public namespace).
   const context = await resolveTenantContext(req);
   requirePermission(context, 'analysis.run');
-  await assertEntitlement(context, 'processing_jobs_per_month');
   const tenantId = context.userId ?? dataOwnerId;
   const idempotencyKey = req.headers.get('idempotency-key')?.trim() || null;
 
-  const job = await enqueueJob({
+  const job = await withQuotaGuard(context, 'processing_jobs_per_month', () => enqueueJob({
     type: 'power-ingest',
     ownerId: tenantId,
     organizationId: context.organizationId ?? dataOrganizationId,
@@ -75,7 +74,7 @@ export const POST = apiHandler(async (req, { correlationId }) => {
     correlationId,
     idempotencyKey,
     route: '/api/v1/observations/ingest',
-  });
+  }));
 
   const url = jobUrl(job.jobId);
   return jsonResponse(
