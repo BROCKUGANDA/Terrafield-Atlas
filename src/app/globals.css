@@ -340,6 +340,11 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes mc-view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes mc-float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
@@ -356,6 +361,7 @@
   .anim-float { animation: mc-float 7s ease-in-out infinite; }
   .anim-spin-slow { animation: mc-spin-slow 22s linear infinite; }
   .anim-fade-up { animation: mc-fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .anim-view-in { animation: mc-view-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
   .skeleton-mc {
     position: relative;
@@ -399,6 +405,7 @@
     .anim-float,
     .anim-spin-slow,
     .anim-fade-up,
+    .anim-view-in,
     .sweep-mc {
       animation: none !important;
     }

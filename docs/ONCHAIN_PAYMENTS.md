@@ -91,11 +91,11 @@ and is not used by the application server.
 ## Intent lifecycle
 
 1. `POST /api/v1/billing/onchain/intents` with `{ "amountMinor": 1000 }` (USD
-   minor units, minimum `100` = $1, maximum `1_000_000` = $10,000). The route is
-   support-only: `invoiceId` is rejected with `403` unless the caller is a
-   platform administrator, and an administrator-created invoice link is a
-   subscription settlement, not a support payment. The amount must equal the
-   invoice total.
+   minor units, minimum `100` = $1, maximum `1_000_000` = $10,000). Without
+   `invoiceId` this is a support intent and changes no entitlement. A tenant
+   billing manager may add `invoiceId` for an open invoice of their workspace;
+   the amount must equal the invoice total, and that intent is a subscription
+   payment for cost-bearing compute, not support.
 2. The server fixes chain id, token, treasury, exact base units (BigInt
    arithmetic, no floating point), a random 32-byte memo, and a 30-minute
    expiry.
@@ -140,17 +140,16 @@ happens before a tenant transaction exists. Every write then runs inside the
 tenant-scoped transaction with an explicit ownership re-check, and the unique
 constraints are the final concurrency gate.
 
-## Invoice-linked settlement (administrator only)
+## Invoice-linked settlement (self-service for tenant billing managers)
 
-Support intents are **support-only** by design. A normal manager cannot link an
-intent to an invoice: `POST /api/v1/billing/onchain/intents` with `invoiceId`
-returns `403 ONCHAIN_INVOICE_LINK_ADMIN_ONLY`. This prevents voluntary support
-from silently changing subscription state or entitlements.
+Support intents remain support-only and change no entitlement. Separately, a
+tenant `billing.manage` holder may link an intent to an **open invoice** of
+their active workspace; that is a subscription payment for cost-bearing compute
+(not a support payment). Voluntary support without `invoiceId` still cannot
+change subscription state.
 
-A platform administrator may create an invoice-linked intent as an explicitly
-administrative subscription settlement (not a support payment). Verification
-then requires at least 6 confirmations and commits in one serializable
-transaction:
+Invoice-linked verification requires at least 6 confirmations and commits in
+one serializable transaction:
 
 - the invoice must still be open and belong to the tenant;
 - a `Payment` row is written with method `onchain` and the transaction hash as

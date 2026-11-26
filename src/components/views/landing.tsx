@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useQuery } from '@tanstack/react-query';
 import { useSession as useAccountSession } from 'next-auth/react';
-import { motion } from 'framer-motion';
 import {
   Satellite, Droplets, Thermometer, Leaf, Flame, FileSearch, ArrowRight,
   AlertTriangle, Radio, LogOut, ShieldCheck,
@@ -394,14 +393,14 @@ export function LandingView() {
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="telemetry-heading">
         <span id="telemetry-heading" className="sr-only">Live console telemetry</span>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+        <div>
           <SectionHeader
             kicker="Mission telemetry"
             title="Live console telemetry"
             description="Read from the running system — real database rows and a live provider probe. If a value is missing, it is shown as missing."
           />
-        </motion.div>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, delay: 0.08, ease: [0.22, 1, 0.36, 1] }} className="mt-4">
+        </div>
+        <div className="mt-4">
           {status.isLoading ? (
             <div role="status" aria-live="polite">
               <StatSkeletonRow count={4} />
@@ -439,7 +438,7 @@ export function LandingView() {
               />
             </div>
           )}
-        </motion.div>
+        </div>
       </section>
 
       {/* ---------------------------------------------------------- */}
@@ -447,26 +446,21 @@ export function LandingView() {
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="questions-heading">
         <span id="questions-heading" className="sr-only">Six questions, answered honestly</span>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+        <div>
           <SectionHeader
             kicker="The problem"
             title="Six questions, answered honestly"
             description="Farmers face shifting rainfall patterns, temperature extremes and fire exposure, yet most decision tools either hide their evidence, overstate their certainty, or require data that smallholders do not have. TerraField Atlas takes the opposite stance: it is built around six questions, and refuses to answer any of them beyond what the evidence supports."
           />
-        </motion.div>
+        </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {QUESTIONS.map((q, i) => (
-            <motion.article
-              key={q}
-              {...fadeUp}
-              transition={{ duration: 0.45, delay: i * 0.05, ease: [0.22, 1, 0.36, 1] }}
-              className="hud hud-calm flex items-start gap-4 p-4 sm:p-5"
-            >
+            <article className="hud hud-calm flex items-start gap-4 p-4 sm:p-5" key={q}>
               <p className="telemetry shrink-0 text-3xl font-medium leading-none text-nasa" aria-hidden>
                 {String(i + 1).padStart(2, '0')}
               </p>
               <p className="pt-0.5 text-sm leading-relaxed text-ink">{q}</p>
-            </motion.article>
+            </article>
           ))}
         </div>
       </section>
@@ -476,21 +470,16 @@ export function LandingView() {
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="features-heading">
         <span id="features-heading" className="sr-only">What the console actually does</span>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+        <div>
           <SectionHeader
             kicker="Mission systems"
             title="What the console actually does"
             description="Six subsystems, each built around a real NASA Earth-observation data source with a deterministic method behind it."
           />
-        </motion.div>
+        </div>
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f, i) => (
-            <motion.article
-              key={f.title}
-              {...fadeUp}
-              transition={{ duration: 0.45, delay: i * 0.05, ease: [0.22, 1, 0.36, 1] }}
-              className="hud hud-calm p-4 sm:p-5"
-            >
+            <article className="hud hud-calm p-4 sm:p-5" key={f.title}>
               <span
                 className={cn(
                   'flex h-9 w-9 items-center justify-center rounded-sm border',
@@ -504,7 +493,7 @@ export function LandingView() {
                 {f.title}
               </h3>
               <p className="mt-1.5 text-xs leading-relaxed text-dim">{f.text}</p>
-            </motion.article>
+            </article>
           ))}
         </div>
       </section>
@@ -514,15 +503,15 @@ export function LandingView() {
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="transparency-heading">
         <span id="transparency-heading" className="sr-only">Data-source transparency</span>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+        <div>
           <SectionHeader
             kicker="Source registry"
             title="Data-source transparency"
             description="Live source registry, refreshed from the running system. Unreachable or unconfigured sources are shown exactly as they are — never silently substituted with fabricated data."
             actions={<StatusPill status={sources.isError ? 'unavailable' : sources.isLoading ? 'degraded' : 'nominal'} />}
           />
-        </motion.div>
-        <motion.div {...fadeUp} transition={{ duration: 0.5, delay: 0.08, ease: [0.22, 1, 0.36, 1] }} className="mt-4">
+        </div>
+        <div className="mt-4">
           <div className="hud overflow-hidden p-0">
             <QueryState
               isLoading={sources.isLoading}
@@ -569,19 +558,14 @@ export function LandingView() {
               </div>
             </QueryState>
           </div>
-        </motion.div>
+        </div>
       </section>
 
       {/* ---------------------------------------------------------- */}
       {/* DELIBERATE HONESTY BOX                                      */}
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="honesty-heading">
-        <motion.div
-          {...fadeUp}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          className="hud hud-calm p-4 sm:p-5"
-          style={{ borderColor: 'rgba(255, 178, 36, 0.35)' }}
-        >
+        <div className="hud hud-calm p-4 sm:p-5">
           <h2 id="honesty-heading" className="flex items-center gap-2 font-display text-sm font-semibold uppercase tracking-wide-mc text-caution">
             <AlertTriangle className="h-4 w-4" aria-hidden /> What this product deliberately does NOT claim
           </h2>
@@ -593,18 +577,14 @@ export function LandingView() {
               </li>
             ))}
           </ul>
-        </motion.div>
+        </div>
       </section>
 
       {/* ---------------------------------------------------------- */}
       {/* CLOSING CTA                                                 */}
       {/* ---------------------------------------------------------- */}
       <section aria-labelledby="cta-heading" className="pb-2">
-        <motion.div
-          {...fadeUp}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          className="hud grid-bg flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8"
-        >
+        <div className="hud grid-bg flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
           <div className="min-w-0">
             <p className="font-mono text-[10px] font-semibold uppercase tracking-mission text-nasa">
               Join the mission
@@ -636,7 +616,7 @@ export function LandingView() {
               )}
             </p>
           </div>
-        </motion.div>
+        </div>
       </section>
     </div>
   );

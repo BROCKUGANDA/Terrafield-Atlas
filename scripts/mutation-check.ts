@@ -230,6 +230,54 @@ const TARGETS: Target[] = [
       },
     ],
   },
+  {
+    file: 'src/lib/retention.ts',
+    tests: ['tests/retention.integration.ts'],
+    mutations: [
+      {
+        id: 'retention.verification.expiry-direction',
+        find: "db.accountVerification.deleteMany({ where: { expiresAt: { lt: now } } })",
+        replace: "db.accountVerification.deleteMany({ where: { expiresAt: { gt: now } } })",
+        note: 'Retention must delete expired verification tokens, never live ones.',
+      },
+      {
+        id: 'retention.idempotency.window',
+        find: "db.idempotencyRecord.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 30 * DAY) } } })",
+        replace: "db.idempotencyRecord.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 31 * DAY) } } })",
+        note: 'The documented 30-day idempotency window covers a 31-day-old record.',
+      },
+    ],
+  },
+  {
+    file: 'src/lib/onchain.ts',
+    tests: ['tests/onchain-payments.test.ts'],
+    mutations: [
+      {
+        id: 'onchain.min-amount',
+        find: 'export const ONCHAIN_MIN_AMOUNT_MINOR = 100; // $1.00',
+        replace: 'export const ONCHAIN_MIN_AMOUNT_MINOR = 101; // $1.00',
+        note: 'One dollar (100 minor units) must be a valid support amount.',
+      },
+      {
+        id: 'onchain.invoice-confirmations',
+        find: 'export const ONCHAIN_INVOICE_MIN_CONFIRMATIONS = 6;',
+        replace: 'export const ONCHAIN_INVOICE_MIN_CONFIRMATIONS = 1;',
+        note: 'Invoice-linked settlement requires at least six confirmations.',
+      },
+    ],
+  },
+  {
+    file: 'src/lib/billing/invoices.ts',
+    tests: ['tests/billing-invoices.integration.ts'],
+    mutations: [
+      {
+        id: 'billing.settle.amount-equality',
+        find: 'if (input.amountMinor !== undefined && input.amountMinor !== invoice.amountMinor) {',
+        replace: 'if (input.amountMinor !== undefined && input.amountMinor === invoice.amountMinor) {',
+        note: 'Settlement must require the exact invoice total, not reject it.',
+      },
+    ],
+  },
 ];
 
 interface TestRun {

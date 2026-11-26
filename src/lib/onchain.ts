@@ -282,13 +282,8 @@ export interface CreateOnchainIntentInput {
 export async function createOnchainIntent(context: TenantContext, input: CreateOnchainIntentInput): Promise<OnchainIntentView> {
   const config = requireConfig();
   const userId = requireUser(context);
-  if (input.invoiceId && !context.isPlatformAdmin) {
-    throw new AccountAccessError(
-      403,
-      'ONCHAIN_INVOICE_LINK_ADMIN_ONLY',
-      'support intents cannot be linked to invoices; invoice settlement is an administrator-only subscription action',
-    );
-  }
+  // Invoice-linked intents are a self-service way to pay a cost-bearing
+  // subscription invoice; support-only intents change no entitlement.
   const amountUnits = quoteOnchainAmountUnits(input.amountMinor, config.tokenDecimals!);
   const scope = context.organizationId ? { organizationId: context.organizationId } : { ownerId: userId, organizationId: null };
 
@@ -586,9 +581,6 @@ export async function verifyOnchainIntent(context: TenantContext, intentId: stri
   }
   const reused = await rawDb.onchainPayment.findUnique({ where: { txHash } });
   if (reused) throw new AccountAccessError(409, 'TX_ALREADY_USED', 'this transaction hash has already been verified');
-  if (preflight.invoiceId && !context.isPlatformAdmin) {
-    throw new AccountAccessError(403, 'ONCHAIN_INVOICE_LINK_ADMIN_ONLY', 'invoice-linked settlement can be verified only by a platform administrator');
-  }
 
   const requiredConfirmations = preflight.invoiceId
     ? Math.max(config.confirmations, ONCHAIN_INVOICE_MIN_CONFIRMATIONS)
@@ -604,9 +596,6 @@ export async function verifyOnchainIntent(context: TenantContext, intentId: stri
       if (current.status === 'paid') throw new AccountAccessError(409, 'INTENT_ALREADY_PAID', 'this intent has already been paid');
       if (current.status === 'expired' || current.expiresAt.getTime() <= Date.now()) {
         throw new AccountAccessError(409, 'INTENT_EXPIRED', 'this intent has expired; create a new support intent');
-      }
-      if (current.invoiceId && !context.isPlatformAdmin) {
-        throw new AccountAccessError(403, 'ONCHAIN_INVOICE_LINK_ADMIN_ONLY', 'invoice-linked settlement can be verified only by a platform administrator');
       }
 
       const payment = await tx.onchainPayment.create({

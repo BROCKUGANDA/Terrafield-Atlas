@@ -1,6 +1,5 @@
 'use client';
 
-import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { AppShell } from '@/components/app-shell';
@@ -44,14 +43,7 @@ export default function Home() {
 
   return (
     <AppShell>
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.section
-          key={activeView}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-        >
+      <section key={activeView} className="anim-view-in">
           {activeView === 'landing' && <LandingView />}
           {activeView === 'dashboard' && <DashboardView />}
           {activeView === 'explorer' && <ExplorerView />}
@@ -68,8 +60,7 @@ export default function Home() {
           {activeView === 'intelligence' && <IntelligenceView />}
           {activeView === 'admin' && <AdminView />}
           {activeView === 'settings' && <SettingsView />}
-        </motion.section>
-      </AnimatePresence>
+      </section>
     </AppShell>
   );
 }

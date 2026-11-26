@@ -1,7 +1,6 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MotionConfig } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { SessionControls } from '@/components/session-controls';
 import { SessionProvider as AccountSessionProvider } from 'next-auth/react';
@@ -36,7 +35,9 @@ export function Providers({ children, locale = 'en' }: { children: React.ReactNo
         <AccountSessionProvider refetchInterval={300} refetchOnWindowFocus>
           <AccountWorkspaceBoundary />
           <AccountVerification />
-          <MotionConfig reducedMotion="user"><SessionControls />{children}</MotionConfig>
+          
+          <SessionControls />
+          {children}
         </AccountSessionProvider>
       </LocaleProvider>
     </QueryClientProvider>

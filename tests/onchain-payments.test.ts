@@ -641,17 +641,11 @@ if (process.env.ONCHAIN_PAYMENTS_TEST_WORKER !== '1') {
       },
     });
 
-    const publicLink = await createIntent(2500, { invoiceId: invoice.id });
-    expect(publicLink.status).toBe(403);
-    expect((await json(publicLink)).error.code).toBe('ONCHAIN_INVOICE_LINK_ADMIN_ONLY');
-    expect((await rawDb.invoice.findUniqueOrThrow({ where: { id: invoice.id } })).status).toBe('open');
-    expect(await rawDb.payment.count({ where: { invoiceId: invoice.id } })).toBe(0);
-
-    const mismatch = await createIntent(1000, { invoiceId: invoice.id, cookie: adminCookie });
+    const mismatch = await createIntent(1000, { invoiceId: invoice.id });
     expect(mismatch.status).toBe(409);
     expect((await json(mismatch)).error.code).toBe('AMOUNT_MISMATCH');
 
-    const created = await createIntent(2500, { invoiceId: invoice.id, cookie: adminCookie });
+    const created = await createIntent(2500, { invoiceId: invoice.id });
     expect(created.status).toBe(201);
     const intent = (await json(created)).intent;
     expect(intent.invoiceId).toBe(invoice.id);
@@ -660,17 +654,13 @@ if (process.env.ONCHAIN_PAYMENTS_TEST_WORKER !== '1') {
     rpcState.latest = 102n;
     rpcState.receipt = erc20Receipt(txHash, { amount: 25_000_000n });
 
-    const managerVerify = await verifyIntent(intent.id, txHash, { cookie: ownerCookie, key: 'invoice-manager-verify' });
-    expect(managerVerify.status).toBe(403);
-    expect((await json(managerVerify)).error.code).toBe('ONCHAIN_INVOICE_LINK_ADMIN_ONLY');
-
-    const shallow = await verifyIntent(intent.id, txHash, { cookie: adminCookie, key: 'invoice-shallow-verify' });
+    const shallow = await verifyIntent(intent.id, txHash, { cookie: ownerCookie, key: 'invoice-shallow-verify' });
     expect(shallow.status).toBe(409);
     expect((await json(shallow)).error.code).toBe('ONCHAIN_INSUFFICIENT_CONFIRMATIONS');
     expect(await rawDb.payment.count({ where: { invoiceId: invoice.id } })).toBe(0);
 
     rpcState.latest = 106n; // 7 confirmations, above the 6-confirmation invoice floor
-    const verified = await verifyIntent(intent.id, txHash, { cookie: adminCookie });
+    const verified = await verifyIntent(intent.id, txHash, { cookie: ownerCookie });
     expect(verified.status).toBe(200);
     const body = await json(verified);
     expect(body.intent.status).toBe('paid');
